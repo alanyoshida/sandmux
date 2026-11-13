@@ -175,11 +175,12 @@ O projeto usa [OpenSpec](https://github.com/Fission-AI/OpenSpec) para planejar c
 | [docs/launch-spec.md](docs/launch-spec.md) | Formato da especificação de lançamento entre o cliente e o lançador |
 | [docs/git.md](docs/git.md) | O que a proteção do `.git` cobre e como o git se comporta dentro do sandbox |
 | [openspec/roadmap.md](openspec/roadmap.md) | Todas as decisões do projeto e o plano em 10 etapas |
-| [openspec/changes/add-sandbox-cli/proposal.md](openspec/changes/add-sandbox-cli/proposal.md) | Proposta do primeiro change: o confinamento por linha de comando |
-| [openspec/changes/add-sandbox-cli/design.md](openspec/changes/add-sandbox-cli/design.md) | Desenho técnico do primeiro change |
+| [openspec/specs/](openspec/specs/) | Specs vigentes: isolamento, sistema de arquivos, presets dos harnesses e importação de estado |
+| [openspec/changes/archive/2026-11-13-add-sandbox-cli/proposal.md](openspec/changes/archive/2026-11-13-add-sandbox-cli/proposal.md) | Proposta do primeiro change: o confinamento por linha de comando |
+| [openspec/changes/archive/2026-11-13-add-sandbox-cli/design.md](openspec/changes/archive/2026-11-13-add-sandbox-cli/design.md) | Desenho técnico do primeiro change |
 | [AGENTS.md](AGENTS.md) | Regras para agentes que trabalham neste repositório |
 
-O primeiro change (`add-sandbox-cli`) está em implementação. Para rodar a verificação completa (formatação, lints e testes, inclusive os testes de fuga do sandbox): `./scripts/check.sh`.
+O primeiro change (`add-sandbox-cli`) está implementado e arquivado. Para rodar a verificação completa (formatação, lints e testes, inclusive os testes de fuga do sandbox): `./scripts/check.sh`.
 
 ## Licença
 
