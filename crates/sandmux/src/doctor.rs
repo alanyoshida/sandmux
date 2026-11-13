@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use sandmux_launcher::REQUIRED_ABI;
-use sandmux_launcher::support::{self, SupportReport};
+use sandmux_launcher::support;
 use sandmux_policy::{Host, Layout};
 
 const PROFILE_TEMPLATE: &str = include_str!("../../../packaging/apparmor/sandmux-run");
@@ -22,19 +22,6 @@ pub fn apparmor_profile() -> String {
     PROFILE_TEMPLATE.replace("@SANDMUX_RUN@", &runner_path().to_string_lossy())
 }
 
-pub fn short_reason(r: &SupportReport) -> String {
-    if !r.landlock_ok() {
-        return format!(
-            "Landlock ABI {} encontrado, exige {REQUIRED_ABI}",
-            r.landlock_abi
-        );
-    }
-    match &r.userns {
-        Err(e) => e.clone(),
-        Ok(()) => "motivo desconhecido".into(),
-    }
-}
-
 fn line(ok: bool, label: &str, detail: &str) {
     let mark = if ok { "ok  " } else { "FALHA" };
     println!(
@@ -48,7 +35,7 @@ fn line(ok: bool, label: &str, detail: &str) {
 }
 
 pub fn run() -> Result<i32> {
-    let mut r = support::check_via(&crate::runner_path());
+    let mut r = support::check_via(&sandmux::launch::runner_path());
     // Mesma variável do `run`: só desliga a camada, para conferir o modo de recuo.
     if std::env::var_os("SANDMUX_DISABLE_OVERLAY").is_some() && r.overlay.is_ok() {
         r.overlay = Err("desligada por SANDMUX_DISABLE_OVERLAY".into());
@@ -116,8 +103,53 @@ pub fn run() -> Result<i32> {
             layout.inbox().display()
         );
     }
+    daemon_section();
     println!("\nRede: nesta versão o sandbox usa a rede do host, sem filtro e sem registro.");
     println!("Arquivos de segredo que já estão na pasta de trabalho ficam legíveis pelo agente.");
 
     Ok(if r.can_launch() { 0 } else { 1 })
+}
+
+/// Estado do daemon e da unidade systemd, sem iniciar nada.
+fn daemon_section() {
+    use sandmux::client::{Conn, systemd};
+    use sandmux_proto::Msg;
+    println!("\nDaemon de sessões:");
+    println!("  socket: {}", sandmux::paths::socket_path().display());
+    match Conn::connect() {
+        Ok(Some(mut c)) => match c.call(&Msg::Status) {
+            Ok(Msg::StatusInfo {
+                pid,
+                version,
+                start_mode,
+                sessions,
+                ..
+            }) => println!(
+                "  estado: rodando (PID {pid}, versão {version}, iniciado por {start_mode}, {sessions} sessões)"
+            ),
+            Ok(_) | Err(_) => println!("  estado: rodando, mas não respondeu ao pedido de estado"),
+        },
+        Ok(None) => println!("  estado: parado"),
+        Err(e) => println!("  estado: {e:#}"),
+    }
+    let unit = systemd::unit_path();
+    let direct = std::env::var("SANDMUX_DAEMON_START").as_deref() == Ok("direct");
+    if !unit.exists() {
+        println!(
+            "  unidade systemd de usuário: não instalada ({})",
+            unit.display()
+        );
+    } else if direct || !systemd::available() {
+        println!(
+            "  unidade systemd de usuário: instalada ({})",
+            unit.display()
+        );
+    } else {
+        let state = match systemd::enabled() {
+            Some(true) => "instalada e habilitada no login",
+            Some(false) => "instalada, mas desabilitada",
+            None => "instalada",
+        };
+        println!("  unidade systemd de usuário: {state} ({})", unit.display());
+    }
 }

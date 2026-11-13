@@ -11,6 +11,9 @@ pub struct Env {
     pub home: PathBuf,
     pub data: PathBuf,
     pub work: PathBuf,
+    /// `XDG_RUNTIME_DIR` próprio: cada teste tem o seu daemon.
+    pub runtime: PathBuf,
+    pub state: PathBuf,
 }
 
 impl Env {
@@ -21,14 +24,40 @@ impl Env {
         let home = root.join("home/ana");
         let data = root.join("data");
         let work = home.join("projetos/app");
+        let runtime = root.join("run");
+        let state = root.join("state");
         std::fs::create_dir_all(&work).unwrap();
         std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::set_permissions(
+            &runtime,
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .unwrap();
         Env {
             dir,
             home,
             data,
             work,
+            runtime,
+            state,
         }
+    }
+
+    pub fn socket(&self) -> PathBuf {
+        self.runtime.join("sandmux/sandmuxd.sock")
+    }
+
+    /// PID do daemon deste ambiente, quando rodando.
+    pub fn daemon_pid(&self) -> Option<i32> {
+        if !self.socket().exists() {
+            return None;
+        }
+        std::fs::read_to_string(self.runtime.join("sandmux/sandmuxd.lock"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
     }
 
     pub fn data_dir(&self) -> PathBuf {
@@ -44,8 +73,34 @@ impl Env {
             .env("XDG_DATA_HOME", &self.data)
             .env("PATH", "/usr/local/bin:/usr/bin:/bin")
             .env("TERM", "xterm-256color")
+            .env("XDG_RUNTIME_DIR", &self.runtime)
+            .env("XDG_STATE_HOME", &self.state)
+            .env("SANDMUX_DAEMON_START", "direct")
             .stdin(Stdio::null());
         c
+    }
+
+    /// O `sandmuxd` com o ambiente deste teste.
+    pub fn daemon_cmd(&self) -> Command {
+        let c = self.cmd(&self.work, &[]);
+        let mut d = Command::new(super::SANDMUXD);
+        d.env_clear();
+        for (k, v) in c.get_envs() {
+            if let Some(v) = v {
+                d.env(k, v);
+            }
+        }
+        d.current_dir(&self.work).stdin(Stdio::null());
+        d
+    }
+
+    /// Espera o socket do daemon aceitar conexões.
+    pub fn wait_socket(&self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::os::unix::net::UnixStream::connect(self.socket()).is_err() {
+            assert!(std::time::Instant::now() < deadline, "o daemon não subiu");
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
     }
 
     pub fn run(&self, cwd: &Path, args: &[&str]) -> Output {
@@ -81,6 +136,22 @@ impl Env {
             )
         });
         serde_json::from_str(line).unwrap_or_else(|e| panic!("{line:?}: {e}"))
+    }
+}
+
+impl Drop for Env {
+    /// Para o daemon que o teste tenha subido.
+    fn drop(&mut self) {
+        if let Some(pid) = self.daemon_pid() {
+            let _ = self
+                .cmd(&self.work, &["daemon", "stop"])
+                .stderr(Stdio::null())
+                .output();
+            if self.socket().exists() {
+                // SAFETY: kill num PID lido da trava do daemon de teste.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        }
     }
 }
 

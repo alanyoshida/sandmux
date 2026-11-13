@@ -1,17 +1,18 @@
-//! `sandmux`: linha de comando do multiplexador. Nesta fatia, `run`, `import`
-//! e `doctor`.
+//! `sandmux`: linha de comando do multiplexador: `run`, os comandos de
+//! sessão, `import`, `doctor` e `daemon`.
 
 mod doctor;
+mod sessions;
 
-use std::io::{BufRead, IsTerminal, Seek, Write};
-use std::os::fd::AsRawFd;
-use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::io::{BufRead, IsTerminal, Write};
+use std::path::PathBuf;
+use std::process::ExitCode;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
-use sandmux_policy::{Host, LayerMode, Layout, RunOptions, compose, home, presets};
+use sandmux::launch;
+use sandmux_policy::{Host, Layout, home, presets};
+use sandmux_proto::LaunchOptions;
 
 #[derive(Parser)]
 #[command(
@@ -26,12 +27,42 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Sobe um harness confinado na pasta atual.
+    /// Sobe um harness confinado na pasta atual. Num terminal, cria uma sessão
+    /// no daemon e anexa a ela (Ctrl+b d desanexa, Ctrl+b Ctrl+b envia Ctrl+b);
+    /// sem terminal, roda direto, em primeiro plano.
     Run(RunArgs),
+    /// Lista as sessões.
+    Ls,
+    /// Anexa este terminal a uma sessão.
+    Attach {
+        /// Identificador da sessão (sem ele, a única sessão viva).
+        id: Option<u32>,
+    },
+    /// Desanexa todos os terminais de uma sessão, sem encerrá-la.
+    Detach { id: u32 },
+    /// Encerra uma sessão e a tira da lista.
+    Kill { id: u32 },
+    /// Relança uma sessão encerrada ou parada, na mesma pasta e com as mesmas opções.
+    Restart { id: u32 },
+    /// Controla o daemon de sessões.
+    #[command(subcommand)]
+    Daemon(DaemonCmd),
     /// Copia a configuração existente de um harness para o HOME sintético.
     Import(ImportArgs),
     /// Mostra se a máquina tem o suporte necessário e o que falta.
     Doctor,
+}
+
+#[derive(Subcommand)]
+enum DaemonCmd {
+    /// Mostra se o daemon está rodando, a versão, o PID e o número de sessões.
+    Status,
+    /// Encerra os harnesses e para o daemon; as sessões vivas voltam na próxima subida.
+    Stop,
+    /// Para o daemon e sobe de novo com o binário instalado, relançando as sessões.
+    Restart,
+    /// Para o daemon e remove a unidade systemd de usuário.
+    Disable,
 }
 
 #[derive(clap::Args)]
@@ -65,6 +96,9 @@ struct RunArgs {
     /// Não expõe a GPU dentro do sandbox.
     #[arg(long = "no-gpu")]
     no_gpu: bool,
+    /// Deixa o harness gravar no clipboard do seu terminal (OSC 52).
+    #[arg(long = "allow-clipboard")]
+    allow_clipboard: bool,
     /// Argumentos repassados ao harness (depois de `--`).
     #[arg(last = true, value_name = "ARGUMENTOS")]
     args: Vec<String>,
@@ -87,6 +121,17 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.cmd {
         Cmd::Run(a) => cmd_run(a),
+        Cmd::Ls => sessions::ls(),
+        Cmd::Attach { id } => sessions::attach(id),
+        Cmd::Detach { id } => sessions::detach(id),
+        Cmd::Kill { id } => sessions::kill(id),
+        Cmd::Restart { id } => sessions::restart(id),
+        Cmd::Daemon(c) => match c {
+            DaemonCmd::Status => sessions::daemon_status(),
+            DaemonCmd::Stop => sessions::daemon_stop(),
+            DaemonCmd::Restart => sessions::daemon_restart(),
+            DaemonCmd::Disable => sessions::daemon_disable(),
+        },
         Cmd::Import(a) => cmd_import(a).map(|_| 0),
         Cmd::Doctor => doctor::run(),
     };
@@ -232,34 +277,25 @@ fn first_run(host: &Host, layout: &Layout, a: &RunArgs) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn runner_path() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("sandmux-run")))
-        .filter(|p| p.is_file())
-        .unwrap_or_else(|| PathBuf::from("sandmux-run"))
-}
-
-/// Tenta a trava da camada de escrita. O descritor fica aberto e é herdado
-/// pelo lançador, que mantém a trava enquanto o sandbox vive.
-fn try_layer_lock(path: &Path) -> Result<Option<std::fs::File>> {
-    if let Some(parent) = path.parent() {
-        home::private_dir(parent)?;
+/// Opções de lançamento a partir dos argumentos, com caminhos absolutos.
+fn launch_options(host: &Host, a: &RunArgs) -> LaunchOptions {
+    let abs = |p: &PathBuf| launch::absolute(p, &host.cwd);
+    LaunchOptions {
+        harness: a.harness.clone(),
+        workdir: a
+            .workdir
+            .as_ref()
+            .map(abs)
+            .unwrap_or_else(|| host.cwd.clone()),
+        ro: a.ro.iter().map(abs).collect(),
+        rw: a.rw.iter().map(abs).collect(),
+        pass_env: a.pass_env.clone(),
+        repo: a.repo,
+        kvm: a.kvm,
+        no_gpu: a.no_gpu,
+        allow_clipboard: a.allow_clipboard,
+        args: a.args.clone(),
     }
-    let f = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(path)
-        .with_context(|| format!("trava {}", path.display()))?;
-    // SAFETY: flock e fcntl sobre um descritor válido.
-    unsafe {
-        if libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) != 0 {
-            return Ok(None);
-        }
-        libc::fcntl(f.as_raw_fd(), libc::F_SETFD, 0);
-    }
-    Ok(Some(f))
 }
 
 fn cmd_run(a: RunArgs) -> Result<i32> {
@@ -271,64 +307,11 @@ fn cmd_run(a: RunArgs) -> Result<i32> {
     presets::plan(&a.harness, &host, &[], &[])?;
     let layout = Layout::new(&host.data_dir);
     first_run(&host, &layout, &a)?;
-    if a.harness == "hermes" {
-        sandmux_policy::hermes_config::ensure_update_check_off(&layout.home("hermes"))?;
+    let opts = launch_options(&host, &a);
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        return sessions::run_session(opts);
     }
-
-    let support = sandmux_launcher::support::check_via(&runner_path());
-    if !support.can_launch() {
-        bail!(
-            "esta máquina não permite lançar o sandbox ({}); rode `sandmux doctor`",
-            doctor::short_reason(&support)
-        );
-    }
-    // SANDMUX_DISABLE_OVERLAY só desliga a camada (modo de recuo): nunca afrouxa.
-    let overlay_ok =
-        support.overlay.is_ok() && std::env::var_os("SANDMUX_DISABLE_OVERLAY").is_none();
-    let lock = if overlay_ok {
-        try_layer_lock(&layout.layer_lock(&a.harness))?
-    } else {
-        None
-    };
-    let mode = match (overlay_ok, &lock) {
-        (false, _) => LayerMode::ReadOnlyFallback,
-        (true, Some(_)) => LayerMode::Persistent,
-        (true, None) => LayerMode::Temporary,
-    };
-    let opts = RunOptions {
-        harness: a.harness.clone(),
-        workdir: a.workdir.clone(),
-        ro: a.ro.clone(),
-        rw: a.rw.clone(),
-        pass_env: a.pass_env.clone(),
-        repo: a.repo,
-        kvm: a.kvm,
-        no_gpu: a.no_gpu,
-        args: a.args.clone(),
-        layer: mode,
-    };
-    let composed = compose(&host, &opts)?;
-    for w in &composed.warnings {
-        warn(w);
-    }
-    for d in &composed.dirs_to_create {
-        if d.starts_with(&host.data_dir) {
-            home::private_dir(d)?;
-        } else {
-            std::fs::create_dir_all(d).with_context(|| format!("criar {}", d.display()))?;
-        }
-    }
-
-    let fd = nix::sys::memfd::memfd_create(c"sandmux-spec", nix::sys::memfd::MFdFlags::empty())
-        .map_err(|e| anyhow!("memfd: {e}"))?;
-    let mut spec_file = std::fs::File::from(fd);
-    spec_file.write_all(composed.spec.to_json().as_bytes())?;
-    spec_file.rewind()?;
-    let runner = runner_path();
-    let err = Command::new(&runner)
-        .arg("--spec-fd")
-        .arg(spec_file.as_raw_fd().to_string())
-        .exec();
-    drop(lock);
-    Err(anyhow!("executar {}: {err}", runner.display()))
+    let prepared = launch::prepare(&host, &opts)?;
+    prepared.warnings.iter().for_each(warn);
+    Err(prepared.exec())
 }

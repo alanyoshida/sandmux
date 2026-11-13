@@ -68,7 +68,13 @@ O `doctor` confere o kernel (Landlock ABI 6 ou mais novo), se user namespaces se
 
 | Comando | O que faz |
 |---|---|
-| `sandmux run <harness>` | Sobe o harness confinado na pasta atual. Harnesses: `opencode`, `hermes` e `shell` (um shell confinado, sem agente). Na primeira execução, pergunta se deve importar a configuração que você já tem |
+| `sandmux run <harness>` | Sobe o harness confinado na pasta atual. Harnesses: `opencode`, `hermes` e `shell` (um shell confinado, sem agente). Na primeira execução, pergunta se deve importar a configuração que você já tem. Num terminal, cria uma sessão no daemon e anexa a ela; sem terminal (script, pipe, CI), roda direto, em primeiro plano, sem daemon |
+| `sandmux ls` | Lista as sessões: identificador, nome, estado (viva, encerrada com o código, parada com o motivo), terminais anexados e pasta |
+| `sandmux attach [id]` | Anexa este terminal a uma sessão. Sem identificador, à única sessão viva |
+| `sandmux detach <id>` | Desanexa todos os terminais de uma sessão, sem encerrá-la |
+| `sandmux kill <id>` | Encerra a sessão e a tira da lista |
+| `sandmux restart <id>` | Relança uma sessão encerrada ou parada, na mesma pasta e com as mesmas opções |
+| `sandmux daemon status`, `stop`, `restart`, `disable` | Estado do daemon; parar (as sessões vivas voltam na próxima subida); reiniciar com o binário instalado; parar e remover a unidade systemd |
 | `sandmux import <harness>` | Copia a configuração existente do harness para o HOME sintético, trocando os segredos por valores falsos. Rodado de novo, copia só o que é novo; `--overwrite` substitui |
 | `sandmux doctor` | Mostra se a máquina tem o suporte necessário e o que falta |
 
@@ -83,6 +89,7 @@ Opções de `run`:
 | `--repo` | Numa subpasta de repositório, monta o repositório inteiro em somente leitura para o git funcionar |
 | `--kvm` | Libera `/dev/kvm` |
 | `--no-gpu` | Não expõe a GPU (exposta por padrão quando existe) |
+| `--allow-clipboard` | Deixa o harness gravar no clipboard do seu terminal (OSC 52). Por padrão a gravação é bloqueada, e a leitura do clipboard é sempre bloqueada |
 | `-- <argumentos>` | Argumentos repassados ao harness |
 
 Exemplos:
@@ -94,6 +101,19 @@ sandmux run shell -- -c "id -u; ls ~"
 ```bash
 sandmux run opencode --pass-env OPENROUTER_API_KEY
 ```
+
+### Sessões
+
+Num terminal, `sandmux run` cria uma sessão no daemon de sessões (`sandmuxd`) e anexa o terminal a ela. O agente continua rodando quando o terminal fecha, e `sandmux attach` volta a ele de qualquer terminal, com o histórico e a tela atual. Enquanto anexado:
+
+| Teclas | Efeito |
+|---|---|
+| Ctrl+b d | Desanexa; a sessão continua |
+| Ctrl+b Ctrl+b | Envia um Ctrl+b ao harness |
+
+Vários terminais podem se anexar à mesma sessão, e todos digitam. A tela segue o menor deles. O histórico (10.000 linhas por sessão) fica só em memória e some quando o daemon para.
+
+Na primeira vez em que precisa do daemon, o cliente instala e habilita a unidade systemd de usuário `sandmuxd.service`, que sobe o daemon no login, e avisa. Sem systemd, o cliente sobe o daemon na hora. Depois de um reboot, as sessões que estavam vivas voltam sozinhas, menos as que usavam `--pass-env`: essas ficam paradas até um `sandmux restart <id>` num terminal com as variáveis. Detalhes em [docs/sessions.md](docs/sessions.md).
 
 Para entregar ao agente um arquivo de fora da pasta de trabalho (um PDF, um screenshot), copie-o para a pasta de entrada que o `doctor` mostra. Lá dentro ela aparece em `~/inbox`, em somente leitura.
 
@@ -174,6 +194,7 @@ O projeto usa [OpenSpec](https://github.com/Fission-AI/OpenSpec) para planejar c
 |---|---|
 | [docs/launch-spec.md](docs/launch-spec.md) | Formato da especificação de lançamento entre o cliente e o lançador |
 | [docs/git.md](docs/git.md) | O que a proteção do `.git` cobre e como o git se comporta dentro do sandbox |
+| [docs/sessions.md](docs/sessions.md) | O daemon de sessões: socket, protocolo, lista de sessões, restauração e limites |
 | [openspec/roadmap.md](openspec/roadmap.md) | Todas as decisões do projeto e o plano em 10 etapas |
 | [openspec/specs/](openspec/specs/) | Specs vigentes: isolamento, sistema de arquivos, presets dos harnesses e importação de estado |
 | [openspec/changes/archive/2026-11-13-add-sandbox-cli/proposal.md](openspec/changes/archive/2026-11-13-add-sandbox-cli/proposal.md) | Proposta do primeiro change: o confinamento por linha de comando |

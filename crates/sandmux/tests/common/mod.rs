@@ -12,6 +12,7 @@ use sandmux_spec::{EnvVar, LandlockRules, LaunchSpec, Mount, SPEC_VERSION, Secco
 pub const RUN: &str = env!("CARGO_BIN_EXE_sandmux-run");
 pub const PROBE: &str = env!("CARGO_BIN_EXE_sandmux-probe");
 pub const SANDMUX: &str = env!("CARGO_BIN_EXE_sandmux");
+pub const SANDMUXD: &str = env!("CARGO_BIN_EXE_sandmuxd");
 
 pub fn bin_dir() -> PathBuf {
     Path::new(PROBE).parent().unwrap().to_path_buf()
@@ -195,6 +196,7 @@ pub fn home() -> PathBuf {
 }
 
 pub mod cli;
+pub mod pty;
 
 /// Roda um comando cuja preparação cria um user namespace no processo de
 /// teste, que não tem perfil AppArmor. Com a restrição do AppArmor ligada,

@@ -1,0 +1,16 @@
+[package]
+name = "sandmux-proto"
+description = "Protocolo entre o cliente sandmux e o daemon sandmuxd, e utilitários de fluxo de terminal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

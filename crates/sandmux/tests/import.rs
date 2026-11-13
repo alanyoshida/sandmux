@@ -182,9 +182,11 @@ fn harness_sem_estado_nao_pergunta() {
 /// Roda o `sandmux` num pseudoterminal (via `script`), respondendo à pergunta.
 fn interactive(e: &Env, answer: &str, cmd: &str) -> String {
     let full = format!(
-        "env -i HOME={} XDG_DATA_HOME={} PATH=/usr/bin:/bin TERM=xterm {} {cmd}",
+        "env -i HOME={} XDG_DATA_HOME={} XDG_RUNTIME_DIR={} XDG_STATE_HOME={} SANDMUX_DAEMON_START=direct PATH=/usr/bin:/bin TERM=xterm {} {cmd}",
         e.home.display(),
         e.data.display(),
+        e.runtime.display(),
+        e.state.display(),
         SANDMUX
     );
     let mut child = Command::new("script")
