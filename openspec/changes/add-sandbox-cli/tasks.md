@@ -13,7 +13,7 @@ Os testes que montam o sandbox precisam de user namespace sem privilégio. No Ub
 
 Cada prova termina com o resultado anotado na seção 6 do `openspec/roadmap.md`. Se uma premissa falhar, parar e revisar o `design.md` antes de seguir.
 
-- [ ] 2.1 Escrever o perfil AppArmor do `sandmux-run` em `packaging/apparmor/` e, num terminal comum do Ubuntu 26.04, confirmar que um binário de teste monta um tmpfs dentro de um user namespace com o perfil instalado e falha sem ele; anotar o resultado e o comando de instalação
+- [x] 2.1 Escrever o perfil AppArmor do `sandmux-run` em `packaging/apparmor/` e, num terminal comum do Ubuntu 26.04, confirmar que um binário de teste monta um tmpfs dentro de um user namespace com o perfil instalado e falha sem ele; anotar o resultado e o comando de instalação
 - [x] 2.2 Provar que um overlay montado em user namespace, com uma pasta do HOME real por baixo e a camada de escrita no diretório de dados, aceita `cargo install` e `npm install -g` sem alterar a pasta de baixo; verificar comparando a pasta do host antes e depois
 - [x] 2.3 Provar que um arquivo coberto por montagem em cima do overlay não pode ser apagado, renomeado nem substituído de dentro do sandbox; verificar com as três tentativas falhando
 - [x] 2.4 Provar que um diretório vazio pré-autorizado no Landlock dá acesso a uma pasta montada sob ele depois que a restrição foi aplicada; anotar se a premissa da decisão 10 do design vale

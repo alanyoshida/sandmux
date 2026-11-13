@@ -62,7 +62,7 @@ install -m 755 target/release/sandmux target/release/sandmux-run ~/.local/bin/
 sandmux doctor
 ```
 
-O `doctor` confere o kernel (Landlock ABI 6 ou mais novo), se user namespaces sem privilégio permitem montar e se a camada de escrita funciona. No Ubuntu, que restringe user namespaces por AppArmor por padrão, ele mostra o perfil do lançador e o comando com `sudo` que o instala.
+O `doctor` confere o kernel (Landlock ABI 6 ou mais novo), se user namespaces sem privilégio permitem montar e se a camada de escrita funciona. No Ubuntu, que restringe user namespaces por AppArmor por padrão, ele mostra o perfil do lançador e o comando com `sudo` que o instala. O perfil vale para o caminho do `sandmux-run`: se o binário mudar de lugar, rode o `doctor` de novo e reinstale.
 
 ### Comandos
 

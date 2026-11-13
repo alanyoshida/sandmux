@@ -48,7 +48,7 @@ fn line(ok: bool, label: &str, detail: &str) {
 }
 
 pub fn run() -> Result<i32> {
-    let mut r = support::check();
+    let mut r = support::check_via(&crate::runner_path());
     // Mesma variável do `run`: só desliga a camada, para conferir o modo de recuo.
     if std::env::var_os("SANDMUX_DISABLE_OVERLAY").is_some() && r.overlay.is_ok() {
         r.overlay = Err("desligada por SANDMUX_DISABLE_OVERLAY".into());
@@ -78,12 +78,11 @@ pub fn run() -> Result<i32> {
         Err(e) => {
             line(false, "user namespace sem privilégio, com montagem", e);
             if r.apparmor_restrict_userns == Some(true) {
+                // Sem recuo nas linhas do comando: o heredoc só termina com
+                // `EOF` no começo da linha.
                 println!(
-                    "\n  A distro restringe user namespaces sem privilégio por AppArmor\n  (kernel.apparmor_restrict_unprivileged_userns=1). O lançador precisa de um\n  perfil próprio. Grave o perfil abaixo em /etc/apparmor.d/sandmux-run e carregue:\n\n    sudo tee /etc/apparmor.d/sandmux-run >/dev/null <<'EOF'\n{}    EOF\n    sudo apparmor_parser -r /etc/apparmor.d/sandmux-run\n",
+                    "\n  A distro restringe user namespaces sem privilégio por AppArmor\n  (kernel.apparmor_restrict_unprivileged_userns=1). O lançador precisa de um\n  perfil próprio. Para gravar o perfil em /etc/apparmor.d/sandmux-run e\n  carregá-lo, cole no terminal:\n\nsudo tee /etc/apparmor.d/sandmux-run >/dev/null <<'EOF'\n{}EOF\nsudo apparmor_parser -r /etc/apparmor.d/sandmux-run\n",
                     apparmor_profile()
-                        .lines()
-                        .map(|l| format!("    {l}\n"))
-                        .collect::<String>()
                 );
             } else {
                 println!(
@@ -105,7 +104,7 @@ pub fn run() -> Result<i32> {
 
     if r.apparmor_restrict_userns == Some(true) && r.userns.is_ok() {
         println!(
-            "\n  Nota: a distro restringe user namespaces por AppArmor, mas a verificação passou\n  neste processo. Se `sandmux run` falhar num terminal comum, instale o perfil\n  mostrado por este comando quando a verificação falha."
+            "\n  Nota: a distro restringe user namespaces por AppArmor, e o lançador passou na\n  verificação (o perfil do sandmux-run está carregado, ou o processo que chamou\n  o sandmux tem um perfil que libera user namespaces)."
         );
     }
 

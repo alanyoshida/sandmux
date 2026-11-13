@@ -232,7 +232,7 @@ fn first_run(host: &Host, layout: &Layout, a: &RunArgs) -> Result<()> {
     Ok(())
 }
 
-fn runner_path() -> PathBuf {
+pub(crate) fn runner_path() -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("sandmux-run")))
@@ -275,7 +275,7 @@ fn cmd_run(a: RunArgs) -> Result<i32> {
         sandmux_policy::hermes_config::ensure_update_check_off(&layout.home("hermes"))?;
     }
 
-    let support = sandmux_launcher::support::check();
+    let support = sandmux_launcher::support::check_via(&runner_path());
     if !support.can_launch() {
         bail!(
             "esta máquina não permite lançar o sandbox ({}); rode `sandmux doctor`",

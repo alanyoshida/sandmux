@@ -195,3 +195,26 @@ pub fn home() -> PathBuf {
 }
 
 pub mod cli;
+
+/// Roda um comando cuja preparação cria um user namespace no processo de
+/// teste, que não tem perfil AppArmor. Com a restrição do AppArmor ligada,
+/// essa preparação é negada: devolve `None` e o teste deve ser pulado.
+#[allow(dead_code)]
+pub fn output_unless_restricted(cmd: &mut Command, test: &str) -> Option<Output> {
+    match cmd.output() {
+        Ok(out) => Some(out),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::PermissionDenied
+                && std::fs::read_to_string(
+                    "/proc/sys/kernel/apparmor_restrict_unprivileged_userns",
+                )
+                .is_ok_and(|s| s.trim() == "1") =>
+        {
+            eprintln!(
+                "{test}: pulado, a restrição de user namespaces do AppArmor impede a preparação no processo de teste"
+            );
+            None
+        }
+        Err(e) => panic!("{e}"),
+    }
+}
