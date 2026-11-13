@@ -156,3 +156,28 @@ fn perfil_apparmor_tem_o_caminho_do_lancador() {
             && tpl.contains("flags=(unconfined)")
     );
 }
+
+#[test]
+fn ajuda_lista_os_comandos_de_sessao() {
+    let out = std::process::Command::new(SANDMUX)
+        .arg("--help")
+        .output()
+        .unwrap();
+    let help = String::from_utf8_lossy(&out.stdout);
+    for c in ["run", "ls", "attach", "detach", "kill", "restart", "daemon"] {
+        assert!(
+            help.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{c} "))),
+            "{c} ausente:\n{help}"
+        );
+    }
+    let out = std::process::Command::new(SANDMUX)
+        .args(["run", "--help"])
+        .output()
+        .unwrap();
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        help.contains("--allow-clipboard") && help.contains("Ctrl+b d"),
+        "{help}"
+    );
+}

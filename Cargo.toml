@@ -14,16 +14,18 @@ sandmux-spec = { path = "crates/sandmux-spec" }
 sandmux-launcher = { path = "crates/sandmux-launcher" }
 sandmux-policy = { path = "crates/sandmux-policy" }
 sandmux-import = { path = "crates/sandmux-import" }
+sandmux-proto = { path = "crates/sandmux-proto" }
 
 anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
 landlock = "0.4.7"
 libc = "0.2.174"
-nix = { version = "0.30", features = ["fs", "mount", "process", "sched", "signal", "user", "term"] }
+nix = { version = "0.30", features = ["fs", "ioctl", "mount", "poll", "process", "sched", "signal", "socket", "term", "user"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tempfile = "3"
+vt100 = "0.18"
 thiserror = "2"
 
 [workspace.lints.rust]

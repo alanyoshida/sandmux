@@ -13,6 +13,10 @@ name = "sandmux"
 path = "src/main.rs"
 
 [[bin]]
+name = "sandmuxd"
+path = "src/bin/sandmuxd.rs"
+
+[[bin]]
 name = "sandmux-run"
 path = "src/bin/sandmux-run.rs"
 
@@ -25,14 +29,18 @@ sandmux-spec.workspace = true
 sandmux-launcher.workspace = true
 sandmux-policy.workspace = true
 sandmux-import.workspace = true
+sandmux-proto.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 libc.workspace = true
 nix.workspace = true
 serde_json.workspace = true
+serde.workspace = true
+vt100.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+vt100.workspace = true
 serde_json.workspace = true
 
 [lints]

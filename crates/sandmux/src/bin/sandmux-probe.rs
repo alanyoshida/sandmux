@@ -282,7 +282,9 @@ fn unlink(p: &str) -> Result<String, std::io::Error> {
 /// Argumentos em `chave=valor`: `ssh` (pasta de chaves do HOME real),
 /// `other` (outra pasta do HOME real), `hostsock` (socket do host por
 /// caminho), `abstract` (nome de socket abstrato do host), `covered` (arquivo
-/// coberto, repetível), `git` (pasta `.git` da pasta de trabalho), `inbox`.
+/// coberto, repetível), `git` (pasta `.git` da pasta de trabalho), `inbox`,
+/// `daemonsock` (socket do daemon do sandmux) e `daemonabstract` (nome
+/// abstrato com o nome do daemon).
 fn suite(args: &[String]) -> i32 {
     let get = |k: &str| -> Vec<String> {
         args.iter()
@@ -309,6 +311,18 @@ fn suite(args: &[String]) -> i32 {
         "conectar no socket abstrato do host".into(),
         connect_abstract(&one("abstract")),
     );
+    for p in get("daemonsock") {
+        add(
+            format!("conectar no socket do daemon do sandmux ({p})"),
+            UnixStream::connect(&p).map(|_| "conectado".into()),
+        );
+    }
+    for n in get("daemonabstract") {
+        add(
+            format!("conectar num socket abstrato com o nome do daemon ({n})"),
+            connect_abstract(&n),
+        );
+    }
     add(
         "sinalizar processo fora do domínio (pid 1)".into(),
         signal("1"),

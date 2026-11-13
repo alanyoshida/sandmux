@@ -52,6 +52,12 @@ fn suite_completa_de_fuga() {
     let _l = UnixListener::bind(&sock).unwrap();
     let abs = format!("sandmux-suite-{}", std::process::id());
     let _a = abstract_listener(&abs);
+    // O daemon do sandmux rodando, com o socket dele e um abstrato homônimo.
+    let started = e.run(&e.work, &["ls"]);
+    assert!(started.status.success(), "{}", stderr(&started));
+    assert!(e.socket().exists());
+    let daemon_abs = e.socket().display().to_string();
+    let _d = abstract_listener(&daemon_abs);
 
     let args = [
         format!("ssh={}", h.join(".ssh").display()),
@@ -63,6 +69,8 @@ fn suite_completa_de_fuga() {
         "covered=/etc/shadow".into(),
         format!("git={}", e.work.join(".git").display()),
         format!("inbox={}", h.join("inbox").display()),
+        format!("daemonsock={}", e.socket().display()),
+        format!("daemonabstract={daemon_abs}"),
     ];
     let script = std::iter::once(format!("{PROBE} suite"))
         .chain(args.iter().map(|a| shell_quote(a)))
@@ -80,7 +88,7 @@ fn suite_completa_de_fuga() {
     let summary: serde_json::Value = serde_json::from_str(report.lines().last().unwrap()).unwrap();
     assert_eq!(summary["resumo"]["conseguiram"], 0);
     assert!(
-        summary["resumo"]["tentativas"].as_u64().unwrap() >= 45,
+        summary["resumo"]["tentativas"].as_u64().unwrap() >= 53,
         "{report}"
     );
     assert_eq!(out.status.code(), Some(0));
