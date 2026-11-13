@@ -1,0 +1,18 @@
+[package]
+name = "sandmux-launcher"
+description = "Monta o confinamento descrito numa especificação de lançamento e executa o comando dentro dele"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+sandmux-spec.workspace = true
+landlock.workspace = true
+libc.workspace = true
+nix.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

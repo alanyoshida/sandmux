@@ -1,0 +1,34 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.88"
+publish = false
+
+[workspace.dependencies]
+sandmux-spec = { path = "crates/sandmux-spec" }
+sandmux-launcher = { path = "crates/sandmux-launcher" }
+sandmux-policy = { path = "crates/sandmux-policy" }
+sandmux-import = { path = "crates/sandmux-import" }
+
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+landlock = "0.4.7"
+libc = "0.2.174"
+nix = { version = "0.30", features = ["fs", "mount", "process", "sched", "signal", "user", "term"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tempfile = "3"
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[profile.release]
+lto = true
+codegen-units = 1

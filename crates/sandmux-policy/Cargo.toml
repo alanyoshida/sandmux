@@ -1,0 +1,18 @@
+[package]
+name = "sandmux-policy"
+description = "Baseline de segurança, presets de harness e toolchains do sandmux, compostos numa especificação de lançamento"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+sandmux-spec.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,20 @@
+# Perfil AppArmor do lançador do sandmux.
+#
+# Distros que restringem user namespaces sem privilégio por AppArmor (o Ubuntu,
+# com kernel.apparmor_restrict_unprivileged_userns=1) deixam um programa sem
+# perfil próprio criar o user namespace, mas sem capabilities dentro dele, e a
+# montagem do sandbox falha. Este perfil libera user namespaces só para o
+# lançador. O confinamento do agente continua a cargo do próprio lançador
+# (namespaces, Landlock e seccomp).
+#
+# @SANDMUX_RUN@ é o caminho absoluto do binário sandmux-run. O `sandmux doctor`
+# mostra este perfil já com o caminho preenchido e o comando que o instala.
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile sandmux-run @SANDMUX_RUN@ flags=(unconfined) {
+  userns,
+
+  include if exists <local/sandmux-run>
+}

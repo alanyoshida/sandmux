@@ -40,7 +40,7 @@ Fora deste change, cada item em um change posterior:
 - Programas com janela. Wayland e X11 ficam fora do sandbox; navegador headless funciona.
 - Daemon de sessões, TUI, abas e arquivo de configuração em TOML com perfis.
 - Limites de recurso por aba.
-- Instalador com `sudo` (perfil AppArmor) e tudo que envolve eBPF.
+- Instalador com `sudo`, que instala sozinho o perfil AppArmor, e tudo que envolve eBPF. Nesta fatia o perfil vem no repositório e a instalação é manual.
 
 ## Capabilities
 
@@ -58,7 +58,7 @@ Nenhuma. O projeto ainda não tem specs.
 ## Impact
 
 - **Código**: projeto novo. Cria o workspace Rust com dois binários (`sandmux-run`, `sandmux`) e bibliotecas compartilhadas para a especificação de lançamento, o sandbox e os presets.
-- **Plataforma**: apenas Linux. Exige user namespaces sem privilégio, overlayfs em user namespace e Landlock com escopo de sockets abstratos (kernel 6.12 ou mais novo). O requisito de Landlock pode baixar quando o isolamento de rede chegar.
+- **Plataforma**: apenas Linux. Exige user namespaces sem privilégio e Landlock com escopo de sockets abstratos (kernel 6.12 ou mais novo). O requisito de Landlock pode baixar quando o isolamento de rede chegar. Sem overlayfs em user namespace, o sandbox sobe com caches próprios e toolchains em somente leitura. Em distros que restringem user namespace por AppArmor, como o Ubuntu, o usuário instala à mão, com `sudo`, o perfil do lançador que o `doctor` mostra.
 - **Dependências**: crates de Landlock, de filtro seccomp e de chamadas de sistema; sem dependência de bibliotecas C além da libc.
 - **Dados do usuário**: cria um diretório de dados do sandmux com os HOMEs sintéticos e as camadas de escrita de toolchains e caches. O HOME real nunca é alterado; a importação é uma cópia de mão única.
 - **Limitação conhecida desta fatia**: a rede do host fica aberta e sem registro, uma variável passada com `--pass-env` fica ao alcance do agente, arquivos de segredo que já estão na pasta de trabalho ficam legíveis, e o agente não roda contêineres, não instala pacotes do sistema e não abre programas com janela. O resultado serve para validar o confinamento e para uso consciente, não como a proteção completa do projeto.
