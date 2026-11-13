@@ -1,6 +1,9 @@
 //! Lançador do sandbox do sandmux.
 //!
-//! Uso: `sandmux-run --spec-fd <N>`
+//! Uso: `sandmux-run --spec-fd <N>` ou `sandmux-run --check`
+//!
+//! Com `--check`, verifica o suporte da máquina neste processo (que é o que
+//! recebe o perfil AppArmor) e escreve o resultado em linhas `chave:valor`.
 //!
 //! Lê uma especificação de lançamento em JSON do descritor herdado `N`, monta
 //! o confinamento que ela descreve e executa o comando dentro dele. Termina com
@@ -21,11 +24,15 @@ fn fail(msg: impl std::fmt::Display, code: i32) -> ! {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.as_slice() == ["--check"] {
+        print!("{}", sandmux_launcher::support::check().to_wire());
+        exit(0);
+    }
     let fd: i32 = match args.as_slice() {
         [flag, n] if flag == "--spec-fd" => n
             .parse()
             .unwrap_or_else(|_| fail(format!("descritor inválido: {n}"), EXIT_SETUP)),
-        _ => fail("uso: sandmux-run --spec-fd <N>", EXIT_SETUP),
+        _ => fail("uso: sandmux-run --spec-fd <N> | --check", EXIT_SETUP),
     };
     // SAFETY: fcntl só consulta o descritor.
     if fd < 3 || unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {

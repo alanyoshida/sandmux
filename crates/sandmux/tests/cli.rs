@@ -99,7 +99,11 @@ fn doctor_sem_user_namespace_termina_com_erro() {
         });
     }
     cmd.env("SANDMUX_ASSUME_APPARMOR_RESTRICT", "1");
-    let out = cmd.output().unwrap();
+    let Some(out) =
+        output_unless_restricted(&mut cmd, "doctor_sem_user_namespace_termina_com_erro")
+    else {
+        return;
+    };
     let s = stdout(&out);
     assert_eq!(out.status.code(), Some(1), "{s}");
     assert!(s.contains("[FALHA] user namespace"), "{s}");
@@ -114,7 +118,27 @@ fn doctor_sem_user_namespace_termina_com_erro() {
         "{s}"
     );
     assert!(
-        s.contains("sudo apparmor_parser -r /etc/apparmor.d/sandmux-run"),
+        s.contains("\nsudo apparmor_parser -r /etc/apparmor.d/sandmux-run\n"),
+        "{s}"
+    );
+    // O comando sai sem recuo, para o heredoc terminar ao ser colado.
+    assert!(
+        s.contains("\nsudo tee /etc/apparmor.d/sandmux-run >/dev/null <<'EOF'\n")
+            && s.contains("}\nEOF\n"),
+        "{s}"
+    );
+}
+
+#[test]
+fn lancador_responde_a_verificacao() {
+    let out = std::process::Command::new(RUN)
+        .arg("--check")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        s.contains("\nuserns:ok\n") && s.starts_with("landlock:"),
         "{s}"
     );
 }

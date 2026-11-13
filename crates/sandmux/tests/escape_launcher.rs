@@ -146,7 +146,12 @@ fn user_namespace_bloqueado_recusa_e_aponta_o_doctor() {
             write(c"/proc/sys/user/max_user_namespaces", b"0")
         });
     }
-    let out = cmd.output().unwrap();
+    let Some(out) = output_unless_restricted(
+        &mut cmd,
+        "user_namespace_bloqueado_recusa_e_aponta_o_doctor",
+    ) else {
+        return;
+    };
     assert_eq!(out.status.code(), Some(125));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(

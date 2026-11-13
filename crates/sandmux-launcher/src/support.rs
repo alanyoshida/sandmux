@@ -38,6 +38,69 @@ impl SupportReport {
     }
 }
 
+impl SupportReport {
+    /// Formato de linhas que o `sandmux-run --check` escreve e o cliente lê.
+    pub fn to_wire(&self) -> String {
+        let s = |r: &Result<(), String>| match r {
+            Ok(()) => "ok".to_string(),
+            Err(e) => e.replace('\n', " "),
+        };
+        let aa = match self.apparmor_restrict_userns {
+            Some(true) => "1",
+            Some(false) => "0",
+            None => "-",
+        };
+        format!(
+            "landlock:{}\nuserns:{}\noverlay:{}\napparmor:{aa}\n",
+            self.landlock_abi,
+            s(&self.userns),
+            s(&self.overlay)
+        )
+    }
+
+    /// Lê o formato de [`SupportReport::to_wire`]. Campos ausentes contam como
+    /// falha.
+    pub fn from_wire(out: &str) -> SupportReport {
+        let (userns, overlay) = parse_probe(out);
+        let mut landlock_abi = -1;
+        let mut apparmor_restrict_userns = None;
+        for line in out.lines() {
+            match line.split_once(':') {
+                Some(("landlock", v)) => landlock_abi = v.trim().parse().unwrap_or(-1),
+                Some(("apparmor", "1")) => apparmor_restrict_userns = Some(true),
+                Some(("apparmor", "0")) => apparmor_restrict_userns = Some(false),
+                _ => {}
+            }
+        }
+        SupportReport {
+            landlock_abi,
+            userns,
+            overlay,
+            apparmor_restrict_userns,
+        }
+    }
+}
+
+/// Roda as verificações dentro do lançador (`<runner> --check`). Assim a
+/// verificação vale com o perfil AppArmor do lançador, que é o processo que
+/// cria o sandbox.
+pub fn check_via(runner: &std::path::Path) -> SupportReport {
+    match std::process::Command::new(runner)
+        .arg("--check")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .output()
+    {
+        Ok(out) => SupportReport::from_wire(&String::from_utf8_lossy(&out.stdout)),
+        Err(e) => SupportReport {
+            landlock_abi: sys::landlock_abi(),
+            userns: Err(format!("executar o lançador {}: {e}", runner.display())),
+            overlay: Err("não verificado".into()),
+            apparmor_restrict_userns: apparmor_restricts_userns(),
+        },
+    }
+}
+
 pub fn apparmor_restricts_userns() -> Option<bool> {
     std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
         .ok()
@@ -162,4 +225,31 @@ fn child_probe(uid: u32, gid: u32) -> String {
     })()
     .map_err(|e| e.to_string());
     fmt(Ok(()), overlay)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formato_de_linhas_ida_e_volta() {
+        let r = SupportReport {
+            landlock_abi: 8,
+            userns: Ok(()),
+            overlay: Err("sem\noverlay".into()),
+            apparmor_restrict_userns: Some(true),
+        };
+        let back = SupportReport::from_wire(&r.to_wire());
+        assert_eq!(back.landlock_abi, 8);
+        assert!(back.userns.is_ok());
+        assert_eq!(back.overlay, Err("sem overlay".into()));
+        assert_eq!(back.apparmor_restrict_userns, Some(true));
+    }
+
+    #[test]
+    fn resposta_vazia_e_falha() {
+        let r = SupportReport::from_wire("");
+        assert!(!r.can_launch());
+        assert_eq!(r.apparmor_restrict_userns, None);
+    }
 }
