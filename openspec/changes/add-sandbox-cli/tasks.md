@@ -71,7 +71,7 @@ Cada prova termina com o resultado anotado na seção 6 do `openspec/roadmap.md`
 - [x] 8.1 Definir o formato interno de preset (como localizar, código em somente leitura, pastas pela camada de escrita, variáveis, comando) e a recusa para nome desconhecido e para harness não instalado, com a instrução de instalação; verificar com testes dos cenários da spec `harness-presets`
 - [x] 8.2 Implementar o preset `shell` (shell do usuário se estiver no sistema, senão `bash`; arquivo de configuração mínimo gerado ao criar o HOME sintético) e o repasse dos argumentos depois de `--`; verificar que `sandmux run shell -- -c "id -u"` devolve o UID do usuário e o código de saída
 - [x] 8.3 Implementar o preset do opencode (`~/.opencode` em somente leitura, estado no HOME sintético, `OPENCODE_DISABLE_AUTOUPDATE`); verificar que `sandmux run opencode -- --version` mostra a versão e que a interface abre na pasta de trabalho
-- [ ] 8.4 Implementar o preset do hermes (código e os três comandos em somente leitura, `~/.hermes/tools` pela camada de escrita, `updates.check: false`, gateway próprio); verificar que a interface abre, que o `gateway.sock` do host não existe lá dentro e que o gateway do sandbox termina junto com o hermes
+- [x] 8.4 Implementar o preset do hermes (código e os três comandos em somente leitura, `~/.hermes/tools` pela camada de escrita, `updates.check: false`, gateway próprio); verificar que a interface abre, que o `gateway.sock` do host não existe lá dentro e que o gateway do sandbox termina junto com o hermes
 - [x] 8.5 Verificar pela sonda que o código de cada harness não pode ser alterado de dentro do sandbox e que o backend Docker do hermes falha sem alcançar o Docker do host
 - [x] 8.6 Gerar, com `--pass-env` no preset do hermes, o `.env` da execução (linhas do `.env` sintético, valores reais no lugar dos falsos, recusa de quebra de linha e `${`) e montá-lo em somente leitura sobre `~/.hermes/.env`; verificar com testes que o hermes lê o valor real pelo próprio parser, que o arquivo não pode ser alterado de dentro e que o `.env` sintético no host continua com o valor falso
 
@@ -93,6 +93,6 @@ Cada prova termina com o resultado anotado na seção 6 do `openspec/roadmap.md`
 ## 11. Integração
 
 - [x] 11.1 Rodar a suíte completa de fuga dentro de um sandbox lançado por `sandmux run`, cobrindo cada requisito de `sandbox-isolation` e `sandbox-filesystem`; verificar que todas as tentativas falham e que o resultado sai num relatório único
-- [ ] 11.2 Subir o opencode e o hermes reais com `--pass-env`, pedir a cada um que crie um arquivo, faça um commit e instale uma ferramenta global; verificar que o arquivo e o commit aparecem no host e que as toolchains do host ficam idênticas
+- [x] 11.2 Subir o opencode e o hermes reais com `--pass-env`, pedir a cada um que crie um arquivo, faça um commit e instale uma ferramenta global; verificar que o arquivo e o commit aparecem no host e que as toolchains do host ficam idênticas
 - [x] 11.3 Iniciar um navegador headless dentro do sandbox; verificar que ele abre uma página e anotar o resultado na seção 6 do roadmap
 - [x] 11.4 Rodar `openspec validate add-sandbox-cli --strict` e atualizar a situação do change e as verificações no `openspec/roadmap.md`; verificar que a validação passa e que o roadmap reflete o que foi medido
