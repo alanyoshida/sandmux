@@ -1,0 +1,39 @@
+[package]
+name = "sandmux"
+description = "Multiplexador de terminal para rodar agentes de código dentro de um sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+default-run = "sandmux"
+
+[[bin]]
+name = "sandmux"
+path = "src/main.rs"
+
+[[bin]]
+name = "sandmux-run"
+path = "src/bin/sandmux-run.rs"
+
+[[bin]]
+name = "sandmux-probe"
+path = "src/bin/sandmux-probe.rs"
+
+[dependencies]
+sandmux-spec.workspace = true
+sandmux-launcher.workspace = true
+sandmux-policy.workspace = true
+sandmux-import.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+libc.workspace = true
+nix.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

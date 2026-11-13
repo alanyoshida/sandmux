@@ -46,7 +46,9 @@ O foco principal é o sandbox, não a interface:
 | Gerenciamento | Cada regra aparece como "padrão" ou "modificada"; desligar regra da baseline é ato explícito |
 | Perfil de um projeto | Lido só de fora da pasta de trabalho: fica na configuração do usuário, ligado ao caminho da pasta. Nada dentro da pasta altera a política, porque o agente poderia editar o arquivo. Custo aceito: o perfil não é versionado no repositório |
 | Toda aba tem sandbox | Não existe shell livre |
-| Listas embutidas | O conteúdo inicial de cada lista (arquivos sensíveis de `/etc`, credenciais por toolchain, padrões de arquivo de segredo, catálogo de exfiltração, catálogo de domínios comuns) é proposto na spec do change que a usa, para revisão item a item |
+| Opções do `run` no primeiro change | `--workdir`, `--ro`, `--rw`, `--pass-env`, `--import`, `--no-import`, `--repo`, `--kvm`, `--no-gpu`, e `--` para repassar argumentos ao harness. Os nomes foram propostos na spec e ainda não foram revisados pelo usuário |
+| Diretório de dados | `$XDG_DATA_HOME/sandmux` (por padrão `~/.local/share/sandmux`), com os HOMEs sintéticos, as camadas de escrita, a pasta de entrada e os manifestos de importação |
+| Listas embutidas | O conteúdo inicial de cada lista (arquivos sensíveis de `/etc`, credenciais por toolchain, padrões de arquivo de segredo, catálogo de exfiltração, catálogo de domínios comuns) é proposto na spec do change que a usa, para revisão item a item. As do primeiro change estão na spec `sandbox-filesystem` (arquivos de `/etc`, toolchains e seus arquivos de credencial, caches, credenciais conhecidas para o aviso de montagem) e na `harness-state-import` (o que é copiado de cada harness) |
 | Atualização dos catálogos | Só com versão nova do sandmux: os catálogos são versionados junto com o binário, e o sandmux nunca faz chamada de rede por conta própria |
 
 ### 2.3 Arquivos
@@ -59,18 +61,18 @@ O foco principal é o sandbox, não a interface:
 | HOME sintético | Um por harness, compartilhado entre abas |
 | Toolchains do HOME real | Só lista conhecida (nvm, bun, cargo, rustup, uv, pyenv, go, linuxbrew), sem arquivos de credencial. O host nunca é alterado |
 | Instalações globais | As toolchains são lidas do host e escritas numa camada privada por harness, o mesmo mecanismo dos caches. `cargo install`, `npm install -g`, `rustup component add` e `go install` funcionam dentro do sandbox. Substitui a decisão anterior de toolchains em somente leitura |
-| Caches de pacotes | Lidos do host, escritos numa camada privada. Uma camada por harness, compartilhada entre abas e pastas de trabalho |
+| Caches de pacotes | Lidos do host, escritos numa camada privada. Uma camada por harness, compartilhada entre abas e pastas de trabalho. A spec propõe também os caches de navegadores do Playwright e de modelos do Hugging Face, com os tokens do Hugging Face cobertos; os dois não estavam na lista original e aguardam revisão |
 | Arquivos com cara de segredo na pasta de trabalho | Escondidos do agente. O agente pode criar arquivos assim e continua vendo os que ele mesmo criou. Chega junto com a interceptação de arquivos, na etapa 6. Esconder antes, já no primeiro change, os arquivos que existem na hora do lançamento foi considerado e descartado pelo usuário em 2026-11-12 |
 | Denylist de arquivo | Efeito imediato no agente em execução |
 | Liberar pasta nova | Vale na hora, sem reiniciar o agente |
 | User namespaces aninhados | Permitidos. Navegadores headless que se isolam funcionam; ferramentas que precisam montar (podman sem root, bubblewrap) não, porque um processo sob Landlock não monta nada |
-| `.git` da pasta de trabalho | `.git/hooks` e `.git/config` em somente leitura. O agente faz commit, branch e merge; não cria hook, não adiciona remote e não grava o upstream de uma branch. Impede que algo plantado pelo agente rode fora do sandbox quando o usuário usa o git no host |
-| Pasta de trabalho perigosa | Quando é o HOME, a raiz ou uma pasta que contém o HOME, o `run` recusa sempre e explica. Não existe opção de forçar: o usuário voltou atrás dela em 2026-11-12, por ser mais simples |
+| `.git` da pasta de trabalho | `.git/hooks` e `.git/config` em somente leitura. O agente faz commit, branch e merge; não cria hook, não adiciona remote e não grava o upstream de uma branch. Impede que algo plantado pelo agente rode fora do sandbox quando o usuário usa o git no host. A brecha do `.git/commondir` criado pelo agente fica para a etapa 6 (decisão de 2026-11-13) |
+| Pasta de trabalho perigosa | Quando é o HOME, a raiz ou uma pasta que contém o HOME, o `run` recusa sempre e explica. Não existe opção de forçar: o usuário voltou atrás dela em 2026-11-12, por ser mais simples. Na implementação foram acrescentados o diretório de dados do sandmux e qualquer pasta que o contém (como `~/.local`), que dariam ao agente acesso às camadas e aos HOMEs sintéticos dos outros harnesses |
 | Pasta de trabalho que é um worktree do git | O sandmux detecta e monta o diretório git do repositório principal, com hooks e config em somente leitura. O agente alcança o histórico e as branches dos outros worktrees |
 | Pasta de trabalho que é subpasta de um repositório | Por padrão sobe sem git, com aviso. Uma opção explícita monta o repositório inteiro em somente leitura, com a subpasta gravável e o `.git` protegido |
 | Dispositivos | A GPU entra em todo sandbox por padrão, quando existe na máquina. `/dev/kvm` só por opção explícita. O resto do `/dev` continua mínimo |
 | Identidade do git | O HOME sintético recebe um gitconfig mínimo, gerado só com `user.name` e `user.email` copiados do gitconfig real. Aliases, credential helpers e URLs com token ficam de fora |
-| Pasta de entrada | Uma pasta do sandmux no host, visível em somente leitura em todo sandbox, num caminho fixo. É o caminho para entregar ao agente um arquivo de fora da pasta de trabalho (screenshot, PDF). Na TUI, colar uma imagem grava nela e escreve o caminho no terminal |
+| Pasta de entrada | Uma pasta do sandmux no host, visível em somente leitura em todo sandbox, num caminho fixo (`~/inbox`, informado pela variável `SANDMUX_INBOX`). É o caminho para entregar ao agente um arquivo de fora da pasta de trabalho (screenshot, PDF). Na TUI, colar uma imagem grava nela e escreve o caminho no terminal |
 
 ### 2.4 Rede
 
@@ -106,7 +108,7 @@ O foco principal é o sandbox, não a interface:
 | OAuth | Desejado; fica no roadmap |
 | Git | ssh-agent controlado: chaves escolhidas por perfil, uso livre com registro, SSH de saída restrito aos servidores git cadastrados |
 | Tokens de ferramentas de desenvolvimento | Segredo genérico por domínio, na v1: o cofre aceita qualquer token ligado a um domínio (GitHub para o `gh`, registries privados de npm, pip e cargo). O agente usa um valor falso e a troca acontece no tráfego, como na inferência |
-| Até o cofre existir | `--pass-env`, desligado por padrão e com aviso, passa uma variável específica para dentro |
+| Até o cofre existir | `--pass-env`, desligado por padrão e com aviso, passa uma variável específica para dentro. No opencode, `OPENCODE_CONFIG_CONTENT` faz a variável vencer o `auth.json` importado. No hermes (decisão do usuário, 2026-11-13), o `~/.hermes/.env` daquela execução é um arquivo gerado, em somente leitura, com os valores reais no lugar dos falsos; o `.env` guardado continua falso. Valores com quebra de linha ou `${` são recusados |
 
 ### 2.6 Harnesses
 
@@ -117,7 +119,7 @@ O foco principal é o sandbox, não a interface:
 | Hermes | Completo: gateway próprio, cron e canais de mensagem. Nunca usa o gateway do host |
 | Canais do hermes na v1 | Telegram, Discord e Slack. WhatsApp fica para depois |
 | Backend Docker do hermes | Não suportado dentro do sandbox |
-| Importação | Config, skills, memórias do hermes e MCPs cadastrados. Sem sessões nem saídas de ferramenta. Segredos trocados por valores falsos |
+| Importação | Config, skills, memórias do hermes e MCPs cadastrados. Sem sessões nem saídas de ferramenta. Segredos trocados por valores falsos, com o prefixo `sandmux-fake-`. A tabela de cada harness é uma lista de permissão: o que não está nela não é copiado. Pareamento de canais e tarefas agendadas do hermes ficam de fora até a etapa 8 |
 | Primeira execução de um harness | Com o HOME sintético vazio, o `run` pergunta uma vez se deve importar a configuração existente, mostra o que foi copiado e quais segredos foram trocados, e segue. Em uso não interativo, exige uma opção explícita |
 | Reimportação | Rodar `sandmux import` de novo copia só o que ainda não existe no HOME sintético, nunca sobrescreve e mostra o que está diferente. Uma opção força sobrescrever |
 | Preset `shell` | Um shell confinado, sem harness, lançado como qualquer harness (`sandmux run shell`), com HOME sintético próprio. Usa o shell do usuário (`$SHELL`) com um arquivo de configuração mínimo gerado pelo sandmux; o `.bashrc` e o `.zshrc` reais não são importados |
@@ -240,9 +242,9 @@ Objetivo: opencode e hermes rodando confinados por linha de comando, sem daemon 
 
 | # | Change | Situação | Conteúdo |
 |---|---|---|---|
-| 1 | `add-sandbox-cli` | Em planejamento: `proposal.md` e `design.md` escritos e atualizados em 2026-11-12 com todas as decisões desse dia que tocam o change; faltam specs e tasks | Lançador `sandmux-run`; cliente `sandmux` com `run`, `import` e `doctor`; baseline embutida; HOME sintético; `/etc` substituído; toolchains por lista conhecida, com camada privada de escrita; camada privada de cache por harness; presets de opencode, de hermes e de `shell` (shell confinado, com configuração mínima); erro com instrução quando o harness não está instalado; importação com troca de segredos, oferecida na primeira execução, e reimportação só do que é novo; pasta de entrada em somente leitura; `.git/hooks` e `.git/config` em somente leitura; suporte a worktree e opção para subpasta de repositório; recusa de pasta de trabalho perigosa; GPU por padrão e KVM por opção; aviso ao montar credencial conhecida; gitconfig mínimo com nome e e-mail; falha fechada; `--pass-env`; suíte de testes de fuga |
+| 1 | `add-sandbox-cli` | Em implementação: 57 de 60 tarefas feitas até 2026-11-13, com 123 testes passando (inclusive a suíte de fuga, 51 tentativas negadas). Faltam 2.1 (perfil AppArmor com a restrição ligada, exige `sudo`), 8.4 e 11.2 (hermes e opencode com a chave real do modelo). Nenhuma decisão em aberto | Lançador `sandmux-run`; cliente `sandmux` com `run`, `import` e `doctor`; baseline embutida; HOME sintético; `/etc` substituído; toolchains por lista conhecida, com camada privada de escrita; camada privada de cache por harness; presets de opencode, de hermes e de `shell` (shell confinado, com configuração mínima); erro com instrução quando o harness não está instalado; importação com troca de segredos, oferecida na primeira execução, e reimportação só do que é novo; pasta de entrada em somente leitura; `.git/hooks` e `.git/config` em somente leitura; suporte a worktree e opção para subpasta de repositório; recusa de pasta de trabalho perigosa; GPU por padrão e KVM por opção; aviso ao montar credencial conhecida; gitconfig mínimo com nome e e-mail; falha fechada; `--pass-env`; perfil AppArmor do lançador no repositório, com instalação manual mostrada pelo `doctor`; suíte de testes de fuga |
 
-Limitações aceitas nesta etapa: rede do host aberta e sem registro; sem filtro de sequências de escape do terminal; exige kernel 6.12 ou mais novo.
+Limitações aceitas nesta etapa: rede do host aberta e sem registro; sem filtro de sequências de escape do terminal; exige kernel 6.12 ou mais novo; no Ubuntu, o perfil AppArmor do lançador é instalado à mão, com `sudo`.
 
 Verificações: camada de cache com overlayfs em user namespace; premissa do diretório pré-autorizado no Landlock para liberar pastas depois; o que de fato funciona com user namespace aninhado; opencode e hermes reais iniciando.
 
@@ -302,7 +304,7 @@ Objetivo: registro de todo acesso a arquivo e política de arquivos que muda com
 | # | Change | Situação | Conteúdo |
 |---|---|---|---|
 | 15 | `add-file-access-log` | A propor | O daemon intercepta as aberturas de arquivo; registro de todo acesso; backend trocável (eBPF depois); retenção |
-| 16 | `add-file-policy` | A propor | Allowlist e denylist de arquivos e pastas; negar com efeito imediato; liberar pasta nova na hora; arquivos com cara de segredo escondidos, com registro dos criados pelo próprio agente; lista de acessos novos com ação de bloquear; tela de cadastro e gerenciamento de pastas |
+| 16 | `add-file-policy` | A propor | Allowlist e denylist de arquivos e pastas; negar com efeito imediato; liberar pasta nova na hora; arquivos com cara de segredo escondidos, com registro dos criados pelo próprio agente; lista de acessos novos com ação de bloquear; tela de cadastro e gerenciamento de pastas; negar a criação de `.git/commondir` na pasta de trabalho (brecha da proteção do `.git` achada no change 1) |
 
 Verificações: custo da interceptação com opencode e hermes reais (se pesar demais, o recuo é aplicar a denylist no próximo início); montagem de pasta num sandbox em execução.
 
@@ -376,15 +378,23 @@ Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
 
 | Verificação | Etapa |
 |---|---|
-| Camada de cache com overlayfs em user namespace | 1 |
-| Diretório pré-autorizado no Landlock aceita montagens posteriores | 1 |
-| A chave `updates.check: false` no `config.yaml` do hermes desliga a checagem de atualização. Foi encontrada em 2026-11-12 no código instalado na máquina de referência e ainda não foi testada (no opencode existe a variável `OPENCODE_DISABLE_AUTOUPDATE`) | 1 |
-| O que funciona com user namespace aninhado. Um processo sob Landlock não pode montar nada, então navegador headless deve funcionar, e podman sem root e bubblewrap não | 1 |
+| Camada de cache com overlayfs em user namespace. **Confirmado em 2026-11-12** (tarefa 2.2): overlay montado em user namespace sobre `~/.cargo`, `~/.nvm` e `~/.npm`, com a camada de escrita no HOME real, sem a opção `userxattr`; o host ficou idêntico | 1 |
+| Montagem em user namespace com a restrição do AppArmor ligada, com e sem o perfil do lançador. O Ubuntu 26.04 traz `kernel.apparmor_restrict_unprivileged_userns=1` por padrão, mas a máquina de referência tem uma sobreposição local que põe 0 (corrigido em 2026-11-12: o registro anterior dizia que a máquina restringia). A prova exige religar a restrição temporariamente, com `sudo` | 1 |
+| O opencode usa a chave de `OPENROUTER_API_KEY` quando o `auth.json` importado tem um valor falso? **Não** (tarefa 2.6, 2026-11-12, com servidor local): o `auth.json` vence a variável. Com `OPENCODE_CONFIG_CONTENT` definindo `apiKey` como `{env:OPENROUTER_API_KEY}` para o provedor, a variável vence. O preset do opencode usa esse mecanismo quando o `--pass-env` passa a chave de um provedor | 1 |
+| Um arquivo coberto por montagem em cima do overlay não pode ser apagado nem renomeado de dentro do sandbox. **Confirmado em 2026-11-12** (tarefa 2.3): apagar, renomear e substituir por rename falham com EBUSY, escrever falha com EROFS, e renomear a pasta que é ponto de montagem falha com EBUSY | 1 |
+| Diretório pré-autorizado no Landlock aceita montagens posteriores. **Confirmado em 2026-11-12** (tarefa 2.4): um processo restrito leu uma pasta montada sob o diretório autorizado depois da restrição, e continuou sem acesso fora dele | 1 |
+| Cache do host alterado com o overlay montado. **Sem corrupção em 2026-11-12** (tarefa 2.7, em pequena escala, com um registro do cargo e um cache do npm de teste): o host baixou pacotes enquanto o sandbox compilava e gravava no cache; `npm cache verify` e builds offline passaram dos dois lados, e o sandbox enxergou os pacotes baixados pelo host durante a execução | 1 |
+| O hermes carrega o `.env` do HOME sintético por cima do ambiente, e o escopo de credenciais dele lê as chaves direto do arquivo (achado de 2026-11-12, corrigido em 2026-11-13: a limpeza de chaves ausentes do `.env` só atinge variáveis de roteamento do próprio hermes). Com isso, o valor falso da importação vencia o `--pass-env`. **Resolvido em 2026-11-13** (tarefa 8.6): com `--pass-env`, o `.env` da execução tem o valor real; o `hermes status --full` real passou de `sand...` para o final da chave de teste passada, e o `.env` guardado continuou falso. O parser do hermes expande `${...}` mesmo entre aspas, por isso esses valores são recusados | 1 |
+| Quem configura `prefix` no `~/.npmrc` (por exemplo `~/.npm-global`) tem as ferramentas globais do npm fora das toolchains da lista, e elas não aparecem no sandbox (achado de 2026-11-12) | 1 |
+| Harnesses reais no sandbox (2026-11-12): o opencode inicia, mostra a versão e desenha a interface na pasta de trabalho; o hermes precisa de `~/.hermes/installs` (acrescentado ao preset), inicia o próprio gateway dentro do sandbox, mas com as chaves falsas da importação grava a sessão sem modelo e recusa abrir (`storage_unavailable`). Uma sessão completa dos dois depende da chave real do modelo | 1 |
+| A proteção do `.git` tem uma brecha: um `.git/commondir` criado pelo agente faz o git do host usar outro diretório git, com outra configuração e outros hooks (confirmado em 2026-11-12). Detalhes em `docs/git.md`. Decidido em 2026-11-13: a correção fica para a etapa 6 | 1 |
+| A chave `updates.check: false` no `config.yaml` do hermes desliga a checagem de atualização. **Confirmado em 2026-11-12** (tarefa 2.5): com a chave, a checagem devolve `disabled` sem nenhuma consulta externa; sem ela, tenta consultar o GitHub | 1 |
+| O que funciona com user namespace aninhado. **Confirmado em 2026-11-12** (tarefa 11.3): o Chromium headless do Playwright roda dentro do sandbox com o isolamento próprio ligado; montar dentro de um user namespace aninhado falha, então podman sem root e bubblewrap não funcionam | 1 |
 | Limites de recurso sem privilégio | 2 |
-| Camada de escrita sobre as toolchains com o mesmo overlay dos caches | 1 |
+| Camada de escrita sobre as toolchains com o mesmo overlay dos caches. **Confirmado em 2026-11-12** (tarefa 2.2): `cargo install` e `npm install -g` funcionaram na camada e não alteraram o host | 1 |
 | Docker rootless iniciado pelo sandmux, com a visão de arquivos do sandbox e só o socket entregue ao agente | 2 |
 | Tráfego do Docker privado passando pelo gateway | 4 |
-| GPU funcionando dentro do sandbox (a máquina de referência precisa ter uma) | 1 |
+| GPU funcionando dentro do sandbox. **Confirmado em 2026-11-12**: `nvidia-smi` enxerga a RTX 2080 SUPER da máquina de referência dentro do sandbox | 1 |
 | Fidelidade do emulador de terminal | 3 |
 | Runtime do opencode aceita a CA local | 5 |
 | Custo da interceptação de arquivos | 6 |
@@ -406,12 +416,17 @@ Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
 - Uma credencial de cloud montada de propósito é real e fica ao alcance do agente até a credencial temporária existir.
 - Pacotes do sistema (`apt install`) não podem ser instalados dentro do sandbox, que não tem root. O caminho é um contêiner no Docker privado.
 - Até a etapa 6, arquivos de segredo que já estão na pasta de trabalho (`.env`, chaves) ficam legíveis pelo agente, e até a etapa 4 a rede está aberta e sem registro. Aceito pelo usuário em 2026-11-12: quem usa o sandmux nessas etapas precisa tirar os segredos da pasta.
+- Até a etapa 6, um `.git/commondir` criado pelo agente faz o git do host usar outro diretório git, com outra configuração e outros hooks. A montagem não impede criar o arquivo, e cobri-lo quebra o git. Decidido pelo usuário em 2026-11-13: a correção vem com a interceptação de arquivos da etapa 6, e conferir o arquivo ao fim de cada execução foi descartado. Até lá, `docs/git.md` orienta o usuário a conferir o arquivo antes de usar o git no host.
 - O que é colocado na pasta de entrada fica visível para todos os agentes até ser apagado.
 - Com a escrita no clipboard bloqueada por padrão, o recurso de copiar do próprio harness não funciona até ser liberado.
 
 ### Decisões ainda não tomadas
 
-Nenhuma no momento. Todas as decisões levantadas até 2026-11-12 estão resolvidas e registradas nas seções 2 e 4.
+| Decisão | Change |
+|---|---|
+| Nenhuma no momento | |
+
+As demais decisões levantadas até 2026-11-13 estão resolvidas e registradas nas seções 2 e 4.
 
 Novas decisões em aberto que surgirem ao propor um change devem ser anotadas aqui até serem tomadas.
 
