@@ -18,6 +18,8 @@ pub struct Host {
     pub user_shell: PathBuf,
     /// Diretório de dados do sandmux.
     pub data_dir: PathBuf,
+    /// Pasta de configuração do sandmux (`$XDG_CONFIG_HOME/sandmux`).
+    pub config_dir: PathBuf,
     /// Pasta de onde o comando foi executado, canônica.
     pub cwd: PathBuf,
     /// Ambiente do usuário.
@@ -58,6 +60,7 @@ impl Host {
             Some(p) if p.is_absolute() => p.join("sandmux"),
             _ => home.join(".local/share/sandmux"),
         };
+        let config_dir = config_dir_from(&env, &home);
         let cwd = std::env::current_dir()
             .and_then(|p| p.canonicalize())
             .map_err(|e| PolicyError::Io(format!("pasta atual: {e}")))?;
@@ -69,6 +72,7 @@ impl Host {
             group,
             user_shell,
             data_dir,
+            config_dir,
             cwd,
             env,
             sys_root: PathBuf::from("/"),
@@ -85,6 +89,18 @@ impl Host {
     pub fn h(&self, rel: &str) -> PathBuf {
         self.home.join(rel)
     }
+}
+
+/// `$XDG_CONFIG_HOME/sandmux`, ou `~/.config/sandmux` quando a variável não
+/// existe ou não é absoluta.
+pub fn config_dir_from(env: &BTreeMap<String, String>, home: &Path) -> PathBuf {
+    let p = match env.get("XDG_CONFIG_HOME").map(PathBuf::from) {
+        Some(p) if p.is_absolute() => p.join("sandmux"),
+        _ => home.join(".config/sandmux"),
+    };
+    // Canônica quando existe, para comparar com caminhos canônicos.
+    p.canonicalize()
+        .unwrap_or_else(|_| crate::config::normalize(&p))
 }
 
 struct Passwd {
@@ -120,4 +136,34 @@ fn group_name(gid: u32) -> Option<String> {
         let f: Vec<&str> = l.split(':').collect();
         (f.len() >= 3 && f[2].parse::<u32>().ok() == Some(gid)).then(|| f[0].to_string())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pasta_de_configuracao() {
+        let home = Path::new("/home/ana");
+        let mut env = BTreeMap::new();
+        assert_eq!(
+            config_dir_from(&env, home),
+            PathBuf::from("/home/ana/.config/sandmux")
+        );
+        env.insert("XDG_CONFIG_HOME".into(), "/tmp/cfg".into());
+        assert_eq!(
+            config_dir_from(&env, home),
+            PathBuf::from("/tmp/cfg/sandmux")
+        );
+        env.insert("XDG_CONFIG_HOME".into(), "/tmp/a/../cfg".into());
+        assert_eq!(
+            config_dir_from(&env, home),
+            PathBuf::from("/tmp/cfg/sandmux")
+        );
+        env.insert("XDG_CONFIG_HOME".into(), "relativo".into());
+        assert_eq!(
+            config_dir_from(&env, home),
+            PathBuf::from("/home/ana/.config/sandmux")
+        );
+    }
 }

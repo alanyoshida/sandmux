@@ -31,12 +31,17 @@ pub struct LaunchOptions {
     pub workdir: PathBuf,
     pub ro: Vec<PathBuf>,
     pub rw: Vec<PathBuf>,
-    /// Nomes das variáveis de `--pass-env`.
+    /// Nomes das variáveis de `--pass-env` dadas no `run`.
     pub pass_env: Vec<String>,
-    pub repo: bool,
-    pub kvm: bool,
-    pub no_gpu: bool,
-    pub allow_clipboard: bool,
+    /// Perfil nomeado (`--profile`).
+    #[serde(default)]
+    pub profile: Option<String>,
+    /// Opções de liga e desliga dadas no `run`: `None` quando não foram
+    /// dadas, e a configuração decide.
+    pub repo: Option<bool>,
+    pub kvm: Option<bool>,
+    pub gpu: Option<bool>,
+    pub allow_clipboard: Option<bool>,
     pub args: Vec<String>,
 }
 
@@ -48,10 +53,11 @@ impl LaunchOptions {
             ro: vec![],
             rw: vec![],
             pass_env: vec![],
-            repo: false,
-            kvm: false,
-            no_gpu: false,
-            allow_clipboard: false,
+            profile: None,
+            repo: None,
+            kvm: None,
+            gpu: None,
+            allow_clipboard: None,
             args: vec![],
         }
     }
@@ -85,8 +91,12 @@ pub struct SessionInfo {
     pub workdir: PathBuf,
     pub state: SessionState,
     pub clients: usize,
-    /// Nomes das variáveis de `--pass-env` (nunca os valores).
+    /// Nomes das variáveis de `pass-env` do último lançamento (nunca os
+    /// valores).
     pub pass_env: Vec<String>,
+    /// Opções dadas no `run` e o perfil nomeado, para o reinício resolver a
+    /// política de novo.
+    pub opts: LaunchOptions,
 }
 
 /// Mensagens de controle, nos dois sentidos.
@@ -98,6 +108,9 @@ pub enum Msg {
         protocol: u32,
         version: String,
         data_dir: PathBuf,
+        /// Pasta de configuração do cliente (protocolo 2).
+        #[serde(default)]
+        config_dir: PathBuf,
     },
     Welcome {
         protocol: u32,
@@ -187,11 +200,13 @@ pub fn answer_hello(
     pid: u32,
     start_mode: &str,
     data_dir: &std::path::Path,
+    config_dir: &std::path::Path,
 ) -> (Msg, bool) {
     match hello {
         Msg::Hello {
             protocol: p,
             data_dir: d,
+            config_dir: c,
             ..
         } => {
             if *p != protocol {
@@ -210,6 +225,17 @@ pub fn answer_hello(
                             "o daemon usa o diretório de dados {} e este terminal usa {}; defina o mesmo XDG_DATA_HOME nos dois ou rode `sandmux daemon restart` neste terminal",
                             data_dir.display(),
                             d.display()
+                        ),
+                    },
+                    false,
+                )
+            } else if c != config_dir {
+                (
+                    Msg::Refused {
+                        message: format!(
+                            "o daemon usa a pasta de configuração {} e este terminal usa {}; defina o mesmo XDG_CONFIG_HOME nos dois ou rode `sandmux daemon restart` neste terminal",
+                            config_dir.display(),
+                            c.display()
                         ),
                     },
                     false,
@@ -277,16 +303,59 @@ mod tests {
     use std::path::Path;
 
     fn hello(p: u32, dir: &str) -> Msg {
+        hello_cfg(p, dir, "/c")
+    }
+
+    fn hello_cfg(p: u32, dir: &str, cfg: &str) -> Msg {
         Msg::Hello {
             protocol: p,
             version: "0.2.0".into(),
             data_dir: dir.into(),
+            config_dir: cfg.into(),
         }
     }
 
     #[test]
+    fn pasta_de_configuracao_diferente_recusada() {
+        let (reply, ok) = answer_hello(
+            &hello_cfg(1, "/d", "/tmp/cfg/sandmux"),
+            1,
+            "0.1.0",
+            42,
+            "direct",
+            Path::new("/d"),
+            Path::new("/home/ana/.config/sandmux"),
+        );
+        assert!(!ok);
+        let err = check_welcome(&reply, 1, "0.1.0").unwrap_err();
+        assert!(
+            err.contains("/tmp/cfg/sandmux") && err.contains("/home/ana/.config/sandmux"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn opcoes_sem_valor_e_perfil() {
+        let mut o = LaunchOptions::new("shell");
+        o.kvm = Some(false);
+        o.profile = Some("vm".into());
+        let back: LaunchOptions =
+            serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap();
+        assert_eq!(back, o);
+        assert_eq!(back.gpu, None);
+    }
+
+    #[test]
     fn saudacao_aceita() {
-        let (reply, ok) = answer_hello(&hello(1, "/d"), 1, "0.1.0", 42, "direct", Path::new("/d"));
+        let (reply, ok) = answer_hello(
+            &hello(1, "/d"),
+            1,
+            "0.1.0",
+            42,
+            "direct",
+            Path::new("/d"),
+            Path::new("/c"),
+        );
         assert!(ok);
         let info = check_welcome(&reply, 1, "0.2.0").unwrap();
         assert_eq!(info.pid, 42);
@@ -295,7 +364,15 @@ mod tests {
 
     #[test]
     fn protocolo_diferente_recusado_dos_dois_lados() {
-        let (reply, ok) = answer_hello(&hello(2, "/d"), 1, "0.1.0", 42, "systemd", Path::new("/d"));
+        let (reply, ok) = answer_hello(
+            &hello(2, "/d"),
+            1,
+            "0.1.0",
+            42,
+            "systemd",
+            Path::new("/d"),
+            Path::new("/c"),
+        );
         assert!(!ok, "o daemon encerra a conexão");
         let err = check_welcome(&reply, 2, "0.2.0").unwrap_err();
         assert!(
@@ -308,7 +385,15 @@ mod tests {
 
     #[test]
     fn diretorio_de_dados_diferente_recusado() {
-        let (reply, ok) = answer_hello(&hello(1, "/b"), 1, "0.1.0", 42, "direct", Path::new("/a"));
+        let (reply, ok) = answer_hello(
+            &hello(1, "/b"),
+            1,
+            "0.1.0",
+            42,
+            "direct",
+            Path::new("/a"),
+            Path::new("/c"),
+        );
         assert!(!ok);
         let err = check_welcome(&reply, 1, "0.1.0").unwrap_err();
         assert!(err.contains("/a") && err.contains("/b"), "{err}");
@@ -316,7 +401,15 @@ mod tests {
 
     #[test]
     fn primeira_mensagem_precisa_ser_saudacao() {
-        let (reply, ok) = answer_hello(&Msg::List, 1, "0.1.0", 1, "direct", Path::new("/a"));
+        let (reply, ok) = answer_hello(
+            &Msg::List,
+            1,
+            "0.1.0",
+            1,
+            "direct",
+            Path::new("/a"),
+            Path::new("/c"),
+        );
         assert!(!ok);
         assert!(matches!(reply, Msg::Refused { .. }));
     }

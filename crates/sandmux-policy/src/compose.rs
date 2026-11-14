@@ -65,8 +65,11 @@ pub struct Composed {
 }
 
 /// Recusa o HOME, a raiz, uma pasta que contém o HOME e o diretório de dados
-/// do sandmux (ou uma pasta que o contém ou que está dentro dele).
-pub fn check_dangerous(host: &Host, p: &Path) -> Result<(), PolicyError> {
+/// do sandmux (ou uma pasta que o contém ou que está dentro dele). Com
+/// `writable`, recusa também a pasta de configuração do sandmux, uma pasta
+/// dentro dela ou uma que a contém: o agente poderia alterar a própria
+/// política.
+pub fn check_dangerous(host: &Host, p: &Path, writable: bool) -> Result<(), PolicyError> {
     let reason = if p == Path::new("/") {
         Some("é a raiz do sistema")
     } else if p == host.home {
@@ -80,10 +83,29 @@ pub fn check_dangerous(host: &Host, p: &Path) -> Result<(), PolicyError> {
     } else {
         None
     };
-    match reason {
-        Some(r) => Err(PolicyError::Dangerous {
+    if let Some(r) = reason {
+        return Err(PolicyError::Dangerous {
             path: p.to_path_buf(),
             reason: r.into(),
+            hint: "Use uma subpasta".into(),
+        });
+    }
+    let config = if !writable {
+        None
+    } else if p.starts_with(&host.config_dir) {
+        Some("fica dentro da pasta de configuração do sandmux")
+    } else if host.config_dir.starts_with(p) {
+        Some("contém a pasta de configuração do sandmux")
+    } else {
+        None
+    };
+    match config {
+        Some(r) => Err(PolicyError::Dangerous {
+            path: p.to_path_buf(),
+            reason: format!(
+                "{r}, e com escrita o agente poderia alterar a configuração do sandmux"
+            ),
+            hint: "Monte em somente leitura (--ro) ou escolha uma pasta fora dela".into(),
         }),
         None => Ok(()),
     }
@@ -250,12 +272,12 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     let mut warnings = Vec::new();
 
     let workdir = canonical(opts.workdir.as_deref().unwrap_or(&host.cwd), &host.cwd)?;
-    check_dangerous(host, &workdir)?;
+    check_dangerous(host, &workdir, true)?;
     let mut extras = Vec::new();
     for (list, writable) in [(&opts.ro, false), (&opts.rw, true)] {
         for p in list {
             let c = canonical(p, &host.cwd)?;
-            check_dangerous(host, &c)?;
+            check_dangerous(host, &c, writable)?;
             let creds = credentials_touched(host, &c);
             if !creds.is_empty() {
                 let names: Vec<String> = creds.iter().map(|c| c.display().to_string()).collect();
@@ -483,7 +505,7 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         }
         GitLayout::Subfolder { repo_root, git_dir } => {
             if opts.repo {
-                check_dangerous(host, &repo_root)?;
+                check_dangerous(host, &repo_root, false)?;
                 b.bind(&repo_root, &repo_root, false);
                 if git_dir.is_dir() {
                     let (m, create) = git::protect(&git_dir);

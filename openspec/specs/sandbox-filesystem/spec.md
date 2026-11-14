@@ -133,7 +133,7 @@ A resolução de nomes MUST funcionar dentro do sandbox com a configuração do 
 - **THEN** um programa confinado resolve um nome de domínio público
 
 ### Requirement: Dispositivos mínimos, com GPU
-O `/dev` do sandbox MUST conter apenas `null`, `zero`, `full`, `random`, `urandom`, `tty` e os pseudoterminais, mais os dispositivos de GPU presentes na máquina: os nós de renderização de `/dev/dri` e os nós do driver da NVIDIA, exceto o de controle de modo de vídeo. `/dev/kvm` MUST entrar somente com a opção `--kvm`. A opção `--no-gpu` MUST retirar os dispositivos de GPU.
+O `/dev` do sandbox MUST conter apenas `null`, `zero`, `full`, `random`, `urandom`, `tty` e os pseudoterminais, mais os dispositivos de GPU presentes na máquina: os nós de renderização de `/dev/dri` e os nós do driver da NVIDIA, exceto o de controle de modo de vídeo. `/dev/kvm` MUST entrar somente quando a política efetiva liga `kvm`, pela opção `--kvm` ou pela configuração. A GPU MUST sair quando a política efetiva desliga `gpu`, pela opção `--no-gpu` ou pela configuração.
 
 #### Scenario: Discos do host
 - **WHEN** um processo confinado lista `/dev`
@@ -154,6 +154,14 @@ O `/dev` do sandbox MUST conter apenas `null`, `zero`, `full`, `random`, `urando
 #### Scenario: KVM por opção
 - **WHEN** o usuário passa `--kvm` numa máquina com `/dev/kvm`
 - **THEN** `/dev/kvm` existe dentro do sandbox
+
+#### Scenario: KVM pela configuração
+- **WHEN** o perfil do projeto tem `kvm = true` e o sandbox é lançado na pasta do projeto, sem opções, numa máquina com `/dev/kvm`
+- **THEN** `/dev/kvm` existe dentro do sandbox
+
+#### Scenario: GPU desligada pela configuração
+- **WHEN** `[global]` tem `gpu = false` e o sandbox é lançado sem opções numa máquina com GPU
+- **THEN** nenhum dispositivo de GPU existe dentro do sandbox
 
 ### Requirement: Toolchains do HOME por lista conhecida
 Do HOME real, só MUST entrar no sandbox as toolchains de uma lista conhecida, cada uma no caminho original. Uma toolchain da lista que não está instalada MUST ser ignorada sem erro. O `PATH` dentro do sandbox MUST ser reconstruído com as pastas do sistema e as pastas de binários das toolchains presentes.

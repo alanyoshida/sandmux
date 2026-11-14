@@ -76,6 +76,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
         shared.pid,
         &shared.start_mode,
         &shared.base.data_dir,
+        &shared.base.config_dir,
     );
     write_control(&mut stream, &reply)?;
     if !ok {

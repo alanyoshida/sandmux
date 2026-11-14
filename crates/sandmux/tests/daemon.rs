@@ -54,7 +54,7 @@ fn protocolo_diferente_recusado_com_as_duas_versoes() {
     let err = stderr(&out);
     assert!(
         err.contains("protocolo 999")
-            && err.contains("protocolo 1 ")
+            && err.contains("protocolo 2 ")
             && err.contains("sandmux daemon restart"),
         "{err}"
     );
@@ -119,7 +119,7 @@ fn status_e_stop() {
     let s = stdout(&out);
     assert!(
         s.contains("está rodando")
-            && s.contains("protocolo 1")
+            && s.contains("protocolo 2")
             && s.contains("iniciado por: direct")
             && s.contains("sessões: 0"),
         "{s}"
@@ -161,7 +161,7 @@ fn gone_now(pid: i32) -> bool {
 #[test]
 fn disable_remove_a_unidade_sem_systemctl() {
     let e = Env::new();
-    let unit_dir = e.home.join(".config/systemd/user");
+    let unit_dir = e.config.join("systemd/user");
     std::fs::create_dir_all(&unit_dir).unwrap();
     std::fs::write(unit_dir.join("sandmuxd.service"), "[Service]\n").unwrap();
     assert!(e.run(&e.work, &["ls"]).status.success());
@@ -175,7 +175,7 @@ fn disable_remove_a_unidade_sem_systemctl() {
 #[test]
 fn doctor_mostra_o_daemon_sem_iniciar() {
     let e = Env::new();
-    let unit_dir = e.home.join(".config/systemd/user");
+    let unit_dir = e.config.join("systemd/user");
     std::fs::create_dir_all(&unit_dir).unwrap();
     std::fs::write(unit_dir.join("sandmuxd.service"), "[Service]\n").unwrap();
     let out = e.run(&e.work, &["doctor"]);

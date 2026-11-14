@@ -14,6 +14,8 @@ pub struct Env {
     /// `XDG_RUNTIME_DIR` próprio: cada teste tem o seu daemon.
     pub runtime: PathBuf,
     pub state: PathBuf,
+    /// `XDG_CONFIG_HOME` próprio.
+    pub config: PathBuf,
 }
 
 impl Env {
@@ -26,6 +28,7 @@ impl Env {
         let work = home.join("projetos/app");
         let runtime = root.join("run");
         let state = root.join("state");
+        let config = root.join("config");
         std::fs::create_dir_all(&work).unwrap();
         std::fs::create_dir_all(&data).unwrap();
         std::fs::create_dir_all(&runtime).unwrap();
@@ -41,7 +44,20 @@ impl Env {
             work,
             runtime,
             state,
+            config,
         }
+    }
+
+    /// Arquivo de configuração do sandmux deste ambiente.
+    pub fn config_file(&self) -> PathBuf {
+        self.config.join("sandmux/config.toml")
+    }
+
+    /// Grava o arquivo de configuração.
+    pub fn write_config(&self, text: &str) {
+        let f = self.config_file();
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(f, text).unwrap();
     }
 
     pub fn socket(&self) -> PathBuf {
@@ -75,6 +91,7 @@ impl Env {
             .env("TERM", "xterm-256color")
             .env("XDG_RUNTIME_DIR", &self.runtime)
             .env("XDG_STATE_HOME", &self.state)
+            .env("XDG_CONFIG_HOME", &self.config)
             .env("SANDMUX_DAEMON_START", "direct")
             .stdin(Stdio::null());
         c
