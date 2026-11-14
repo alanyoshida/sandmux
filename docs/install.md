@@ -85,7 +85,7 @@ Uma tag `v*` no GitHub roda `.github/workflows/release.yml`. O workflow:
 
 1. gera a distribuição com `scripts/dist.sh`, num Ubuntu com `musl-tools` e `rpm`;
 2. confere que a tag é a versão do `Cargo.toml`;
-3. cria a release (marcada como pré-release antes da v1) com o tarball, as somas, o `.deb`, o `.rpm`, o `install.sh`, o `PKGBUILD`, o `.SRCINFO` e a fórmula.
+3. cria a release como a mais nova (`--latest`, para que `/releases/latest/` sirva o `install.sh`) com o tarball, as somas, o `.deb`, o `.rpm`, o `install.sh`, o `PKGBUILD`, o `SRCINFO` (o `.SRCINFO` do AUR, sem o ponto, que o GitHub tiraria) e a fórmula.
 
 Publicar no AUR, num tap do Homebrew e no crates.io fica a cargo do mantenedor, com as contas dele. Os arquivos saem prontos em `dist/aur/` e `dist/homebrew/`.
 

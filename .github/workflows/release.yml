@@ -13,7 +13,7 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Ferramentas
         run: |
           sudo apt-get update
@@ -26,11 +26,13 @@ jobs:
         run: |
           v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
           test "v$v" = "$GITHUB_REF_NAME"
+      - name: .SRCINFO com nome visível (o GitHub tira o ponto do começo)
+        run: cp dist/aur/.SRCINFO dist/aur/SRCINFO
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --verify-tag --prerelease \
+          gh release create "$GITHUB_REF_NAME" --verify-tag --latest \
             --title "sandmux $GITHUB_REF_NAME" --notes-file packaging/release-notes.md \
             dist/*.tar.gz dist/*.sha256 dist/*.deb dist/*.rpm dist/install.sh \
-            dist/aur/PKGBUILD dist/aur/.SRCINFO dist/homebrew/sandmux.rb
+            dist/aur/PKGBUILD dist/aur/SRCINFO dist/homebrew/sandmux.rb
