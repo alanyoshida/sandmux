@@ -161,9 +161,117 @@ pub fn install(rules: &SeccompRules) -> io::Result<()> {
     }
 }
 
+const SECCOMP_RET_USER_NOTIF: u32 = 0x7fc0_0000;
+const SECCOMP_SET_MODE_FILTER: libc::c_ulong = 1;
+const SECCOMP_FILTER_FLAG_NEW_LISTENER: libc::c_ulong = 1 << 3;
+/// Recebida a notificação, só um sinal fatal interrompe a espera: sem isto,
+/// runtimes que preemptam com sinais (o Go, com SIGURG) recomeçam a abertura
+/// sem parar.
+const SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV: libc::c_ulong = 1 << 5;
+
+/// Chamadas de abertura de arquivo que vão ao supervisor.
+#[cfg(target_arch = "x86_64")]
+pub const OPEN_SYSCALLS: &[i64] = &[
+    libc::SYS_open,
+    libc::SYS_openat,
+    libc::SYS_openat2,
+    libc::SYS_creat,
+    libc::SYS_rename,
+    libc::SYS_renameat,
+    libc::SYS_renameat2,
+    libc::SYS_link,
+    libc::SYS_linkat,
+    libc::SYS_symlink,
+    libc::SYS_symlinkat,
+];
+#[cfg(target_arch = "aarch64")]
+pub const OPEN_SYSCALLS: &[i64] = &[
+    libc::SYS_openat,
+    libc::SYS_openat2,
+    libc::SYS_renameat,
+    libc::SYS_renameat2,
+    libc::SYS_linkat,
+    libc::SYS_symlinkat,
+];
+
+/// O filtro das aberturas: `SECCOMP_RET_USER_NOTIF` para cada chamada de
+/// [`OPEN_SYSCALLS`], o resto passa (o filtro de negação decide antes).
+pub fn build_notify() -> Vec<libc::sock_filter> {
+    let n = OPEN_SYSCALLS.len();
+    let mut p = vec![
+        stmt(BPF_LD_W_ABS, OFF_ARCH),
+        jump(BPF_JEQ_K, AUDIT_ARCH, 1, 0),
+        stmt(BPF_RET_K, SECCOMP_RET_ALLOW),
+        stmt(BPF_LD_W_ABS, OFF_NR),
+    ];
+    for (i, nr) in OPEN_SYSCALLS.iter().enumerate() {
+        // Achou: pula até o retorno da notificação, depois do retorno comum.
+        p.push(jump(BPF_JEQ_K, *nr as u32, (n - i) as u8, 0));
+    }
+    p.push(stmt(BPF_RET_K, SECCOMP_RET_ALLOW));
+    p.push(stmt(BPF_RET_K, SECCOMP_RET_USER_NOTIF));
+    p
+}
+
+/// Instala o filtro das aberturas e devolve o descritor de notificação.
+/// Exige `no_new_privs` já ligado.
+pub fn install_notify() -> io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    let prog = build_notify();
+    let fprog = libc::sock_fprog {
+        len: prog.len() as u16,
+        filter: prog.as_ptr() as *mut libc::sock_filter,
+    };
+    // SAFETY: `fprog` aponta para `prog`, que vive durante a chamada.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_seccomp,
+            SECCOMP_SET_MODE_FILTER,
+            SECCOMP_FILTER_FLAG_NEW_LISTENER | SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV,
+            &fprog as *const libc::sock_fprog,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: descritor novo, de posse exclusiva.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as i32) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Roda o programa BPF sobre um `seccomp_data` mínimo (nr e arch).
+    fn eval(p: &[libc::sock_filter], nr: u32, arch: u32) -> u32 {
+        let mut pc = 0usize;
+        let mut acc = 0u32;
+        loop {
+            let i = p[pc];
+            match i.code {
+                BPF_LD_W_ABS => acc = if i.k == OFF_NR { nr } else { arch },
+                BPF_JEQ_K => {
+                    pc += if acc == i.k { i.jt } else { i.jf } as usize;
+                }
+                BPF_RET_K => return i.k,
+                _ => panic!("instrução inesperada"),
+            }
+            pc += 1;
+        }
+    }
+
+    #[test]
+    fn filtro_das_aberturas() {
+        let p = build_notify();
+        for nr in OPEN_SYSCALLS {
+            assert_eq!(eval(&p, *nr as u32, AUDIT_ARCH), SECCOMP_RET_USER_NOTIF);
+        }
+        assert_eq!(
+            eval(&p, libc::SYS_read as u32, AUDIT_ARCH),
+            SECCOMP_RET_ALLOW
+        );
+        assert_eq!(eval(&p, libc::SYS_openat as u32, 1), SECCOMP_RET_ALLOW);
+    }
 
     #[test]
     fn nome_desconhecido_e_recusado() {

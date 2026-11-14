@@ -27,11 +27,19 @@ fn arquivo_alterado_no_host_aparece_no_sandbox() {
     let e = Env::new();
     std::fs::write(e.work.join("a.txt"), "antes").unwrap();
     let work = e.work.clone();
+    // O host altera o arquivo depois que o sandbox fez a primeira leitura.
     let writer = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(400));
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !work.join("lido").exists() && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         std::fs::write(work.join("a.txt"), "depois").unwrap();
+        std::fs::write(work.join("escrito"), "").unwrap();
     });
-    let out = e.shell(&[], "cat a.txt; echo; sleep 1; cat a.txt");
+    let out = e.shell(
+        &[],
+        "cat a.txt; echo; touch lido; while [ ! -e escrito ]; do sleep 0.05; done; cat a.txt",
+    );
     writer.join().unwrap();
     assert_eq!(stdout(&out), "antes\ndepois");
 }
@@ -122,9 +130,12 @@ fn sistema_e_somente_leitura_e_contas_sao_geradas() {
 #[test]
 fn pastas_fora_da_visao_nao_existem() {
     let e = Env::new();
-    for p in ["/mnt", "/media", "/srv", "/root", "/var/log", "/run/user"] {
+    for p in ["/media", "/srv", "/root", "/var/log", "/run/user"] {
         assert!(!ok(&e.probe(&[], &["exists", p])), "{p} existe");
     }
+    // O /mnt só tem o lugar das pastas novas do sandmux.
+    let mnt = stdout(&e.shell(&[], "ls -A /mnt"));
+    assert_eq!(mnt.trim(), "sandmux", "{mnt}");
     // /tmp só tem o caminho até a pasta de trabalho do teste (que vive em /tmp);
     // /run só tem o resolv.conf montado.
     let out = e.shell(&[], "ls -A /tmp; echo ---; find /run -type f");

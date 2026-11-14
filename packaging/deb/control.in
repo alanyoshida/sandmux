@@ -1,0 +1,11 @@
+Package: sandmux
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Alan Yoshida <alanyoshida@users.noreply.github.com>
+Homepage: https://github.com/alanyoshida/sandmux
+Description: multiplexador de terminal para agentes de código em sandbox
+ Roda harnesses de agente (opencode, hermes) e shells confinados por
+ namespaces, Landlock e seccomp, com abas, daemon de sessões, rede pelo
+ gateway, cofre de segredos e chat com os modelos cadastrados.

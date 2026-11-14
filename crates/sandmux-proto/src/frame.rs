@@ -138,7 +138,7 @@ mod tests {
             Frame::Control(Msg::List),
             Frame::Data(b"\x1b[1mol\xc3\xa1\x00".to_vec()),
             Frame::Control(Msg::Create {
-                opts: LaunchOptions::new("shell"),
+                opts: Box::new(LaunchOptions::new("shell")),
                 vars: [("TERM".to_string(), "xterm".to_string())].into(),
                 size: Size { cols: 80, rows: 24 },
                 attach: true,

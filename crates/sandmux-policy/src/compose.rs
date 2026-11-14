@@ -10,6 +10,39 @@ use crate::host::Host;
 use crate::layout::{Layout, layer_key};
 use crate::{PolicyError, hermes_config, lists, presets, toolchains};
 
+/// `resolv.conf` do sandbox com o gateway.
+pub const RESOLV_CONF: &str = "nameserver 10.0.2.3\noptions edns0\n";
+/// Nome da máquina, visto de dentro do sandbox.
+pub const HOST_NAME: &str = "host.sandmux.internal";
+
+/// Servidores de nome do host, do `resolv.conf` dele.
+pub fn host_nameservers(host: &Host) -> Vec<String> {
+    let text = std::fs::read_to_string(host.sys("/etc/resolv.conf")).unwrap_or_default();
+    let v: Vec<String> = text
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("nameserver"))
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.parse::<std::net::IpAddr>().is_ok())
+        .collect();
+    if v.is_empty() {
+        vec!["127.0.0.53".into()]
+    } else {
+        v
+    }
+}
+
+/// Onde o socket do Docker privado aparece dentro do sandbox.
+pub const DOCKER_SOCKET: &str = "/run/sandmux/docker.sock";
+/// Caminho do socket do agente SSH dentro do sandbox.
+pub const SSH_AGENT_SOCKET: &str = "/run/sandmux/ssh-agent.sock";
+/// Socket do MCP de banco e o repassador, dentro do sandbox.
+pub const DB_SOCKET: &str = "/run/sandmux/db.sock";
+pub const DB_MCP: &str = "/run/sandmux/bin/sandmux-db-mcp";
+/// Nome do MCP de banco no harness.
+pub const DB_MCP_NAME: &str = "sandmux-db";
+/// Programa das abas de chat, dentro do sandbox.
+pub const CHAT_BIN: &str = "/run/sandmux/bin/sandmux-chat";
+
 /// Onde fica a camada de escrita de toolchains e caches nesta execução.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerMode {
@@ -34,6 +67,59 @@ pub struct RunOptions {
     pub no_gpu: bool,
     pub args: Vec<String>,
     pub layer: LayerMode,
+    /// Socket do Docker privado da sessão, montado em
+    /// `/run/sandmux/docker.sock` com `DOCKER_HOST`. Só nas sessões do daemon.
+    pub docker_socket: Option<PathBuf>,
+    /// Socket do agente SSH do lançamento, montado em
+    /// `/run/sandmux/ssh-agent.sock` com `SSH_AUTH_SOCK`. Só nas sessões do
+    /// daemon com chaves escolhidas.
+    pub ssh_agent_socket: Option<PathBuf>,
+    /// Servidores das chaves SSH escolhidas, para o `known_hosts` da sessão.
+    pub ssh_servers: Vec<String>,
+    /// Pasta do registro de arquivos (`None`: sem registro).
+    pub files_log: Option<PathBuf>,
+    /// Política de arquivos compilada e o arquivo que o daemon regrava.
+    pub file_policy: sandmux_spec::files::FilePolicy,
+    pub file_policy_file: Option<PathBuf>,
+    /// Socket do MCP de banco do lançamento e o binário `sandmux-db-mcp`.
+    pub db_socket: Option<PathBuf>,
+    pub db_mcp: Option<PathBuf>,
+    /// Binário `sandmux-chat` e as variáveis da aba de chat.
+    pub chat_bin: Option<PathBuf>,
+    pub chat_env: Vec<(String, String)>,
+    /// Servidores MCP desabilitados e a allowlist (não vazia: só ela).
+    pub mcp_deny: Vec<String>,
+    pub mcp_allow: Vec<String>,
+    /// Pastas da aba em `/mnt/sandmux` e o socket de controle do supervisor.
+    pub folders: Vec<sandmux_spec::LiveFolder>,
+    pub control_socket: Option<PathBuf>,
+    /// Modo de rede.
+    pub network: crate::config::NetworkMode,
+    /// Política de rede compilada (`None` no modo sem rede).
+    pub net_policy: Option<sandmux_spec::net::NetPolicy>,
+    /// Variáveis com valores falsos de segredos do cofre (trocados no
+    /// tráfego); vencem o `pass-env` de mesmo nome.
+    pub fake_env: Vec<(String, String)>,
+    /// Segredos do cofre para as ferramentas (valor falso por domínio).
+    pub tool_secrets: Vec<crate::toolsecrets::ToolSecret>,
+    /// Registro de rede deste lançamento (pasta e etiqueta). Sem ele, o
+    /// sandbox usa a rede do host (testes da composição).
+    pub net: Option<NetLaunch>,
+}
+
+/// Onde o gateway registra este lançamento.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetLaunch {
+    pub log_dir: PathBuf,
+    pub tag: String,
+    /// Arquivo da política atual, que o daemon regrava (só nas sessões).
+    pub policy_file: Option<PathBuf>,
+    /// Arquivo da lista de portas publicadas.
+    pub ports_file: Option<PathBuf>,
+    /// CA do lançamento, para decifrar o TLS.
+    pub tls: Option<sandmux_spec::TlsSpec>,
+    /// Acesso ao daemon para os segredos (só nas sessões).
+    pub vault: Option<sandmux_spec::VaultAccess>,
 }
 
 impl RunOptions {
@@ -49,6 +135,25 @@ impl RunOptions {
             no_gpu: false,
             args: vec![],
             layer: LayerMode::Persistent,
+            docker_socket: None,
+            ssh_agent_socket: None,
+            ssh_servers: Vec::new(),
+            files_log: None,
+            file_policy: Default::default(),
+            file_policy_file: None,
+            folders: Vec::new(),
+            control_socket: None,
+            mcp_deny: Vec::new(),
+            mcp_allow: Vec::new(),
+            db_socket: None,
+            db_mcp: None,
+            chat_bin: None,
+            chat_env: Vec::new(),
+            network: crate::config::NetworkMode::Aberta,
+            net_policy: Some(sandmux_spec::net::NetPolicy::default()),
+            fake_env: Vec::new(),
+            tool_secrets: Vec::new(),
+            net: None,
         }
     }
 }
@@ -147,6 +252,105 @@ impl Builder<'_> {
             dest: dest.to_path_buf(),
             writable,
         });
+    }
+
+    /// Sistema em somente leitura, contas geradas e arquivos sensíveis de
+    /// `/etc` cobertos. Igual no sandbox e na visão do Docker privado.
+    fn system(&mut self, shell: &Path) {
+        for d in lists::SYSTEM_DIRS {
+            let p = self.host.sys(d);
+            if let Ok(target) = std::fs::read_link(&p) {
+                self.mounts.push(Mount::Symlink {
+                    dest: PathBuf::from(d),
+                    target,
+                });
+            } else if p.is_dir() {
+                self.bind(Path::new(d), Path::new(d), false);
+            }
+        }
+        if self.host.sys("/sys").is_dir() {
+            self.bind(Path::new("/sys"), Path::new("/sys"), false);
+        }
+        self.mounts.push(Mount::File {
+            dest: "/etc/passwd".into(),
+            contents: passwd(self.host, shell),
+            mode: 0o644,
+        });
+        self.mounts.push(Mount::File {
+            dest: "/etc/group".into(),
+            contents: group(self.host),
+            mode: 0o644,
+        });
+        for p in lists::ETC_PRIVILEGE
+            .iter()
+            .chain(lists::ETC_SERVICE_SECRETS)
+            .chain(lists::ETC_NETWORK)
+        {
+            self.cover_if_exists(Path::new(p));
+        }
+        if let Ok(rd) = std::fs::read_dir(self.host.sys("/etc/ssh")) {
+            let mut keys: Vec<PathBuf> = rd
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("ssh_host_") && n.ends_with("_key"))
+                .map(|n| PathBuf::from("/etc/ssh").join(n))
+                .collect();
+            keys.sort();
+            for k in keys {
+                self.mounts.push(Mount::Cover { dest: k });
+            }
+        }
+    }
+
+    /// Pasta de trabalho com escrita e a proteção do `.git`. Devolve as pastas
+    /// que precisam de escrita no Landlock.
+    fn workdir(
+        &mut self,
+        workdir: &Path,
+        repo: bool,
+        warnings: &mut Vec<String>,
+    ) -> Result<Vec<PathBuf>, PolicyError> {
+        let mut workdir_rw = vec![workdir.to_path_buf()];
+        match git::detect(workdir) {
+            GitLayout::None => self.bind(workdir, workdir, true),
+            GitLayout::Repo { git_dir } => {
+                self.bind(workdir, workdir, true);
+                let (m, create) = git::protect(&git_dir);
+                self.dirs.extend(create);
+                self.mounts.extend(m);
+            }
+            GitLayout::Worktree {
+                git_file,
+                common_dir,
+            } => {
+                self.bind(workdir, workdir, true);
+                self.bind(&git_file, &git_file, false);
+                let (m, create) = git::protect(&common_dir);
+                self.dirs.extend(create);
+                self.mounts.extend(m);
+                workdir_rw.push(common_dir);
+            }
+            GitLayout::Subfolder { repo_root, git_dir } => {
+                if repo {
+                    check_dangerous(self.host, &repo_root, false)?;
+                    self.bind(&repo_root, &repo_root, false);
+                    if git_dir.is_dir() {
+                        let (m, create) = git::protect(&git_dir);
+                        self.dirs.extend(create);
+                        self.mounts.extend(m);
+                        workdir_rw.push(git_dir);
+                    }
+                    self.bind(workdir, workdir, true);
+                } else {
+                    warnings.push(format!(
+                        "a pasta de trabalho fica dentro do repositório {}; o git não funciona no sandbox (use --repo para montar o repositório inteiro em somente leitura)",
+                        repo_root.display()
+                    ));
+                    self.bind(workdir, workdir, true);
+                }
+            }
+        }
+        Ok(workdir_rw)
     }
 
     fn tmpfs(&mut self, dest: &str, mode: u32) {
@@ -265,11 +469,39 @@ fn gpu_devices(host: &Host) -> Vec<PathBuf> {
 
 /// Compõe a especificação. O HOME sintético do harness precisa existir.
 pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> {
-    if !presets::exists(&opts.harness) {
+    if !presets::exists(&opts.harness) && opts.harness != crate::assistant::HARNESS {
         return Err(PolicyError::UnknownHarness(opts.harness.clone()));
     }
-    let plan = presets::plan(&opts.harness, host, &opts.args, &opts.pass_env)?;
     let mut warnings = Vec::new();
+    // Uma variável com o valor falso do cofre vence o `pass-env` de mesmo nome:
+    // o valor real não entra.
+    let fake_names: Vec<&str> = opts.fake_env.iter().map(|(n, _)| n.as_str()).collect();
+    let tool_env = crate::toolsecrets::env_for(&opts.tool_secrets);
+    let replaced = |n: &str| fake_names.contains(&n) || tool_env.iter().any(|(t, _)| t == n);
+    let pass_env: Vec<String> = opts
+        .pass_env
+        .iter()
+        .filter(|n| !replaced(n))
+        .cloned()
+        .collect();
+    if pass_env.len() != opts.pass_env.len() {
+        warnings.push(format!(
+            "--pass-env ignorado para {}: o cofre tem a chave, e o agente recebe o valor falso",
+            opts.pass_env
+                .iter()
+                .filter(|n| replaced(n))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    // No opencode, a configuração injetada aponta também para as variáveis
+    // falsas (o `auth.json` importado venceria a variável).
+    let mut plan_names = pass_env.clone();
+    if opts.harness == "opencode" {
+        plan_names.extend(fake_names.iter().map(|n| n.to_string()));
+    }
+    let plan = presets::plan(&opts.harness, host, &opts.args, &plan_names)?;
 
     let workdir = canonical(opts.workdir.as_deref().unwrap_or(&host.cwd), &host.cwd)?;
     check_dangerous(host, &workdir, true)?;
@@ -292,14 +524,14 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     }
 
     let mut env_extra = Vec::new();
-    for name in &opts.pass_env {
+    for name in &pass_env {
         let v = host
             .env
             .get(name)
             .ok_or_else(|| PolicyError::MissingEnv(name.clone()))?;
         env_extra.push((name.clone(), v.clone()));
     }
-    if !opts.pass_env.is_empty() {
+    if !pass_env.is_empty() {
         warnings.push(format!(
             "--pass-env deixa ao alcance do agente: {}",
             opts.pass_env.join(", ")
@@ -318,50 +550,7 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         dirs: Vec::new(),
     };
 
-    // Sistema em somente leitura.
-    for d in lists::SYSTEM_DIRS {
-        let p = host.sys(d);
-        if let Ok(target) = std::fs::read_link(&p) {
-            b.mounts.push(Mount::Symlink {
-                dest: PathBuf::from(d),
-                target,
-            });
-        } else if p.is_dir() {
-            b.bind(Path::new(d), Path::new(d), false);
-        }
-    }
-    if host.sys("/sys").is_dir() {
-        b.bind(Path::new("/sys"), Path::new("/sys"), false);
-    }
-    b.mounts.push(Mount::File {
-        dest: "/etc/passwd".into(),
-        contents: passwd(host, &plan.shell),
-        mode: 0o644,
-    });
-    b.mounts.push(Mount::File {
-        dest: "/etc/group".into(),
-        contents: group(host),
-        mode: 0o644,
-    });
-    for p in lists::ETC_PRIVILEGE
-        .iter()
-        .chain(lists::ETC_SERVICE_SECRETS)
-        .chain(lists::ETC_NETWORK)
-    {
-        b.cover_if_exists(Path::new(p));
-    }
-    if let Ok(rd) = std::fs::read_dir(host.sys("/etc/ssh")) {
-        let mut keys: Vec<PathBuf> = rd
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with("ssh_host_") && n.ends_with("_key"))
-            .map(|n| PathBuf::from("/etc/ssh").join(n))
-            .collect();
-        keys.sort();
-        for k in keys {
-            b.mounts.push(Mount::Cover { dest: k });
-        }
-    }
+    b.system(&plan.shell);
 
     // /proc, /dev, áreas temporárias.
     b.mounts.push(Mount::Proc {
@@ -407,19 +596,45 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     b.tmpfs("/tmp", 0o1777);
     b.tmpfs("/run", 0o755);
     b.tmpfs("/var/tmp", 0o1777);
-    if let Ok(target) = host.sys("/etc/resolv.conf").canonicalize() {
-        let real = if host.sys_root == Path::new("/") {
-            target
-        } else {
-            Path::new("/").join(target.strip_prefix(&host.sys_root).unwrap_or(&target))
-        };
-        if real.starts_with("/run") {
-            b.bind(&real, &real, false);
+    // Pastas novas: liberadas para escrita desde o início, montadas ao vivo
+    // pelo supervisor; as da aba, já no lançamento.
+    b.tmpfs(sandmux_spec::FOLDERS_DIR, 0o755);
+    for f in &opts.folders {
+        let p = canonical(&f.path, &host.cwd)?;
+        check_dangerous(host, &p, f.rw)?;
+        b.bind(&p, &f.dest(), f.rw);
+    }
+    b.mounts.push(Mount::File {
+        dest: Path::new(sandmux_spec::FOLDERS_DIR).join("PASTAS.txt"),
+        contents: sandmux_spec::folders_text(&opts.folders),
+        mode: 0o444,
+    });
+    let gateway = opts.net.is_some() && opts.network != crate::config::NetworkMode::SemRede;
+    resolv(&mut b, host, gateway);
+    // Confiança na CA do lançamento: o pacote do sistema mais a CA, por cima
+    // do pacote do sistema, e as variáveis dos runtimes comuns.
+    let mut tls_env = Vec::new();
+    if gateway
+        && let Some(t) = opts.net.as_ref().and_then(|n| n.tls.as_ref())
+        && let Some(dest) = trust_ca(&mut b, host, &t.ca_cert_pem)
+    {
+        for v in CA_VARS {
+            tls_env.push((v.to_string(), dest.display().to_string()));
         }
     }
 
     // HOME sintético e pasta de entrada.
     b.bind(&synthetic_home, &host.home, true);
+    // Valores falsos dos segredos nas ferramentas: arquivos só desta execução
+    // por cima dos guardados.
+    // O lançador cria o ponto de montagem (e as pastas) quando falta.
+    for (rel, contents) in crate::toolsecrets::files_for(&opts.tool_secrets, &synthetic_home) {
+        b.mounts.push(Mount::File {
+            dest: host.home.join(rel),
+            contents: contents.clone(),
+            mode: 0o600,
+        });
+    }
     let inbox = layout.inbox();
     b.dirs.push(inbox.clone());
     b.bind(&inbox, &host.h("inbox"), false);
@@ -467,61 +682,93 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         b.layered(d, false);
     }
     b.mounts.extend(plan.mounts.iter().cloned());
+    // MCPs desabilitados no hermes e o MCP de banco: um `config.yaml` só
+    // desta execução.
+    if opts.harness == "hermes" {
+        let saved = synthetic_home.join(".hermes/config.yaml");
+        let text = std::fs::read_to_string(&saved).unwrap_or_default();
+        let disabled: Vec<String> = crate::mcp::hermes_servers(&text)
+            .into_iter()
+            .map(|s| s.name)
+            .filter(|n| !crate::mcp::enabled(n, &opts.mcp_deny, &opts.mcp_allow))
+            .collect();
+        let mut out = None;
+        if !disabled.is_empty() {
+            match crate::mcp::hermes_filtered(&text, &disabled) {
+                Some(f) => out = Some(f),
+                None => warnings.push(format!(
+                    "MCPs não desabilitados no hermes ({}): o config.yaml não foi entendido",
+                    disabled.join(", ")
+                )),
+            }
+        }
+        if opts.db_socket.is_some() && opts.db_mcp.is_some() {
+            let base = out.clone().unwrap_or_else(|| text.clone());
+            out = Some(crate::mcp::hermes_with_server(&base, DB_MCP_NAME, DB_MCP));
+        }
+        if let Some(contents) = out {
+            b.mounts.push(Mount::File {
+                dest: host.h(".hermes/config.yaml"),
+                contents,
+                mode: 0o600,
+            });
+        }
+    }
     // Hermes com --pass-env: `.env` só desta execução, por cima do sintético.
-    if opts.harness == "hermes" && !env_extra.is_empty() {
+    // O hermes lê o `.env` por cima do ambiente: as chaves falsas vão nele.
+    let hermes_pairs: Vec<(String, String)> = env_extra
+        .iter()
+        .cloned()
+        .chain(opts.fake_env.iter().cloned())
+        .chain(crate::toolsecrets::channel_env(&opts.tool_secrets))
+        .collect();
+    if opts.harness == "hermes" && !hermes_pairs.is_empty() {
         let existing = std::fs::read(synthetic_home.join(".hermes/.env"))
             .map(|b| String::from_utf8_lossy(&b).into_owned())
             .unwrap_or_default();
         b.mounts.push(Mount::File {
             dest: host.h(".hermes/.env"),
-            contents: hermes_config::env_with_values(&existing, &env_extra)?,
+            contents: hermes_config::env_with_values(&existing, &hermes_pairs)?,
             mode: 0o600,
         });
-        warnings.push(
-            "nesta execução o ~/.hermes/.env tem os valores de --pass-env e fica em somente leitura; o .env guardado continua com os valores falsos".into(),
-        );
+        if !env_extra.is_empty() {
+            warnings.push(
+                "nesta execução o ~/.hermes/.env tem os valores de --pass-env e fica em somente leitura; o .env guardado continua com os valores falsos".into(),
+            );
+        }
     }
 
-    // Pasta de trabalho e git.
-    let mut workdir_rw = vec![workdir.clone()];
-    match git::detect(&workdir) {
-        GitLayout::None => b.bind(&workdir, &workdir, true),
-        GitLayout::Repo { git_dir } => {
-            b.bind(&workdir, &workdir, true);
-            let (m, create) = git::protect(&git_dir);
-            b.dirs.extend(create);
-            b.mounts.extend(m);
-        }
-        GitLayout::Worktree {
-            git_file,
-            common_dir,
-        } => {
-            b.bind(&workdir, &workdir, true);
-            b.bind(&git_file, &git_file, false);
-            let (m, create) = git::protect(&common_dir);
-            b.dirs.extend(create);
-            b.mounts.extend(m);
-            workdir_rw.push(common_dir);
-        }
-        GitLayout::Subfolder { repo_root, git_dir } => {
-            if opts.repo {
-                check_dangerous(host, &repo_root, false)?;
-                b.bind(&repo_root, &repo_root, false);
-                if git_dir.is_dir() {
-                    let (m, create) = git::protect(&git_dir);
-                    b.dirs.extend(create);
-                    b.mounts.extend(m);
-                    workdir_rw.push(git_dir);
-                }
-                b.bind(&workdir, &workdir, true);
-            } else {
-                warnings.push(format!(
-                    "a pasta de trabalho fica dentro do repositório {}; o git não funciona no sandbox (use --repo para montar o repositório inteiro em somente leitura)",
-                    repo_root.display()
-                ));
-                b.bind(&workdir, &workdir, true);
-            }
-        }
+    let mut workdir_rw = b.workdir(&workdir, opts.repo, &mut warnings)?;
+
+    if let Some(sock) = &opts.docker_socket {
+        b.bind(sock, Path::new(DOCKER_SOCKET), true);
+    }
+    // MCP de banco: o socket do daemon e o repassador, em somente leitura.
+    if let (Some(sock), Some(bin)) = (&opts.db_socket, &opts.db_mcp) {
+        b.bind(sock, Path::new(DB_SOCKET), true);
+        b.bind(bin, Path::new(DB_MCP), false);
+    }
+    // Aba de chat: o programa, em somente leitura.
+    if let Some(bin) = &opts.chat_bin {
+        b.bind(bin, Path::new(CHAT_BIN), false);
+    }
+    // Agente SSH: o socket e o `known_hosts` só desta execução, com as linhas
+    // do host para os servidores das chaves.
+    if let Some(sock) = &opts.ssh_agent_socket {
+        b.bind(sock, Path::new(SSH_AGENT_SOCKET), true);
+        // O `ssh` recusa um arquivo incluído cujo dono não é o root nem o
+        // usuário, e no namespace o root do host aparece como `nobody`: os
+        // arquivos de `/etc/ssh/ssh_config.d` viram cópias do usuário.
+        ssh_config_copies(&mut b, host);
+        let saved =
+            std::fs::read_to_string(synthetic_home.join(".ssh/known_hosts")).unwrap_or_default();
+        let from_host =
+            std::fs::read_to_string(host.home.join(".ssh/known_hosts")).unwrap_or_default();
+        b.mounts.push(Mount::File {
+            dest: host.h(".ssh/known_hosts"),
+            contents: crate::knownhosts::session_file(&saved, &from_host, &opts.ssh_servers),
+            mode: 0o600,
+        });
     }
 
     for (p, writable) in &extras {
@@ -564,7 +811,59 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         ("SANDMUX_INBOX".into(), format!("{home}/inbox")),
     ]);
     env.extend(plan.env.iter().cloned());
+    if opts.docker_socket.is_some() {
+        env.push(("DOCKER_HOST".into(), format!("unix://{DOCKER_SOCKET}")));
+    }
+    if opts.ssh_agent_socket.is_some() {
+        env.push(("SSH_AUTH_SOCK".into(), SSH_AGENT_SOCKET.into()));
+    }
+    let db = opts.db_socket.is_some() && opts.db_mcp.is_some();
+    if db {
+        env.push(("SANDMUX_DB_SOCKET".into(), DB_SOCKET.into()));
+    }
+    env.push(("SANDMUX_FOLDERS".into(), sandmux_spec::FOLDERS_DIR.into()));
+    if gateway {
+        env.push(("SANDMUX_HOST".into(), HOST_NAME.into()));
+    }
+    env.extend(tls_env);
     env.extend(env_extra);
+    env.extend(opts.fake_env.iter().cloned());
+    env.extend(opts.chat_env.iter().cloned());
+    env.extend(tool_env);
+    // MCPs desabilitados no opencode: `"enabled": false` no
+    // `OPENCODE_CONFIG_CONTENT`, que vence as outras configurações.
+    if opts.harness == "opencode" {
+        let disabled: Vec<String> = crate::mcp::opencode_servers(&synthetic_home, &workdir)
+            .into_iter()
+            .map(|s| s.name)
+            .filter(|n| !crate::mcp::enabled(n, &opts.mcp_deny, &opts.mcp_allow))
+            .collect();
+        let mut mcp: serde_json::Map<String, serde_json::Value> =
+            crate::mcp::opencode_disabled_json(&disabled)
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .unwrap_or_default();
+        if db {
+            mcp.insert(
+                DB_MCP_NAME.into(),
+                serde_json::json!({"type": "local", "command": [DB_MCP], "enabled": true}),
+            );
+        }
+        if !mcp.is_empty() {
+            let mcp = serde_json::Value::Object(mcp).to_string();
+            let current = env
+                .iter()
+                .rev()
+                .find(|(n, _)| n == "OPENCODE_CONFIG_CONTENT")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(|| "{}".into());
+            let mut v: serde_json::Value =
+                serde_json::from_str(&current).unwrap_or_else(|_| serde_json::json!({}));
+            if let (Some(o), Ok(m)) = (v.as_object_mut(), serde_json::from_str(&mcp)) {
+                o.insert("mcp".into(), m);
+            }
+            env.push(("OPENCODE_CONFIG_CONTENT".into(), v.to_string()));
+        }
+    }
     // A última definição de cada nome vale.
     let mut dedup: Vec<EnvVar> = Vec::new();
     for (name, value) in env {
@@ -575,12 +874,55 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     let mut write = vec![host.home.clone()];
     write.extend(workdir_rw);
     write.extend(
-        ["/tmp", "/var/tmp", "/run", "/dev", "/proc"]
-            .iter()
-            .map(PathBuf::from),
+        [
+            "/tmp",
+            "/var/tmp",
+            "/run",
+            "/dev",
+            "/proc",
+            sandmux_spec::FOLDERS_DIR,
+        ]
+        .iter()
+        .map(PathBuf::from),
     );
     write.extend(b.write.iter().cloned());
 
+    // Registro de arquivos: a pasta de trabalho, o HOME e as pastas extras;
+    // as camadas e as montagens de caches e toolchains no HOME ficam fora.
+    let files_spec = match (&opts.files_log, &opts.net) {
+        (Some(dir), Some(n)) => {
+            let mut roots = vec![workdir.clone(), host.home.clone()];
+            roots.extend(extras.iter().map(|(p, _)| p.clone()));
+            roots.push(PathBuf::from(sandmux_spec::FOLDERS_DIR));
+            let exclude = b
+                .mounts
+                .iter()
+                .filter_map(|m| match m {
+                    Mount::Overlay { dest, .. } | Mount::Bind { dest, .. }
+                        if dest.starts_with(&host.home)
+                            && *dest != host.home
+                            && !roots.contains(dest) =>
+                    {
+                        Some(dest.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            Some(sandmux_spec::FilesSpec {
+                log_dir: dir.clone(),
+                tag: n.tag.clone(),
+                workdir: workdir.clone(),
+                roots,
+                exclude,
+                policy: opts.file_policy.clone(),
+                policy_file: opts.file_policy_file.clone(),
+                state_dir: Some(dir.clone()),
+                control_socket: opts.control_socket.clone(),
+                folders: opts.folders.clone(),
+            })
+        }
+        _ => None,
+    };
     let spec = LaunchSpec {
         version: SPEC_VERSION,
         mounts: b.mounts,
@@ -595,6 +937,23 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         env: dedup,
         command: plan.command.clone(),
         cwd: workdir.clone(),
+        network: opts.net.as_ref().map(|n| sandmux_spec::NetworkSpec {
+            mode: match opts.network {
+                crate::config::NetworkMode::SemRede => sandmux_spec::NetMode::None,
+                _ => sandmux_spec::NetMode::Open,
+            },
+            log_dir: n.log_dir.clone(),
+            tag: n.tag.clone(),
+            workdir: workdir.clone(),
+            nameservers: host_nameservers(host),
+            policy: opts.net_policy.clone().unwrap_or_default(),
+            policy_file: n.policy_file.clone(),
+            ports_file: n.ports_file.clone(),
+            tun_socket: None,
+            tls: n.tls.clone().filter(|_| gateway),
+            vault: n.vault.clone().filter(|_| gateway),
+        }),
+        files: files_spec,
     };
     spec.validate()
         .map_err(|e| PolicyError::Io(e.to_string()))?;
@@ -604,4 +963,858 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         dirs_to_create: b.dirs,
         workdir,
     })
+}
+
+/// O `runc` da visão: põe `oomScoreAdj` 900 no `config.json` do contêiner
+/// (e no `process.json` do `docker exec`), porque o `dockerd` sem root escreve
+/// lá o valor dele, e sobe o do próprio processo, que o contêiner herda.
+pub fn runc_wrapper(real: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+echo 900 > /proc/self/oom_score_adj 2>/dev/null
+b=""; p=""; prev=""
+for a in "$@"; do
+  case "$prev" in --bundle|-b) b="$a" ;; --process|-p) p="$a" ;; esac
+  prev="$a"
+done
+for f in "${{b:+$b/config.json}}" "$p"; do
+  [ -n "$f" ] && [ -f "$f" ] && sed -i 's/"oomScoreAdj": *-\{{0,1\}}[0-9]*/"oomScoreAdj":900/' "$f"
+done
+exec {real} "$@"
+"#
+    )
+}
+
+/// Pasta dos executáveis próprios da visão do Docker, na frente do `PATH`.
+pub const DOCKER_BIN: &str = "/run/sandmux/bin";
+
+/// Variáveis que apontam para o pacote de CAs com a CA do lançamento.
+pub const CA_VARS: &[&str] = &[
+    "SSL_CERT_FILE",
+    "NODE_EXTRA_CA_CERTS",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "GIT_SSL_CAINFO",
+];
+
+/// Pacotes de CAs do sistema, na ordem de procura.
+const BUNDLES: &[&str] = &[
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/cert.pem",
+];
+
+/// Troca `/etc/ssh/ssh_config.d` por uma pasta nova com cópias dos arquivos
+/// `.conf` (links seguidos), do usuário do sandbox.
+fn ssh_config_copies(b: &mut Builder, host: &Host) {
+    let dir = host.sys("/etc/ssh/ssh_config.d");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let mut files: Vec<(String, String)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_string();
+            if !name.ends_with(".conf") {
+                return None;
+            }
+            Some((name, std::fs::read_to_string(e.path()).ok()?))
+        })
+        .collect();
+    files.sort();
+    b.tmpfs("/etc/ssh/ssh_config.d", 0o755);
+    for (name, contents) in files {
+        b.mounts.push(Mount::File {
+            dest: Path::new("/etc/ssh/ssh_config.d").join(name),
+            contents,
+            mode: 0o644,
+        });
+    }
+}
+
+/// Cobre o pacote de CAs do sistema com ele mais `ca_pem`. Devolve o caminho
+/// do pacote.
+fn trust_ca(b: &mut Builder, host: &Host, ca_pem: &str) -> Option<PathBuf> {
+    let (dest, mut bundle) = system_bundle(host)?;
+    if !bundle.ends_with('\n') {
+        bundle.push('\n');
+    }
+    bundle.push_str(ca_pem);
+    b.mounts.push(Mount::File {
+        dest: dest.clone(),
+        contents: bundle,
+        mode: 0o644,
+    });
+    Some(dest)
+}
+
+/// O pacote de CAs do sistema: o caminho real (sem links) e o conteúdo.
+fn system_bundle(host: &Host) -> Option<(PathBuf, String)> {
+    BUNDLES.iter().find_map(|p| {
+        let real = host.sys(p).canonicalize().ok()?;
+        let text = std::fs::read_to_string(&real).ok()?;
+        let dest = if host.sys_root == Path::new("/") {
+            real
+        } else {
+            Path::new("/").join(real.strip_prefix(&host.sys_root).ok()?)
+        };
+        Some((dest, text))
+    })
+}
+
+/// O `/etc/resolv.conf`: com o gateway, um arquivo gerado com o DNS dele; sem
+/// o gateway, o do host.
+fn resolv(b: &mut Builder<'_>, host: &Host, gateway: bool) {
+    if let Ok(target) = host.sys("/etc/resolv.conf").canonicalize() {
+        let real = if host.sys_root == Path::new("/") {
+            target
+        } else {
+            Path::new("/").join(target.strip_prefix(&host.sys_root).unwrap_or(&target))
+        };
+        if gateway {
+            // O DNS é o do gateway. Um link para dentro de /run recebe o
+            // arquivo no destino (o /run é tmpfs); um arquivo comum é coberto
+            // por um gerado.
+            let dest = if real.starts_with("/run") {
+                real
+            } else {
+                PathBuf::from("/etc/resolv.conf")
+            };
+            b.mounts.push(Mount::File {
+                dest,
+                contents: RESOLV_CONF.into(),
+                mode: 0o644,
+            });
+        } else if real.starts_with("/run") {
+            b.bind(&real, &real, false);
+        }
+    }
+}
+
+/// Visão de arquivos do Docker privado de uma pasta: sistema em somente
+/// leitura com as coberturas de `/etc`, a pasta de trabalho com a proteção do
+/// `.git`, a pasta de entrada, `/dev` e o cgroup do host, `/proc` novo, áreas
+/// temporárias e as pastas do próprio Docker (`docker_dirs`), com escrita.
+/// Sem HOME, caches, toolchains nem as pastas extras das sessões: um `-v` do
+/// Docker só alcança o que está aqui. Só as montagens importam: quem aplica é
+/// o `sandmux-run --view-fd`, sem Landlock nem seccomp.
+/// Com `ca_pem` (a CA do gateway do Docker), o pacote de CAs do sistema
+/// ganha a CA, para o `dockerd` confiar na decifração.
+pub fn compose_docker_view(
+    host: &Host,
+    workdir: &Path,
+    docker_dirs: &[PathBuf],
+    command: Vec<String>,
+    env: Vec<(String, String)>,
+    tun_socket: Option<&Path>,
+    ca_pem: Option<&str>,
+) -> Result<LaunchSpec, PolicyError> {
+    let workdir = canonical(workdir, &host.cwd)?;
+    check_dangerous(host, &workdir, true)?;
+    let layout = Layout::new(&host.data_dir);
+    let mut b = Builder {
+        host,
+        layout: layout.clone(),
+        harness: "docker",
+        mode: LayerMode::ReadOnlyFallback,
+        mounts: Vec::new(),
+        write: Vec::new(),
+        dirs: Vec::new(),
+    };
+    b.system(Path::new("/bin/sh"));
+    b.mounts.push(Mount::Proc {
+        dest: "/proc".into(),
+    });
+    // O runc cria os nós dos contêineres a partir do /dev desta visão.
+    b.bind(Path::new("/dev"), Path::new("/dev"), true);
+    // Um /sys novo, com a rede do namespace do Docker e sem o securityfs do
+    // host (com ele, o dockerd tenta carregar perfis do AppArmor e falha).
+    if tun_socket.is_some() {
+        b.mounts.push(Mount::Sysfs {
+            dest: "/sys".into(),
+        });
+    }
+    if host.sys("/sys/fs/cgroup").is_dir() {
+        b.bind(
+            Path::new("/sys/fs/cgroup"),
+            Path::new("/sys/fs/cgroup"),
+            true,
+        );
+    }
+    b.tmpfs("/tmp", 0o1777);
+    b.tmpfs("/run", 0o755);
+    b.tmpfs("/var/tmp", 0o1777);
+    // O `runc` da visão sobe o `oom_score_adj` para 900 antes de criar o
+    // contêiner, e os processos do contêiner o herdam: no OOM do teto da
+    // pasta, o kernel escolhe sempre um contêiner, e não o `dockerd`, o
+    // `containerd` ou os shims (que ficam com o valor da sessão). Sem
+    // privilégio, só dá para subir o valor, nunca baixar.
+    if let Some(real) = ["/usr/bin/runc", "/usr/local/bin/runc", "/usr/sbin/runc"]
+        .iter()
+        .find(|p| host.sys(p).is_file())
+    {
+        b.mounts.push(Mount::File {
+            dest: Path::new(DOCKER_BIN).join("runc"),
+            contents: runc_wrapper(real),
+            mode: 0o755,
+        });
+    }
+    resolv(&mut b, host, tun_socket.is_some());
+    if tun_socket.is_some()
+        && let Some(pem) = ca_pem
+    {
+        trust_ca(&mut b, host, pem);
+    }
+    let mut warnings = Vec::new();
+    b.workdir(&workdir, false, &mut warnings)?;
+    let inbox = layout.inbox();
+    if inbox.is_dir() {
+        b.bind(&inbox, &inbox, false);
+    }
+    for d in docker_dirs {
+        b.bind(d, d, true);
+    }
+    let spec = LaunchSpec {
+        version: SPEC_VERSION,
+        mounts: b.mounts,
+        landlock: LandlockRules::default(),
+        seccomp: SeccompRules::default(),
+        env: env
+            .into_iter()
+            .map(|(name, value)| EnvVar { name, value })
+            .collect(),
+        command,
+        cwd: "/".into(),
+        files: None,
+        // A visão cria o TUN e o manda ao daemon, que roda o gateway.
+        network: tun_socket.map(|t| sandmux_spec::NetworkSpec {
+            mode: sandmux_spec::NetMode::Open,
+            log_dir: PathBuf::new(),
+            tag: String::new(),
+            workdir: workdir.clone(),
+            nameservers: Vec::new(),
+            policy: Default::default(),
+            policy_file: None,
+            ports_file: None,
+            tun_socket: Some(t.to_path_buf()),
+            tls: None,
+            vault: None,
+        }),
+    };
+    spec.validate()
+        .map_err(|e| PolicyError::Io(e.to_string()))?;
+    Ok(spec)
+}
+
+#[cfg(test)]
+mod docker_view_tests {
+    use super::*;
+
+    #[test]
+    fn visao_do_docker_tem_so_o_necessario() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().canonicalize().unwrap();
+        for p in ["proj/.git/hooks", ".ssh", ".cache/pip", "dados", "estado"] {
+            std::fs::create_dir_all(home.join(p)).unwrap();
+        }
+        std::fs::write(home.join("proj/.git/config"), "").unwrap();
+        let h = Host {
+            home: home.clone(),
+            uid: 1000,
+            gid: 1000,
+            user: "ana".into(),
+            group: "ana".into(),
+            user_shell: "/bin/bash".into(),
+            data_dir: home.join(".local/share/sandmux"),
+            config_dir: home.join(".config/sandmux"),
+            cwd: home.join("proj"),
+            env: Default::default(),
+            sys_root: "/".into(),
+        };
+        let spec = compose_docker_view(
+            &h,
+            &home.join("proj"),
+            &[home.join("dados"), home.join("estado")],
+            vec!["dockerd".into()],
+            vec![("XDG_RUNTIME_DIR".into(), "/x".into())],
+            Some(Path::new("/r/tun.sock")),
+            None,
+        )
+        .unwrap();
+        let n = spec.network.as_ref().unwrap();
+        assert_eq!(n.tun_socket.as_deref(), Some(Path::new("/r/tun.sock")));
+        let dests: Vec<&Path> = spec.mounts.iter().map(|m| m.dest()).collect();
+        let bind = |p: &Path, w: bool| {
+            spec.mounts.iter().any(|m| {
+                matches!(m, Mount::Bind { source, dest, writable }
+                if source == p && dest == p && *writable == w)
+            })
+        };
+        assert!(bind(&home.join("proj"), true));
+        assert!(bind(&home.join("dados"), true) && bind(&home.join("estado"), true));
+        assert!(bind(Path::new("/dev"), true));
+        assert!(bind(Path::new("/usr"), false));
+        assert!(dests.contains(&Path::new("/proc")));
+        assert!(dests.contains(&Path::new("/etc/shadow")) || !Path::new("/etc/shadow").exists());
+        // Proteção do .git.
+        assert!(
+            bind(&home.join("proj/.git/hooks"), false),
+            "{:?}",
+            spec.mounts
+        );
+        // Nada do HOME além da pasta de trabalho.
+        for p in [home.clone(), home.join(".ssh"), home.join(".cache/pip")] {
+            assert!(!dests.contains(&p.as_path()), "{} na visão", p.display());
+        }
+        assert!(spec.landlock.write.is_empty() && spec.seccomp.deny_syscalls.is_empty());
+        assert_eq!(spec.command, vec!["dockerd"]);
+    }
+
+    fn rede_host(sys: &Path, home: &Path) -> Host {
+        Host {
+            home: home.into(),
+            uid: 1000,
+            gid: 1000,
+            user: "ana".into(),
+            group: "ana".into(),
+            user_shell: "/bin/bash".into(),
+            data_dir: home.join(".local/share/sandmux"),
+            config_dir: home.join(".config/sandmux"),
+            cwd: home.join("proj"),
+            env: Default::default(),
+            sys_root: sys.into(),
+        }
+    }
+
+    #[test]
+    fn chaves_falsas_no_opencode_vencem_o_pass_env() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let (sys, home) = (base.join("sys"), base.join("home"));
+        std::fs::create_dir_all(sys.join("etc")).unwrap();
+        std::fs::create_dir_all(home.join("proj")).unwrap();
+        let exe = home.join(".opencode/bin/opencode");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut h = rede_host(&sys, &home);
+        h.env.insert("OPENROUTER_API_KEY".into(), "sk-REAL".into());
+        std::fs::create_dir_all(Layout::new(&h.data_dir).home("opencode")).unwrap();
+        let mut o = RunOptions::new("opencode");
+        o.layer = LayerMode::ReadOnlyFallback;
+        o.pass_env = vec!["OPENROUTER_API_KEY".into()];
+        o.fake_env = vec![("OPENROUTER_API_KEY".into(), "sandmux-fake-x".into())];
+        let c = compose(&h, &o).unwrap();
+        assert_eq!(
+            c.spec.env_value("OPENROUTER_API_KEY"),
+            Some("sandmux-fake-x")
+        );
+        assert!(
+            c.spec
+                .env_value("OPENCODE_CONFIG_CONTENT")
+                .is_some_and(|v| v.contains("{env:OPENROUTER_API_KEY}")),
+            "{:?}",
+            c.spec.env
+        );
+        assert!(
+            c.warnings.iter().any(|w| w.contains("--pass-env ignorado")),
+            "{:?}",
+            c.warnings
+        );
+        let all = format!("{:?}", c.spec);
+        assert!(!all.contains("sk-REAL"), "o valor real entrou");
+    }
+
+    #[test]
+    fn visao_do_docker_confia_na_ca_do_gateway() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let (sys, home) = (base.join("sys"), base.join("home"));
+        std::fs::create_dir_all(sys.join("etc/ssl/certs")).unwrap();
+        std::fs::write(sys.join("etc/ssl/certs/ca-certificates.crt"), "SISTEMA").unwrap();
+        std::fs::create_dir_all(home.join("proj")).unwrap();
+        let h = rede_host(&sys, &home);
+        let view = |ca: Option<&str>| {
+            compose_docker_view(
+                &h,
+                &home.join("proj"),
+                &[],
+                vec!["dockerd".into()],
+                Vec::new(),
+                Some(Path::new("/r/tun.sock")),
+                ca,
+            )
+            .unwrap()
+        };
+        let bundle = |spec: &LaunchSpec| {
+            spec.mounts.iter().find_map(|m| match m {
+                Mount::File { dest, contents, .. }
+                    if dest == Path::new("/etc/ssl/certs/ca-certificates.crt") =>
+                {
+                    Some(contents.clone())
+                }
+                _ => None,
+            })
+        };
+        assert_eq!(
+            bundle(&view(Some("CA-DO-GATEWAY"))).as_deref(),
+            Some("SISTEMA\nCA-DO-GATEWAY")
+        );
+        assert_eq!(bundle(&view(None)), None);
+    }
+
+    #[test]
+    fn runc_da_visao_poe_oom_900() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let w = d.path().join("runc");
+        std::fs::write(&w, runc_wrapper("/bin/echo")).unwrap();
+        std::fs::set_permissions(&w, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let bundle = d.path().join("b");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(
+            bundle.join("config.json"),
+            r#"{"process":{"oomScoreAdj":200,"cwd":"/"}}"#,
+        )
+        .unwrap();
+        let proc_json = d.path().join("p.json");
+        std::fs::write(&proc_json, r#"{"oomScoreAdj": -5}"#).unwrap();
+        let out = std::process::Command::new(&w)
+            .args(["--root", "/x", "create", "--bundle"])
+            .arg(&bundle)
+            .arg("id1")
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).contains("create --bundle"));
+        assert_eq!(
+            std::fs::read_to_string(bundle.join("config.json")).unwrap(),
+            r#"{"process":{"oomScoreAdj":900,"cwd":"/"}}"#
+        );
+        std::process::Command::new(&w)
+            .args(["exec", "--process"])
+            .arg(&proc_json)
+            .arg("id1")
+            .output()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&proc_json).unwrap(),
+            r#"{"oomScoreAdj":900}"#
+        );
+    }
+
+    #[test]
+    fn mcps_desabilitados_nos_harnesses() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let (sys, home) = (base.join("sys"), base.join("home"));
+        std::fs::create_dir_all(sys.join("etc")).unwrap();
+        std::fs::create_dir_all(home.join("proj")).unwrap();
+        for (exe, dir) in [
+            (".opencode/bin/opencode", ""),
+            (".local/bin/hermes", ".hermes/hermes-agent"),
+        ] {
+            let p = home.join(exe);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            if !dir.is_empty() {
+                std::fs::create_dir_all(home.join(dir)).unwrap();
+            }
+        }
+        let h = rede_host(&sys, &home);
+        let layout = Layout::new(&h.data_dir);
+        let oc = layout.home("opencode").join(".config/opencode");
+        std::fs::create_dir_all(&oc).unwrap();
+        std::fs::write(
+            oc.join("opencode.json"),
+            r#"{"mcp": {"github": {"type": "remote", "url": "https://x"}, "fs": {"type": "local", "command": ["fs"]}}}"#,
+        )
+        .unwrap();
+        let hm = layout.home("hermes").join(".hermes");
+        std::fs::create_dir_all(&hm).unwrap();
+        let yaml = "mcp_servers:\n  fs:\n    command: fs\n  web:\n    url: https://web\n";
+        std::fs::write(hm.join("config.yaml"), yaml).unwrap();
+
+        let mut o = RunOptions::new("opencode");
+        o.layer = LayerMode::ReadOnlyFallback;
+        o.mcp_deny = vec!["github".into()];
+        let c = compose(&h, &o).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(c.spec.env_value("OPENCODE_CONFIG_CONTENT").unwrap()).unwrap();
+        assert_eq!(v["mcp"]["github"]["enabled"], false);
+        assert!(v["mcp"].get("fs").is_none());
+
+        let mut o = RunOptions::new("hermes");
+        o.layer = LayerMode::ReadOnlyFallback;
+        o.mcp_allow = vec!["fs".into()];
+        let c = compose(&h, &o).unwrap();
+        let cfg = c
+            .spec
+            .mounts
+            .iter()
+            .find_map(|m| match m {
+                Mount::File { dest, contents, .. } if *dest == h.h(".hermes/config.yaml") => {
+                    Some(contents.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(cfg.contains("fs:") && !cfg.contains("web"), "{cfg}");
+        assert_eq!(
+            std::fs::read_to_string(hm.join("config.yaml")).unwrap(),
+            yaml
+        );
+        // Canais: os falsos vão no `.env` da execução, por cima do guardado.
+        std::fs::write(
+            hm.join(".env"),
+            "TELEGRAM_BOT_TOKEN=sandmux-fake-import\nOUTRA=1\n",
+        )
+        .unwrap();
+        let mut o = RunOptions::new("hermes");
+        o.layer = LayerMode::ReadOnlyFallback;
+        o.tool_secrets = vec![crate::toolsecrets::ToolSecret {
+            tool: "telegram".into(),
+            domain: "api.telegram.org".into(),
+            fake: "0000000000:sandmux-fake-t".into(),
+        }];
+        let c = compose(&h, &o).unwrap();
+        assert_eq!(
+            c.spec.env_value("TELEGRAM_BOT_TOKEN"),
+            Some("0000000000:sandmux-fake-t")
+        );
+        let env = c
+            .spec
+            .mounts
+            .iter()
+            .find_map(|m| match m {
+                Mount::File { dest, contents, .. } if *dest == h.h(".hermes/.env") => {
+                    Some(contents.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            env.contains("TELEGRAM_BOT_TOKEN=\"0000000000:sandmux-fake-t\"")
+                && env.contains("OUTRA=1")
+                && !env.contains("sandmux-fake-import"),
+            "{env}"
+        );
+        std::fs::remove_file(hm.join(".env")).unwrap();
+        // Sem nada desabilitado, nada muda.
+        let mut o = RunOptions::new("hermes");
+        o.layer = LayerMode::ReadOnlyFallback;
+        let c = compose(&h, &o).unwrap();
+        assert!(
+            !c.spec
+                .mounts
+                .iter()
+                .any(|m| m.dest() == h.h(".hermes/config.yaml"))
+        );
+        // MCP de banco: socket, repassador, variável e cadastro nos dois.
+        let sock = base.join("db.sock");
+        let bin = base.join("sandmux-db-mcp");
+        std::fs::write(&sock, "").unwrap();
+        std::fs::write(&bin, "").unwrap();
+        for harness in ["opencode", "hermes"] {
+            let mut o = RunOptions::new(harness);
+            o.layer = LayerMode::ReadOnlyFallback;
+            o.db_socket = Some(sock.clone());
+            o.db_mcp = Some(bin.clone());
+            let c = compose(&h, &o).unwrap();
+            assert_eq!(c.spec.env_value("SANDMUX_DB_SOCKET"), Some(DB_SOCKET));
+            assert!(c.spec.mounts.iter().any(|m| matches!(m,
+                Mount::Bind { source, dest, writable, .. }
+                    if *source == bin && dest == Path::new(DB_MCP) && !*writable)));
+            assert!(
+                c.spec
+                    .mounts
+                    .iter()
+                    .any(|m| m.dest() == Path::new(DB_SOCKET))
+            );
+            if harness == "opencode" {
+                let v: serde_json::Value =
+                    serde_json::from_str(c.spec.env_value("OPENCODE_CONFIG_CONTENT").unwrap())
+                        .unwrap();
+                assert_eq!(v["mcp"][DB_MCP_NAME]["command"][0], DB_MCP);
+            } else {
+                let cfg = c
+                    .spec
+                    .mounts
+                    .iter()
+                    .find_map(|m| match m {
+                        Mount::File { dest, contents, .. }
+                            if *dest == h.h(".hermes/config.yaml") =>
+                        {
+                            Some(contents.clone())
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(cfg.contains("sandmux-db:") && cfg.contains("fs:"), "{cfg}");
+            }
+        }
+    }
+
+    #[test]
+    fn pastas_em_mnt_sandmux() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let (sys, home) = (base.join("sys"), base.join("home"));
+        std::fs::create_dir_all(sys.join("etc")).unwrap();
+        std::fs::create_dir_all(home.join("proj")).unwrap();
+        std::fs::create_dir_all(base.join("dados")).unwrap();
+        let h = rede_host(&sys, &home);
+        std::fs::create_dir_all(Layout::new(&h.data_dir).home("shell")).unwrap();
+        let mut o = RunOptions::new("shell");
+        o.layer = LayerMode::ReadOnlyFallback;
+        o.folders = vec![sandmux_spec::LiveFolder {
+            name: "dados".into(),
+            path: base.join("dados"),
+            rw: true,
+        }];
+        let c = compose(&h, &o).unwrap();
+        let mnt = Path::new(sandmux_spec::FOLDERS_DIR);
+        assert!(
+            c.spec
+                .mounts
+                .iter()
+                .any(|m| matches!(m, Mount::Tmpfs { dest, .. } if dest == mnt))
+        );
+        assert!(c.spec.mounts.iter().any(|m| matches!(m,
+            Mount::Bind { source, dest, writable, .. }
+                if *source == base.join("dados") && *dest == mnt.join("dados") && *writable)));
+        let txt = c
+            .spec
+            .mounts
+            .iter()
+            .find_map(|m| match m {
+                Mount::File { dest, contents, .. } if *dest == mnt.join("PASTAS.txt") => {
+                    Some(contents.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(txt.contains("dados\tleitura e escrita"), "{txt}");
+        assert_eq!(c.spec.env_value("SANDMUX_FOLDERS"), Some("/mnt/sandmux"));
+        assert!(c.spec.landlock.write.iter().any(|w| w == mnt));
+        o.folders[0].path = home.clone();
+        assert!(compose(&h, &o).is_err(), "o HOME é perigoso");
+    }
+
+    #[test]
+    fn agente_ssh_e_known_hosts() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let (sys, home) = (base.join("sys"), base.join("home"));
+        std::fs::create_dir_all(sys.join("etc")).unwrap();
+        std::fs::create_dir_all(home.join("proj")).unwrap();
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::write(
+            home.join(".ssh/known_hosts"),
+            "github.com ssh-ed25519 AAAA1\noutro.com ssh-ed25519 AAAA2\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(sys.join("etc/ssh/ssh_config.d")).unwrap();
+        std::fs::write(sys.join("etc/ssh/ssh_config.d/20-x.conf"), "Host x\n").unwrap();
+        std::fs::write(sys.join("etc/ssh/ssh_config.d/LEIA"), "-").unwrap();
+        let h = rede_host(&sys, &home);
+        std::fs::create_dir_all(Layout::new(&h.data_dir).home("shell")).unwrap();
+        let mut o = RunOptions::new("shell");
+        o.layer = LayerMode::ReadOnlyFallback;
+        let c = compose(&h, &o).unwrap();
+        assert_eq!(c.spec.env_value("SSH_AUTH_SOCK"), None);
+        assert!(
+            !c.spec
+                .mounts
+                .iter()
+                .any(|m| m.dest() == Path::new("/etc/ssh/ssh_config.d"))
+        );
+        o.ssh_agent_socket = Some(base.join("a.sock"));
+        o.ssh_servers = vec!["github.com".into()];
+        let c = compose(&h, &o).unwrap();
+        assert_eq!(c.spec.env_value("SSH_AUTH_SOCK"), Some(SSH_AGENT_SOCKET));
+        assert!(c.spec.mounts.iter().any(|m| matches!(m,
+            Mount::Bind { source, dest, .. } if *source == base.join("a.sock") && dest == Path::new(SSH_AGENT_SOCKET))));
+        let kh = c
+            .spec
+            .mounts
+            .iter()
+            .find_map(|m| match m {
+                Mount::File { dest, contents, .. } if *dest == h.h(".ssh/known_hosts") => {
+                    Some(contents.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(kh, "github.com ssh-ed25519 AAAA1\n");
+        // `ssh_config.d` vira uma pasta nova com cópias do usuário.
+        let dests: Vec<&Path> = c.spec.mounts.iter().map(|m| m.dest()).collect();
+        assert!(dests.contains(&Path::new("/etc/ssh/ssh_config.d")));
+        assert!(dests.contains(&Path::new("/etc/ssh/ssh_config.d/20-x.conf")));
+        assert!(!dests.contains(&Path::new("/etc/ssh/ssh_config.d/LEIA")));
+    }
+
+    #[test]
+    fn falsos_nas_ferramentas() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let (sys, home) = (base.join("sys"), base.join("home"));
+        std::fs::create_dir_all(sys.join("etc")).unwrap();
+        std::fs::create_dir_all(home.join("proj")).unwrap();
+        let mut h = rede_host(&sys, &home);
+        h.env.insert("GH_TOKEN".into(), "ghp_REAL".into());
+        let synth = Layout::new(&h.data_dir).home("shell");
+        std::fs::create_dir_all(&synth).unwrap();
+        std::fs::write(synth.join(".npmrc"), "save-exact=true\n").unwrap();
+        let mut o = RunOptions::new("shell");
+        o.layer = LayerMode::ReadOnlyFallback;
+        o.pass_env = vec!["GH_TOKEN".into()];
+        let ts = |tool: &str, domain: &str| crate::toolsecrets::ToolSecret {
+            tool: tool.into(),
+            domain: domain.into(),
+            fake: "sandmux-fake-1".into(),
+        };
+        o.tool_secrets = vec![
+            ts("gh", "github.com"),
+            ts("git", "github.com"),
+            ts("npm", "npm.empresa.com"),
+            ts("docker", "ghcr.io"),
+        ];
+        let c = compose(&h, &o).unwrap();
+        assert_eq!(c.spec.env_value("GH_TOKEN"), Some("sandmux-fake-1"));
+        assert_eq!(
+            c.spec.env_value("GIT_CONFIG_KEY_0"),
+            Some("credential.https://github.com.helper")
+        );
+        let file = |rel: &str| {
+            c.spec.mounts.iter().find_map(|m| match m {
+                Mount::File { dest, contents, .. } if *dest == h.h(rel) => Some(contents.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            file(".npmrc").as_deref(),
+            Some("save-exact=true\n//npm.empresa.com/:_authToken=sandmux-fake-1\n")
+        );
+        assert!(file(".docker/config.json").unwrap().contains("ghcr.io"));
+        // O guardado não muda.
+        assert_eq!(
+            std::fs::read_to_string(synth.join(".npmrc")).unwrap(),
+            "save-exact=true\n"
+        );
+        assert!(c.warnings.iter().any(|w| w.contains("--pass-env ignorado")));
+        assert!(!format!("{:?}", c.spec).contains("ghp_REAL"));
+    }
+
+    #[test]
+    fn rede_com_resolv_em_link_e_em_arquivo() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let (sys, home) = (base.join("sys"), base.join("home"));
+        std::fs::create_dir_all(sys.join("etc")).unwrap();
+        std::fs::create_dir_all(sys.join("run/systemd/resolve")).unwrap();
+        std::fs::create_dir_all(home.join("proj")).unwrap();
+        std::fs::write(
+            sys.join("run/systemd/resolve/stub-resolv.conf"),
+            "nameserver 127.0.0.53\nnameserver 9.9.9.9\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            "../run/systemd/resolve/stub-resolv.conf",
+            sys.join("etc/resolv.conf"),
+        )
+        .unwrap();
+        std::fs::create_dir_all(sys.join("etc/ssl/certs")).unwrap();
+        std::fs::write(
+            sys.join("etc/ssl/certs/ca-certificates.crt"),
+            "-----BEGIN CERTIFICATE-----\nDO-SISTEMA\n-----END CERTIFICATE-----",
+        )
+        .unwrap();
+        let h = rede_host(&sys, &home);
+        let mut o = RunOptions::new("shell");
+        o.layer = LayerMode::ReadOnlyFallback;
+        o.net = Some(NetLaunch {
+            log_dir: base.join("net"),
+            tag: "run-1".into(),
+            policy_file: Some("/run/p.json".into()),
+            ports_file: None,
+            tls: Some(sandmux_spec::TlsSpec {
+                ca_cert_pem:
+                    "-----BEGIN CERTIFICATE-----\nCA-DE-TESTE\n-----END CERTIFICATE-----\n".into(),
+                ca_key_pem: "chave".into(),
+                upstream_ca_pem: None,
+            }),
+            vault: None,
+        });
+        let c = compose(&h, &o).unwrap();
+        let n = c.spec.network.as_ref().unwrap();
+        assert_eq!(n.policy_file.as_deref(), Some(Path::new("/run/p.json")));
+        assert_eq!(n.policy.mode, sandmux_spec::net::PolicyMode::Open);
+        let file = |dest: &str| {
+            c.spec.mounts.iter().any(|m| {
+                matches!(m, Mount::File { dest: d, contents, .. }
+                    if d == Path::new(dest) && contents == RESOLV_CONF)
+            })
+        };
+        assert!(
+            file("/run/systemd/resolve/stub-resolv.conf"),
+            "{:?}",
+            c.spec.mounts
+        );
+        let n = c.spec.network.as_ref().unwrap();
+        assert_eq!(n.mode, sandmux_spec::NetMode::Open);
+        assert_eq!(n.tag, "run-1");
+        assert_eq!(n.nameservers, vec!["127.0.0.53", "9.9.9.9"]);
+        assert_eq!(c.spec.env_value("SANDMUX_HOST"), Some(HOST_NAME));
+        // O pacote de CAs: o do sistema mais a CA do lançamento, no mesmo
+        // caminho, e as variáveis apontando para ele.
+        let bundle = c
+            .spec
+            .mounts
+            .iter()
+            .find_map(|m| match m {
+                Mount::File { dest, contents, .. }
+                    if dest == Path::new("/etc/ssl/certs/ca-certificates.crt") =>
+                {
+                    Some(contents.clone())
+                }
+                _ => None,
+            })
+            .expect("pacote de CAs");
+        assert!(
+            bundle.contains("DO-SISTEMA") && bundle.contains("CA-DE-TESTE"),
+            "{bundle}"
+        );
+        for v in CA_VARS {
+            assert_eq!(
+                c.spec.env_value(v),
+                Some("/etc/ssl/certs/ca-certificates.crt"),
+                "{v}"
+            );
+        }
+        assert_eq!(n.tls.as_ref().unwrap().ca_key_pem, "chave");
+
+        // Arquivo comum: coberto por um gerado.
+        std::fs::remove_file(sys.join("etc/resolv.conf")).unwrap();
+        std::fs::write(sys.join("etc/resolv.conf"), "nameserver 1.1.1.1\n").unwrap();
+        let c = compose(&h, &o).unwrap();
+        assert!(c.spec.mounts.iter().any(
+            |m| matches!(m, Mount::File { dest, .. } if dest == Path::new("/etc/resolv.conf"))
+        ));
+        assert_eq!(
+            c.spec.network.as_ref().unwrap().nameservers,
+            vec!["1.1.1.1"]
+        );
+
+        // Sem rede: sem resolv do gateway nem SANDMUX_HOST.
+        o.network = crate::config::NetworkMode::SemRede;
+        let c = compose(&h, &o).unwrap();
+        assert_eq!(
+            c.spec.network.as_ref().unwrap().mode,
+            sandmux_spec::NetMode::None
+        );
+        assert_eq!(c.spec.env_value("SANDMUX_HOST"), None);
+    }
 }

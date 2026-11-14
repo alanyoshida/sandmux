@@ -27,13 +27,19 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Diretório de dados do cliente, o mesmo cálculo do `Host`.
 pub fn data_dir() -> PathBuf {
-    match std::env::var_os("XDG_DATA_HOME").map(PathBuf::from) {
+    let p = match std::env::var_os("XDG_DATA_HOME").map(PathBuf::from) {
         Some(p) if p.is_absolute() => p.join("sandmux"),
-        _ => std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/"))
-            .join(".local/share/sandmux"),
-    }
+        _ => {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/"));
+            home.canonicalize()
+                .unwrap_or(home)
+                .join(".local/share/sandmux")
+        }
+    };
+    p.canonicalize()
+        .unwrap_or_else(|_| sandmux_policy::config::normalize(&p))
 }
 
 /// Pasta de configuração do cliente, o mesmo cálculo do `Host`.
@@ -255,12 +261,12 @@ pub fn terminal_size() -> Size {
 }
 
 /// Terminal em modo cru, restaurado ao sair.
-struct RawMode {
+pub struct RawMode {
     orig: Termios,
 }
 
 impl RawMode {
-    fn enter() -> Result<RawMode> {
+    pub fn enter() -> Result<RawMode> {
         let stdin = std::io::stdin();
         let orig = termios::tcgetattr(stdin.as_fd())?;
         let mut raw = orig.clone();

@@ -32,11 +32,15 @@ O `run` com terminal MUST fazer, antes de pedir a sessão, as mesmas verificaç�
 - **THEN** o comando termina com erro listando os perfis e nenhuma sessão é criada
 
 ### Requirement: Listar sessões
-`sandmux ls` MUST listar as sessões do usuário com o identificador, o nome, o harness, a pasta de trabalho, o estado (viva, encerrada com o código de saída, ou parada com o motivo) e quantos clientes estão anexados. Sem sessões, o comando MUST dizer isso e terminar com código zero.
+`sandmux ls` MUST listar as sessões do usuário com o identificador, o nome, o harness, a pasta de trabalho, o estado (viva, encerrada com o código de saída, ou parada com o motivo), quantos clientes estão anexados, e a memória e os processos em uso com os tetos. Sem sessões, o comando MUST dizer isso e terminar com código zero.
 
 #### Scenario: Três estados
 - **WHEN** existe uma sessão viva, uma encerrada com código 2 e uma parada por falta de variável
 - **THEN** `sandmux ls` mostra as três, com os estados "viva", "encerrada (2)" e "parada" com o motivo
+
+#### Scenario: Consumo
+- **WHEN** existe uma sessão viva e uma encerrada
+- **THEN** a linha da viva mostra a memória e os processos em uso, cada um com o teto, e a da encerrada mostra o consumo vazio
 
 ### Requirement: Anexar a uma sessão
 `sandmux attach <id>` MUST anexar o terminal do usuário à sessão indicada. Sem identificador, o comando MUST anexar à única sessão viva, quando só existe uma, e caso contrário terminar com erro listando as sessões. Sem terminal interativo, o comando MUST terminar com erro.
@@ -193,3 +197,14 @@ Quando o daemon termina, por parada, reinício ou falha, nenhum processo de sand
 #### Scenario: Daemon morto à força
 - **WHEN** o processo do daemon é morto com SIGKILL com duas sessões vivas
 - **THEN** os harnesses e todos os processos dos dois sandboxes terminam
+
+### Requirement: Renomear uma sessão
+`sandmux rename <id> <nome>` MUST trocar o nome da sessão, que aparece em `sandmux ls` e na barra de abas da TUI. O nome novo MUST ser gravado na lista de sessões e sobreviver ao reinício do daemon. Um nome vazio, com quebra de linha ou com mais de 40 caracteres MUST ser recusado.
+
+#### Scenario: Nome novo
+- **WHEN** o usuário roda `sandmux rename 1 api`
+- **THEN** `sandmux ls` mostra a sessão 1 com o nome `api`, também depois de `sandmux daemon restart`
+
+#### Scenario: Nome inválido
+- **WHEN** o usuário roda `sandmux rename 1 ""`
+- **THEN** o comando termina com erro e o nome não muda

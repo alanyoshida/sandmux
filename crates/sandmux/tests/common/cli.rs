@@ -94,6 +94,11 @@ impl Env {
             .env("XDG_CONFIG_HOME", &self.config)
             .env("SANDMUX_DAEMON_START", "direct")
             .stdin(Stdio::null());
+        // O barramento do systemd de usuário de quem roda os testes, para os
+        // tetos de recurso (o XDG_RUNTIME_DIR do teste é outra pasta).
+        if let Some(bus) = user_bus() {
+            c.env("DBUS_SESSION_BUS_ADDRESS", bus);
+        }
         c
     }
 
@@ -182,4 +187,15 @@ pub fn stdout(o: &Output) -> String {
 
 pub fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
+/// Endereço do barramento do usuário que roda os testes, quando existe.
+pub fn user_bus() -> Option<String> {
+    if let Ok(b) = std::env::var("DBUS_SESSION_BUS_ADDRESS") {
+        return Some(b);
+    }
+    // SAFETY: getuid não falha.
+    let uid = unsafe { libc::getuid() };
+    let p = format!("/run/user/{uid}/bus");
+    Path::new(&p).exists().then(|| format!("unix:path={p}"))
 }

@@ -174,19 +174,8 @@ O `run` MUST terminar com o mesmo código de saída do comando confinado quando 
 - **WHEN** um processo do sandbox termina depois que o pai dele já saiu
 - **THEN** ele é recolhido e não permanece como zumbi
 
-### Requirement: Rede do host sem filtro nesta fatia
-Nesta fatia, o processo confinado MUST usar a rede do host, sem filtro e sem registro. O `sandmux doctor` MUST informar que o controle de rede ainda não está ativo.
-
-#### Scenario: Acesso à internet
-- **WHEN** um processo confinado abre uma conexão para um servidor externo
-- **THEN** a conexão funciona como no host
-
-#### Scenario: Diagnóstico do nível de proteção
-- **WHEN** o usuário roda `sandmux doctor`
-- **THEN** a saída diz que a rede não é filtrada nem registrada
-
 ### Requirement: Diagnóstico de suporte da máquina
-`sandmux doctor` MUST mostrar o resultado de cada verificação de suporte (user namespaces sem privilégio, versão do Landlock, camada de escrita com overlay) e, para cada falha, a causa e o que fazer. O comando MUST terminar com código diferente de zero quando o sandbox não pode ser lançado.
+`sandmux doctor` MUST mostrar o resultado de cada verificação de suporte (user namespaces sem privilégio, versão do Landlock, camada de escrita com overlay, limites de recurso, Docker privado) e, para cada falha, a causa e o que fazer. O comando MUST terminar com código diferente de zero quando o sandbox não pode ser lançado.
 
 #### Scenario: Máquina com suporte completo
 - **WHEN** todas as verificações passam
@@ -199,3 +188,11 @@ Nesta fatia, o processo confinado MUST usar a rede do host, sem filtro e sem reg
 #### Scenario: Camada de escrita indisponível
 - **WHEN** o overlay em user namespace não funciona na máquina
 - **THEN** a saída avisa que caches e toolchains vão funcionar no modo de recuo, e o comando termina com código zero
+
+#### Scenario: Limites de recurso indisponíveis
+- **WHEN** o systemd de usuário não responde ou não delega os controladores `memory` e `pids`
+- **THEN** a saída avisa que as sessões vão rodar sem teto de memória e de processos, explica a causa e o que fazer, e o comando termina com código zero
+
+#### Scenario: Docker privado indisponível
+- **WHEN** a máquina não tem `rootlesskit` ou não tem faixa do usuário em `/etc/subuid`
+- **THEN** a saída avisa que as sessões vão rodar sem Docker privado, diz o que falta e o comando termina com código zero

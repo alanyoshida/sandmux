@@ -89,6 +89,86 @@ pub fn run() -> Result<i32> {
         }
     }
 
+    match sandmux_policy::limits::support() {
+        Ok(()) => {
+            let total = sandmux_policy::limits::mem_total().unwrap_or(0);
+            line(
+                true,
+                "tetos de memória e de processos (escopo do systemd de usuário)",
+                &format!(
+                    "padrão: {} de memória (75% da RAM) e 8192 processos",
+                    sandmux_policy::limits::human(total / 100 * 75)
+                ),
+            )
+        }
+        Err(e) => {
+            line(
+                false,
+                "tetos de memória e de processos (escopo do systemd de usuário)",
+                &e,
+            );
+            println!(
+                "  Sem eles, as sessões rodam sem teto de memória e de processos. O sandbox\n  funciona mesmo assim. Os tetos precisam do systemd de usuário (systemd-run\n  --user) com os controladores memory e pids delegados ao user@<uid>.service."
+            );
+        }
+    }
+
+    if let Ok(h) = Host::detect() {
+        match sandmux::docker::support(&h.user, h.uid) {
+            Ok(_) => {
+                line(
+                    true,
+                    "Docker privado por pasta (Docker sem root)",
+                    "rede pelo gateway do sandmux",
+                );
+            }
+            Err(e) => {
+                line(false, "Docker privado por pasta (Docker sem root)", &e);
+                println!(
+                    "  Sem ele, as sessões rodam sem Docker privado: o `docker` lá dentro mostra\n  este motivo. O sandbox funciona mesmo assim. O Docker sem root precisa do\n  rootlesskit, do dockerd, do containerd, do newuidmap e do newgidmap, e de uma\n  faixa de 65536 IDs do usuário em /etc/subuid e /etc/subgid."
+                );
+            }
+        }
+        match sandmux::docker::registry_binary() {
+            Some(b) => line(
+                true,
+                "cache de imagens do Docker entre pastas",
+                &format!("espelho do Docker Hub com {}", b.display()),
+            ),
+            None => {
+                line(
+                    false,
+                    "cache de imagens do Docker entre pastas",
+                    "desligado: falta o binário registry",
+                );
+                println!(
+                    "  Sem ele, cada pasta baixa as próprias imagens. Para ligar o cache, instale o\n  pacote docker-registry (Debian e Ubuntu) ou o binário registry do projeto\n  distribution."
+                );
+            }
+        }
+    }
+
+    let tun = std::fs::metadata("/dev/net/tun")
+        .map(|m| std::os::unix::fs::FileTypeExt::is_char_device(&m.file_type()))
+        .unwrap_or(false);
+    let log = sandmux::paths::state_dir().join("net");
+    if tun {
+        line(
+            true,
+            "rede pelo gateway (namespace de rede próprio e TUN)",
+            &format!("registro em {}", log.display()),
+        );
+    } else {
+        line(
+            false,
+            "rede pelo gateway (namespace de rede próprio e TUN)",
+            "/dev/net/tun não existe",
+        );
+        println!(
+            "  Sem o TUN, só o modo sem rede funciona (`--network sem-rede` ou\n  `network = \"sem-rede\"`). O módulo do kernel é o `tun`."
+        );
+    }
+
     if r.apparmor_restrict_userns == Some(true) && r.userns.is_ok() {
         println!(
             "\n  Nota: a distro restringe user namespaces por AppArmor, e o lançador passou na\n  verificação (o perfil do sandmux-run está carregado, ou o processo que chamou\n  o sandmux tem um perfil que libera user namespaces)."
@@ -102,11 +182,19 @@ pub fn run() -> Result<i32> {
             "Pasta de entrada (visível em ~/inbox, somente leitura): {}",
             layout.inbox().display()
         );
+        // Dois gateways do hermes no mesmo bot disputam as mensagens.
+        if let Some(w) = sandmux_policy::hermes_config::host_gateway_alive(&host.home) {
+            println!("Hermes: {w}");
+        }
     }
     config_section();
     daemon_section();
-    println!("\nRede: nesta versão o sandbox usa a rede do host, sem filtro e sem registro.");
-    println!("Arquivos de segredo que já estão na pasta de trabalho ficam legíveis pelo agente.");
+    println!(
+        "\nRede: o sandbox sai pelo gateway do sandmux, com o modo de rede, a denylist e o\n  registro de cada conexão (`sandmux net`)."
+    );
+    println!(
+        "Arquivos com cara de segredo na pasta de trabalho ficam escondidos do agente\n  (`sandmux files` e a política de arquivos)."
+    );
 
     Ok(if r.can_launch() { 0 } else { 1 })
 }

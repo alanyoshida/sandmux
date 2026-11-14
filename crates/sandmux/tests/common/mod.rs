@@ -130,6 +130,8 @@ pub fn base_spec(command: Vec<String>) -> LaunchSpec {
         ],
         command,
         cwd: "/tmp".into(),
+        network: None,
+        files: None,
     }
 }
 

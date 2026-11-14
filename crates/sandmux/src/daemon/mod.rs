@@ -8,8 +8,14 @@
 //! fica sob um único mutex, nunca segurado durante I/O bloqueante.
 
 mod conn;
+mod db;
+mod docker;
+mod folders;
+mod net;
 mod session;
+mod sshagent;
 pub mod store;
+pub mod vault;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
@@ -42,6 +48,10 @@ pub struct Shared {
     pub protocol: u32,
     pub history: usize,
     pub pid: u32,
+    /// Docker privado de cada pasta.
+    pub docker: docker::Engines,
+    /// Cofre de segredos, trancado ao subir.
+    pub vault: Mutex<vault::VaultState>,
 }
 
 pub struct State {
@@ -74,6 +84,9 @@ impl Shared {
                     opts: s.opts.clone(),
                     pass_env: s.pass_env.clone(),
                     state: s.state.clone(),
+                    launches: s.launches,
+                    tags: s.tags.clone(),
+                    vault_env: s.vault_env,
                 })
                 .collect(),
         };
@@ -99,6 +112,7 @@ impl Shared {
         for pid in &pids {
             session::terminate(*pid);
         }
+        self.docker.stop_all();
         if !self.wait_until(Duration::from_secs(5), |st| {
             st.sessions.values().all(|s| s.pid().is_none())
         }) {
@@ -143,7 +157,7 @@ impl Shared {
     }
 
     /// Ambiente usado quando não há cliente (restauração).
-    fn default_vars(&self) -> BTreeMap<String, String> {
+    pub fn default_vars(&self) -> BTreeMap<String, String> {
         let mut v = BTreeMap::new();
         v.insert("TERM".into(), "xterm-256color".into());
         for k in ["LANG", "TZ", "COLORTERM"] {
@@ -242,6 +256,11 @@ fn run(history: usize) -> Result<()> {
     std::env::set_current_dir("/")?;
 
     let base = Host::detect()?;
+    let base_data = base.data_dir.clone();
+    // Com o cofre aberto, os segredos ficam na memória do daemon: nem o
+    // `/proc/<pid>/mem` nem um core dump os entregam.
+    // SAFETY: prctl com argumentos numéricos.
+    unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
     let dir = paths::runtime_dir();
     paths::ensure_runtime_dir(&dir)?;
     let Some(instance) = take_instance_lock(&paths::lock_path())? else {
@@ -281,6 +300,8 @@ fn run(history: usize) -> Result<()> {
         protocol,
         history,
         pid: std::process::id(),
+        docker: docker::Engines::default(),
+        vault: Mutex::new(vault::VaultState::new(&base_data)),
     });
     eprintln!(
         "sandmuxd: ouvindo em {} (PID {}, protocolo {protocol})",
@@ -299,6 +320,12 @@ fn run(history: usize) -> Result<()> {
     }
 
     restore(&shared);
+    net::start_retention(shared.clone());
+    // Slices do Docker que ficaram de um daemon derrubado, já sem processos.
+    let _ = std::thread::Builder::new()
+        .name("slices-velhas".into())
+        .spawn(docker::stop_empty_slices);
+    net::start_policy_watch(shared.clone());
 
     // SAFETY: getuid não falha.
     let me = unsafe { libc::getuid() };
@@ -319,21 +346,30 @@ fn run(history: usize) -> Result<()> {
 /// Por que uma sessão viva não pode voltar sozinha: pasta apagada,
 /// configuração inválida, perfil que sumiu ou variáveis de `pass-env`, cujos
 /// valores nunca vão para o disco.
-fn blocked_restore(shared: &Shared, opts: &LaunchOptions, id: u32) -> Option<String> {
+/// Por que uma sessão viva não pode voltar sozinha.
+enum Blocked {
+    /// Precisa de valores de `pass-env`.
+    PassEnv(String),
+    Other(String),
+}
+
+fn blocked_restore(shared: &Shared, opts: &LaunchOptions, id: u32) -> Option<Blocked> {
     if !opts.workdir.is_dir() {
-        return Some(format!(
+        return Some(Blocked::Other(format!(
             "a pasta de trabalho {} não existe mais",
             opts.workdir.display()
-        ));
+        )));
     }
     let mut host = shared.base.clone();
     host.cwd = opts.workdir.clone();
     match crate::launch::effective(&host, opts) {
-        Err(e) => Some(format!("{e:#}; corrija e rode `sandmux restart {id}`")),
-        Ok(eff) if !eff.pass_env.is_empty() => Some(format!(
+        Err(e) => Some(Blocked::Other(format!(
+            "{e:#}; corrija e rode `sandmux restart {id}`"
+        ))),
+        Ok(eff) if !eff.pass_env.is_empty() => Some(Blocked::PassEnv(format!(
             "precisa de --pass-env {}; rode `sandmux restart {id}` num terminal com as variáveis",
             eff.pass_env_names().join(", ")
-        )),
+        ))),
         Ok(_) => None,
     }
 }
@@ -352,15 +388,40 @@ fn restore(shared: &Arc<Shared>) {
         st.next_id = saved.next_id.max(1);
         for s in saved.sessions {
             let mut state = s.state.clone();
+            // Um gateway que esperava para reiniciar volta como vivo.
+            if s.opts.gateway && matches!(state, SessionState::Reiniciando { .. }) {
+                state = SessionState::Viva;
+            }
+            // O gateway espera o cofre (os tokens dos canais estão nele).
+            let vault_exists = shared
+                .vault
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .exists();
+            // A aba de chat também: a chave do provedor está nele.
+            if state == SessionState::Viva
+                && (s.opts.gateway || session::is_chat(&s.opts))
+                && vault_exists
+            {
+                state = SessionState::AguardandoCofre;
+            }
             if state == SessionState::Viva {
-                if let Some(motivo) = blocked_restore(shared, &s.opts, s.id) {
-                    state = SessionState::Parada { motivo };
-                } else {
-                    relaunch.push(s.id);
+                match blocked_restore(shared, &s.opts, s.id) {
+                    // Os valores estão no cofre: volta no desbloqueio.
+                    Some(Blocked::PassEnv(_)) if s.vault_env => {
+                        state = SessionState::AguardandoCofre;
+                    }
+                    Some(Blocked::PassEnv(motivo) | Blocked::Other(motivo)) => {
+                        state = SessionState::Parada { motivo };
+                    }
+                    None => relaunch.push(s.id),
                 }
             }
             let mut sess = Session::new(s.id, s.name, s.opts, state, shared.history, None);
             sess.pass_env = s.pass_env;
+            sess.launches = s.launches;
+            sess.tags = s.tags;
+            sess.vault_env = s.vault_env;
             st.sessions.insert(s.id, sess);
         }
         shared.persist(&st);

@@ -17,7 +17,7 @@ O sandmux MUST ler a configuração de `$XDG_CONFIG_HOME/sandmux/config.toml`, o
 - **THEN** o sandmux usa esse arquivo e ignora `~/.config/sandmux/config.toml`
 
 ### Requirement: Seções do arquivo
-O arquivo MUST aceitar três tipos de seção: `[global]`, que vale para toda execução; `[profile.<nome>]`, um perfil nomeado; e `[project."<pasta>"]`, o perfil de um projeto, ligado ao caminho absoluto de uma pasta. Nenhuma outra seção MUST ser aceita.
+O arquivo MUST aceitar cinco tipos de seção: `[global]`, que vale para toda execução; `[profile.<nome>]`, um perfil nomeado; `[project."<pasta>"]`, o perfil de um projeto, ligado ao caminho absoluto de uma pasta; `[tui]`, com a tecla de prefixo e os atalhos da interface; e `[assistant]`, com os modelos do assistente (`chat-model`, `command-model` e `models`) e, em `[assistant.provider.<nome>]`, a `url` de cada provedor próprio. `[tui]` e `[assistant]` não são camadas de política. Nenhuma outra seção MUST ser aceita.
 
 #### Scenario: As três seções
 - **WHEN** o arquivo tem `[global]`, `[profile.web]` e `[project."/home/ana/proj"]`
@@ -31,8 +31,24 @@ O arquivo MUST aceitar três tipos de seção: `[global]`, que vale para toda ex
 - **WHEN** o arquivo tem `[project."proj"]`
 - **THEN** o arquivo é considerado inválido
 
+#### Scenario: Seção da interface
+- **WHEN** o arquivo tem `[tui]` com `prefix = "C-a"` e uma chave desconhecida `cor = 1`
+- **THEN** o arquivo é considerado inválido, citando a chave `cor` e a linha
+
+#### Scenario: Seção do assistente
+- **WHEN** o arquivo tem `[assistant]` com `chat-model = "openrouter/x"` e `[assistant.provider.local]` com `url = "http://host.sandmux.internal:11434/v1"`
+- **THEN** o arquivo é aceito, e uma chave desconhecida em `[assistant]` o torna inválido, citando a chave e a linha
+
+#### Scenario: Modelo de comando
+- **WHEN** o arquivo tem `[assistant]` com `command-model = "openrouter/x"`
+- **THEN** o arquivo é aceito, e um `command-model` com provedor desconhecido o torna inválido
+
 ### Requirement: Chaves de ajuste
-Cada seção MUST aceitar só estas chaves: `ro` e `rw`, listas de caminhos absolutos ou iniciados por `~/`; `pass-env`, lista de nomes de variáveis; e `repo`, `kvm`, `gpu` e `clipboard`, valores verdadeiro ou falso. Cada chave MUST ter o mesmo efeito da opção correspondente do `run`: `--ro`, `--rw`, `--pass-env`, `--repo`, `--kvm`, `--no-gpu` (quando `gpu` é falso) e `--allow-clipboard`.
+Cada seção MUST aceitar só as chaves do cenário "Chaves aceitas", cada uma com o mesmo efeito da opção correspondente do `run`. As chaves `net-log-days` (número de dias) e `net-log-max` (tamanho) MUST ser aceitas só em `[global]`.
+
+#### Scenario: Chaves aceitas
+- **WHEN** o usuário escreve uma seção com cada chave aceita
+- **THEN** o arquivo vale com `ro` e `rw` (caminhos absolutos ou iniciados por `~/`, como `--ro` e `--rw`), `pass-env` (nomes de variáveis, como `--pass-env`), `repo`, `kvm`, `gpu` e `clipboard` (verdadeiro ou falso, como `--repo`, `--kvm`, `--no-gpu` quando `gpu` é falso e `--allow-clipboard`), `memory` (porcentagem, tamanho ou `"max"`, como `--memory`), `processes` (número ou `"max"`, como `--processes`), `network` (o modo, como `--network`), `deny` e `allow` (padrões de destino, como `--deny` e `--allow`), `allow-off` e `catalog-off` (padrões desligados), `catalog` (grupos do catálogo de domínios comuns), `decrypt` (padrões de destino decifrados, como `--decrypt`) `ssh-keys` (nomes das chaves SSH do cofre, ou `"*"` para todas, como `--ssh-key`), `file-deny` e `file-allow` (padrões de arquivo, como `--file-deny` e `--file-allow`), `secret-files` e `secret-files-off` (padrões somados e desligados da lista de segredos), `mcp-deny` e `mcp-allow` (nomes de servidores MCP, como `--mcp-deny` e `--mcp-allow`), `db` (nomes de conexões de banco do cofre, ou `"*"`, como `--db`), `ports` (portas de entrada, `8642` ou `8443@0.0.0.0`, como `--port`)
 
 #### Scenario: Pasta extra no perfil
 - **WHEN** o perfil do projeto tem `ro = ["~/docs"]` e o usuário roda `sandmux run shell` na pasta do projeto
@@ -44,6 +60,22 @@ Cada seção MUST aceitar só estas chaves: `ro` e `rw`, listas de caminhos abso
 
 #### Scenario: Caminho relativo
 - **WHEN** a seção `[global]` tem `rw = ["saida"]`
+- **THEN** o arquivo é considerado inválido
+
+#### Scenario: Teto inválido
+- **WHEN** a seção `[global]` tem `memory = "muito"` ou `processes = 0`
+- **THEN** o arquivo é considerado inválido, com a linha e os formatos aceitos na mensagem
+
+#### Scenario: Chave SSH no perfil
+- **WHEN** o perfil do projeto tem `ssh-keys = ["github"]` e o usuário roda `sandmux run shell` na pasta do projeto
+- **THEN** a sessão tem o agente SSH com a chave `github`
+
+#### Scenario: Padrão de arquivo inválido
+- **WHEN** a seção `[global]` tem `file-deny = [""]`
+- **THEN** o arquivo é considerado inválido
+
+#### Scenario: Retenção fora do global
+- **WHEN** um perfil de projeto tem `net-log-days = 7`
 - **THEN** o arquivo é considerado inválido
 
 ### Requirement: Arquivo inválido recusa o lançamento
@@ -80,7 +112,7 @@ A política de um lançamento MUST ser composta por camadas, da menos para a mai
 - **THEN** `/dev/kvm` existe dentro do sandbox lançado na pasta do projeto
 
 ### Requirement: Precedência nas chaves de liga e desliga
-Nas chaves `repo`, `kvm`, `gpu` e `clipboard`, MUST valer o valor da camada mais específica que definiu a chave.
+Nas chaves `repo`, `kvm`, `gpu`, `clipboard`, `memory` e `processes`, MUST valer o valor da camada mais específica que definiu a chave.
 
 #### Scenario: Projeto afrouxa o global
 - **WHEN** `[global]` tem `gpu = false` e o perfil do projeto tem `gpu = true`
@@ -89,6 +121,10 @@ Nas chaves `repo`, `kvm`, `gpu` e `clipboard`, MUST valer o valor da camada mais
 #### Scenario: Opção do run vence o perfil
 - **WHEN** o perfil do projeto tem `kvm = true` e o usuário roda `sandmux run shell --no-kvm` na pasta do projeto
 - **THEN** `/dev/kvm` não existe dentro do sandbox
+
+#### Scenario: Teto do projeto vence o global
+- **WHEN** `[global]` tem `memory = "8G"` e o perfil do projeto tem `memory = "max"`
+- **THEN** o sandbox lançado na pasta do projeto não tem teto de memória
 
 ### Requirement: Listas acumuladas entre camadas
 Nas chaves `ro`, `rw` e `pass-env`, os itens de todas as camadas MUST se somar. Quando o mesmo caminho aparece em `ro` numa camada e em `rw` noutra, MUST valer a camada mais específica. O mesmo caminho em `ro` e `rw` da mesma camada MUST tornar a configuração inválida.

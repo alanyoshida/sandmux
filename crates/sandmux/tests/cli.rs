@@ -43,7 +43,15 @@ fn doctor_com_suporte_completo() {
         assert!(s.contains(l), "{l}:\n{s}");
     }
     assert!(s.contains(&e.data_dir().join("inbox").display().to_string()));
-    assert!(s.contains("sem filtro e sem registro"));
+    assert!(
+        s.contains("[ok  ] rede pelo gateway (namespace de rede próprio e TUN)"),
+        "{s}"
+    );
+    assert!(
+        s.contains(&e.state.join("sandmux/net").display().to_string()),
+        "{s}"
+    );
+    assert!(s.contains("sandmux net"), "{s}");
 }
 
 #[test]
@@ -179,5 +187,75 @@ fn ajuda_lista_os_comandos_de_sessao() {
     assert!(
         help.contains("--allow-clipboard") && help.contains("Ctrl+b d"),
         "{help}"
+    );
+}
+
+#[test]
+fn mcp_listar_e_desabilitar_na_aba() {
+    let e = Env::new();
+    // O opencode do HOME sintético com dois servidores.
+    let oc = e.data_dir().join("homes/opencode/.config/opencode");
+    std::fs::create_dir_all(&oc).unwrap();
+    std::fs::write(
+        oc.join("opencode.json"),
+        r#"{"mcp": {"github": {"type": "remote", "url": "https://api.github.test/mcp"}, "fs": {"type": "local", "command": ["fs-mcp"]}}}"#,
+    )
+    .unwrap();
+    let o = e.run(&e.work, &["mcp", "list", "--harness", "opencode"]);
+    let out = stdout(&o);
+    assert!(
+        out.contains("github  remote  global  https://api.github.test/mcp"),
+        "{out}\n{}",
+        stderr(&o)
+    );
+    assert!(
+        out.contains("habilitado") && out.contains("fs  local  global  fs-mcp"),
+        "{out}"
+    );
+    e.write_config("[global]\nmcp-deny = [\"github\"]\n");
+    let out = stdout(&e.run(&e.work, &["mcp", "list"]));
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("desabilitado") && l.contains("github")),
+        "{out}"
+    );
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("habilitado") && l.contains("fs")),
+        "{out}"
+    );
+    let o = e.run(&e.work, &["mcp", "deny", "a b", "1"]);
+    assert!(
+        !o.status.success() && stderr(&o).contains("inválido"),
+        "{}",
+        stderr(&o)
+    );
+}
+
+#[test]
+fn setup_sem_sudo_mostra_os_comandos_do_perfil() {
+    let e = Env::new();
+    let o = e.run(&e.work, &["setup", "--no-sudo", "--no-daemon"]);
+    let out = stdout(&o);
+    assert!(out.contains("Daemon: não iniciado"), "{out}");
+    assert!(out.contains("sandmux doctor"), "{out}");
+    let knob =
+        std::path::Path::new("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").exists();
+    let installed = std::fs::read_to_string("/etc/apparmor.d/sandmux-run").ok();
+    if !knob {
+        assert!(out.contains("o perfil não é preciso"), "{out}");
+    } else if installed.is_none() {
+        // Sem terminal e sem sudo: os comandos, com o caminho deste lançador.
+        assert!(
+            out.contains("sudo tee /etc/apparmor.d/sandmux-run"),
+            "{out}"
+        );
+        assert!(out.contains("sandmux-run flags=(unconfined)"), "{out}");
+        assert!(!o.status.success());
+    }
+    // Nada foi gravado em /etc.
+    assert_eq!(
+        std::fs::read_to_string("/etc/apparmor.d/sandmux-run").ok(),
+        installed
     );
 }

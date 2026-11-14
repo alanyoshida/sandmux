@@ -22,6 +22,14 @@ pub struct SavedSession {
     #[serde(default)]
     pub pass_env: Vec<String>,
     pub state: SessionState,
+    /// Lançamentos feitos e as etiquetas de rede dos últimos.
+    #[serde(default)]
+    pub launches: u32,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Os valores de `pass-env` estão no cofre.
+    #[serde(default)]
+    pub vault_env: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -141,6 +149,9 @@ mod tests {
                 opts,
                 pass_env: vec!["OPENROUTER_API_KEY".into()],
                 state: SessionState::Encerrada { codigo: 2 },
+                launches: 3,
+                tags: vec!["s2-2".into(), "s2-3".into()],
+                vault_env: true,
             }],
         };
         save(&p, &s).unwrap();
@@ -190,6 +201,21 @@ mod tests {
     }
 
     #[test]
+    fn le_a_lista_do_formato_2_sem_tetos() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("sessions.json");
+        let v2 = r#"{"version":2,"next_id":2,"sessions":[
+          {"id":1,"name":"shell:a","opts":{"harness":"shell","workdir":"/a","ro":[],"rw":[],
+            "pass_env":[],"profile":"vm","repo":null,"kvm":true,"gpu":null,"allow_clipboard":null,"args":[]},
+            "pass_env":[],"state":{"estado":"viva"}}]}"#;
+        std::fs::write(&p, v2).unwrap();
+        let s = load(&p).unwrap();
+        let o = &s.sessions[0].opts;
+        assert_eq!(o.profile.as_deref(), Some("vm"));
+        assert_eq!((o.memory.as_deref(), o.processes.as_deref()), (None, None));
+    }
+
+    #[test]
     fn lista_guarda_o_nome_do_perfil_e_nao_as_chaves() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("sessions.json");
@@ -204,6 +230,9 @@ mod tests {
                 opts,
                 pass_env: vec![],
                 state: SessionState::Viva,
+                launches: 0,
+                tags: vec![],
+                vault_env: false,
             }],
         };
         save(&p, &s).unwrap();

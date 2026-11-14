@@ -21,6 +21,10 @@ name = "sandmux-run"
 path = "src/bin/sandmux-run.rs"
 
 [[bin]]
+name = "sandmux-chat"
+path = "src/bin/sandmux-chat.rs"
+
+[[bin]]
 name = "sandmux-probe"
 path = "src/bin/sandmux-probe.rs"
 
@@ -28,6 +32,9 @@ path = "src/bin/sandmux-probe.rs"
 sandmux-spec.workspace = true
 sandmux-launcher.workspace = true
 sandmux-policy.workspace = true
+sandmux-net.workspace = true
+sandmux-vault.workspace = true
+zeroize.workspace = true
 sandmux-import.workspace = true
 sandmux-proto.workspace = true
 anyhow.workspace = true
@@ -37,9 +44,28 @@ nix.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 vt100.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+arboard.workspace = true
+png.workspace = true
+ssh-key.workspace = true
+rsa.workspace = true
+signature.workspace = true
+tokio-postgres.workspace = true
+mysql_async.workspace = true
+tokio.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+unicode-width.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 tempfile.workspace = true
+rustls.workspace = true
 vt100.workspace = true
 serde_json.workspace = true
 

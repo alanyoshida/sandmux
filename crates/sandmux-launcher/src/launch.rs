@@ -23,7 +23,7 @@ use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::{Pid, getgid, getuid, pipe2};
 use sandmux_spec::LaunchSpec;
 
-use crate::{landlock_rules, mounts, seccomp, sys};
+use crate::{connector, landlock_rules, mounts, net, seccomp, sys};
 
 /// Código de saída quando o confinamento não pôde ser montado.
 pub const EXIT_SETUP: i32 = 125;
@@ -98,6 +98,20 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
         pipe2(nix::fcntl::OFlag::O_CLOEXEC).map_err(|e| LaunchError::Setup(e.to_string()))?;
     let (err_r, err_w) =
         pipe2(nix::fcntl::OFlag::O_CLOEXEC).map_err(|e| LaunchError::Setup(e.to_string()))?;
+    // O TUN do modo aberta volta do filho por este par.
+    let open = spec
+        .network
+        .as_ref()
+        .is_some_and(|n| n.mode == sandmux_spec::NetMode::Open);
+    let (tun_r, tun_w) = if open {
+        let (r, w) = net::pair().map_err(|e| LaunchError::Setup(e.to_string()))?;
+        (Some(r), Some(w))
+    } else {
+        (None, None)
+    };
+
+    // O descritor do filtro das aberturas volta do comando por este par.
+    let (files_r, files_w) = net::pair().map_err(|e| LaunchError::Setup(e.to_string()))?;
 
     let mask = forwarded_signals();
     sigprocmask(SigmaskHow::SIG_BLOCK, Some(&mask), None)
@@ -105,11 +119,14 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
     ignore(Signal::SIGINT);
     ignore(Signal::SIGQUIT);
 
-    let flags = libc::CLONE_NEWUSER
+    let mut flags = libc::CLONE_NEWUSER
         | libc::CLONE_NEWNS
         | libc::CLONE_NEWPID
         | libc::CLONE_NEWIPC
         | libc::CLONE_NEWUTS;
+    if spec.network.is_some() {
+        flags |= libc::CLONE_NEWNET;
+    }
     // SAFETY: o lançador tem uma única thread neste ponto.
     let pid = match unsafe { sys::clone_fork(flags) } {
         Ok(p) => p,
@@ -122,11 +139,15 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
     if pid == 0 {
         drop(sync_w);
         drop(err_r);
-        init_process(spec, sync_r, err_w);
+        drop(tun_r);
+        drop(files_r);
+        init_process(spec, sync_r, err_w, tun_w, files_w);
     }
     let child = Pid::from_raw(pid);
     drop(sync_r);
     drop(err_w);
+    drop(tun_w);
+    drop(files_w);
 
     if let Err(e) = write_id_maps(child) {
         let _ = kill(child, Signal::SIGKILL);
@@ -135,11 +156,121 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
             "não foi possível mapear o usuário no user namespace ({e}); rode `sandmux doctor`"
         )));
     }
+    // O auxiliar de conexão das portas precisa de uma só thread e do /proc
+    // do processo 1 aberto, antes de ele se fechar: nasce antes da liberação.
+    let connector = if open {
+        // SAFETY: o lançador ainda tem uma única thread.
+        unsafe { connector::spawn(child) }.ok()
+    } else {
+        None
+    };
+    // O auxiliar de nomes também: entra nos namespaces antes da liberação.
+    // SAFETY: o lançador ainda tem uma única thread.
+    let namer = unsafe { crate::namer::spawn(child, &spec.landlock) }.ok();
+    // E o de montagem, nas sessões com socket de controle (pastas ao vivo).
+    let control = spec.files.as_ref().and_then(|f| f.control_socket.clone());
+    let mounter = if control.is_some() {
+        // SAFETY: o lançador ainda tem uma única thread.
+        unsafe { crate::mounter::spawn(child) }.ok()
+    } else {
+        None
+    };
     let mut sync_w = fs::File::from(sync_w);
     let _ = sync_w.write_all(b"1");
     drop(sync_w);
 
+    // As aberturas de arquivo do comando: o descritor do filtro chega quando
+    // o comando o instala; uma thread espera por ele.
+    {
+        let spec = spec.clone();
+        let _ = std::thread::Builder::new()
+            .name("sandmux-files".into())
+            .spawn(move || {
+                if let Ok(Some(listener)) = net::recv_fd(&files_r) {
+                    // A raiz está pronta: o auxiliar de nomes aplica o Landlock.
+                    if let Some(n) = &namer {
+                        n.ready();
+                    }
+                    let _ = crate::files::spawn(listener, &spec, namer);
+                }
+            });
+    }
+
+    // Controle das pastas ao vivo: o daemon manda o pedido do auxiliar de
+    // montagem, numa linha JSON, e recebe a resposta.
+    if let (Some(path), Some(m)) = (control.clone(), mounter) {
+        let _ = std::fs::remove_file(&path);
+        if let Ok(l) = std::os::unix::net::UnixListener::bind(&path) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+            let _ = std::thread::Builder::new()
+                .name("sandmux-control".into())
+                .spawn(move || {
+                    for c in l.incoming().flatten() {
+                        let mut line = String::new();
+                        let mut r = std::io::BufReader::new(&c);
+                        if std::io::BufRead::read_line(&mut r, &mut line).is_err() {
+                            continue;
+                        }
+                        let reply = match serde_json::from_str::<crate::mounter::Request>(&line) {
+                            Ok(req) => m.call(&req),
+                            Err(e) => Err(format!("pedido inválido: {e}")),
+                        };
+                        let out =
+                            serde_json::to_string(&crate::mounter::Reply { error: reply.err() })
+                                .unwrap_or_default();
+                        let _ = (&c).write_all(format!("{out}\n").as_bytes());
+                    }
+                });
+        }
+    }
+
+    // O gateway nasce depois do clone: até aqui o lançador tem uma só thread.
+    // As threads dele herdam a máscara de sinais bloqueados.
+    let mut gateway = None;
+    if let (Some(r), Some(n)) = (tun_r, spec.network.as_ref())
+        && let Ok(Some(tun)) = net::recv_fd(&r)
+    {
+        let cfg = sandmux_net::Config {
+            log_dir: n.log_dir.clone(),
+            tag: n.tag.clone(),
+            workdir: n.workdir.clone(),
+            nameservers: n
+                .nameservers
+                .iter()
+                .filter_map(|s| s.parse().ok())
+                .collect(),
+            policy: n.policy.clone(),
+            policy_file: n.policy_file.clone(),
+            ports: connector.map(|c| sandmux_net::ports::Ports {
+                pid: child.as_raw(),
+                file: n.ports_file.clone(),
+                connector: sandmux_net::ports::Connector::new(c),
+            }),
+            aliases: Vec::new(),
+            tls: n.tls.clone(),
+            vault: n.vault.clone(),
+        };
+        match sandmux_net::spawn(tun, cfg) {
+            Ok(g) => gateway = Some(g),
+            Err(e) => {
+                let _ = kill(child, Signal::SIGKILL);
+                let _ = waitpid(child, None);
+                return Err(LaunchError::Setup(format!(
+                    "não foi possível subir o gateway de rede: {e}"
+                )));
+            }
+        }
+    }
+
     let code = supervise(child, &mask);
+    if let Some(p) = &control {
+        let _ = fs::remove_file(p);
+    }
+    // As conexões que ainda estavam abertas gravam a linha delas.
+    if let Some(g) = gateway {
+        g.shutdown(std::time::Duration::from_secs(1));
+    }
 
     let mut msg = Vec::new();
     let _ = fs::File::from(err_r).read_to_end(&mut msg);
@@ -207,7 +338,13 @@ fn report(err_w: &OwnedFd, kind: u8, msg: &str) {
 }
 
 /// Processo 1 do sandbox. Nunca retorna.
-fn init_process(spec: &LaunchSpec, sync_r: OwnedFd, err_w: OwnedFd) -> ! {
+fn init_process(
+    spec: &LaunchSpec,
+    sync_r: OwnedFd,
+    err_w: OwnedFd,
+    tun_w: Option<OwnedFd>,
+    files_w: OwnedFd,
+) -> ! {
     // SAFETY: prctl com argumentos numéricos.
     unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) };
     // Dentro do pid namespace novo, getppid() devolve 0. Se o supervisor tiver
@@ -225,6 +362,21 @@ fn init_process(spec: &LaunchSpec, sync_r: OwnedFd, err_w: OwnedFd) -> ! {
     // SAFETY: prctl com argumentos numéricos.
     unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
 
+    // A rede antes da raiz nova: o /dev/net/tun do host ainda está visível.
+    if let Some(n) = &spec.network {
+        let res =
+            net::setup(n.mode == sandmux_spec::NetMode::Open).and_then(|tun| match (tun, &tun_w) {
+                (Some(t), Some(w)) => net::send_fd(w, &t),
+                _ => Ok(()),
+            });
+        if let Err(e) = res {
+            report(&err_w, MSG_SETUP, &format!("falha ao montar a rede: {e}"));
+            // SAFETY: saída imediata do filho.
+            unsafe { libc::_exit(EXIT_SETUP) };
+        }
+    }
+    drop(tun_w);
+
     if let Err(e) = mounts::setup_root(spec) {
         report(
             &err_w,
@@ -237,7 +389,7 @@ fn init_process(spec: &LaunchSpec, sync_r: OwnedFd, err_w: OwnedFd) -> ! {
 
     // SAFETY: o processo 1 tem uma única thread.
     let cmd = match unsafe { nix::unistd::fork() } {
-        Ok(nix::unistd::ForkResult::Child) => command_process(spec, &err_w),
+        Ok(nix::unistd::ForkResult::Child) => command_process(spec, &err_w, &files_w),
         Ok(nix::unistd::ForkResult::Parent { child }) => child,
         Err(e) => {
             report(&err_w, MSG_SETUP, &format!("fork do comando: {e}"));
@@ -246,6 +398,7 @@ fn init_process(spec: &LaunchSpec, sync_r: OwnedFd, err_w: OwnedFd) -> ! {
         }
     };
     drop(err_w);
+    drop(files_w);
 
     // O processo 1 não precisa de mais nada: sem capabilities e com o mesmo
     // filtro do comando.
@@ -284,7 +437,7 @@ fn init_process(spec: &LaunchSpec, sync_r: OwnedFd, err_w: OwnedFd) -> ! {
 }
 
 /// Processo do comando. Nunca retorna.
-fn command_process(spec: &LaunchSpec, err_w: &OwnedFd) -> ! {
+fn command_process(spec: &LaunchSpec, err_w: &OwnedFd, files_w: &OwnedFd) -> ! {
     let fail = |kind: u8, msg: String| -> ! {
         report(err_w, kind, &msg);
         // SAFETY: saída imediata do filho.
@@ -332,6 +485,16 @@ fn command_process(spec: &LaunchSpec, err_w: &OwnedFd) -> ! {
     if let Err(e) = seccomp::install(&spec.seccomp) {
         fail(MSG_SETUP, format!("seccomp: {e}"));
     }
+    // As aberturas de arquivo passam pelo supervisor. O descritor vai logo
+    // depois da instalação: uma abertura antes dele esperaria o supervisor.
+    match seccomp::install_notify() {
+        Ok(listener) => {
+            if let Err(e) = net::send_fd(files_w, &listener) {
+                fail(MSG_SETUP, format!("entregar o filtro das aberturas: {e}"));
+            }
+        }
+        Err(e) => fail(MSG_SETUP, format!("seccomp das aberturas: {e}")),
+    }
     if let Err(e) = sys::cloexec_from(3) {
         fail(MSG_SETUP, format!("fechar descritores herdados: {e}"));
     }
@@ -353,6 +516,59 @@ fn command_process(spec: &LaunchSpec, err_w: &OwnedFd) -> ! {
         .collect();
     let err = nix::unistd::execve(&prog_c, &argv, &envp).unwrap_err();
     fail(MSG_EXEC, format!("executar {}: {err}", program.display()));
+}
+
+/// Modo de visão: monta a raiz da especificação no mount namespace atual e
+/// executa o comando, sem criar namespaces, sem Landlock e sem seccomp. É
+/// chamado dentro de um user namespace que já confina o processo (o do
+/// `rootlesskit`, no Docker privado): o que limita o comando é a visão de
+/// arquivos.
+pub fn exec_view(spec: &LaunchSpec) -> LaunchError {
+    // A rede antes da raiz nova, com o /dev/net/tun do host à vista: o TUN
+    // vai para o daemon, que roda o gateway do Docker.
+    if let Some(sock) = spec.network.as_ref().and_then(|n| n.tun_socket.as_ref()) {
+        let sent = net::setup(true).and_then(|tun| {
+            let tun = tun.ok_or_else(|| std::io::Error::other("sem TUN"))?;
+            let s = std::os::unix::net::UnixStream::connect(sock)?;
+            net::send_fd_tagged(&OwnedFd::from(s), &tun, b'T')
+        });
+        if let Err(e) = sent {
+            return LaunchError::Setup(format!("falha ao montar a rede da visão: {e}"));
+        }
+    }
+    if let Err(e) = mounts::setup_root(spec) {
+        return LaunchError::Setup(format!("falha ao montar a visão: {e}"));
+    }
+    if let Err(e) = nix::unistd::chdir(&spec.cwd) {
+        return LaunchError::Setup(format!(
+            "entrar na pasta inicial {}: {e}",
+            spec.cwd.display()
+        ));
+    }
+    if let Err(e) = sys::cloexec_from(3) {
+        return LaunchError::Setup(format!("fechar descritores herdados: {e}"));
+    }
+    let Some(program) = resolve_program(&spec.command[0], spec.env_value("PATH")) else {
+        return LaunchError::Exec(format!("comando não encontrado: {}", spec.command[0]));
+    };
+    let to_c = |s: &[u8]| CString::new(s).unwrap_or_default();
+    let prog_c = to_c(program.as_os_str().as_bytes());
+    let argv: Vec<CString> = spec.command.iter().map(|a| to_c(a.as_bytes())).collect();
+    // As variáveis do rootlesskit, que o dockerd usa para o modo sem root,
+    // mais as da especificação.
+    let inherited = std::env::vars()
+        .filter(|(k, _)| k.starts_with("ROOTLESSKIT_") || k.starts_with("_ROOTLESSKIT_"))
+        .filter(|(k, _)| !spec.env.iter().any(|v| &v.name == k));
+    let envp: Vec<CString> = inherited
+        .map(|(k, v)| to_c(format!("{k}={v}").as_bytes()))
+        .chain(
+            spec.env
+                .iter()
+                .map(|v| to_c(format!("{}={}", v.name, v.value).as_bytes())),
+        )
+        .collect();
+    let err = nix::unistd::execve(&prog_c, &argv, &envp).unwrap_err();
+    LaunchError::Exec(format!("executar {}: {err}", program.display()))
 }
 
 /// Procura o programa no `PATH` do ambiente do sandbox, como `execvp`.

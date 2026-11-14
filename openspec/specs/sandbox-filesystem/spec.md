@@ -82,8 +82,8 @@ As pastas de sistema do host (`/usr`, `/bin`, `/sbin`, `/lib*`, `/opt`, `/etc`, 
 - **THEN** não aparece nenhum arquivo ou socket do host
 
 #### Scenario: Pasta fora da visão
-- **WHEN** um processo confinado tenta ler `/mnt`, `/media`, `/srv` ou `/root`
-- **THEN** o caminho não existe
+- **WHEN** um processo confinado tenta ler `/media`, `/srv` ou `/root`, ou lista `/mnt`
+- **THEN** os três primeiros não existem, e `/mnt` só tem o `sandmux` do sandmux (as pastas novas ao vivo); nada do `/mnt` do host aparece
 
 ### Requirement: Contas do sistema substituídas
 `/etc/passwd` e `/etc/group` MUST ser substituídos por versões geradas que contêm apenas o usuário do sandbox, `root` e `nobody`, e os grupos correspondentes. O usuário do sandbox MUST manter o nome, o UID, o GID e o caminho do HOME do usuário real.

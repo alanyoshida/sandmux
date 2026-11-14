@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+case "$1" in
+    remove|purge)
+        if command -v apparmor_parser >/dev/null 2>&1 && [ -d /sys/kernel/security/apparmor ]; then
+            apparmor_parser -R /etc/apparmor.d/sandmux-run 2>/dev/null || true
+        fi
+        ;;
+esac
+exit 0

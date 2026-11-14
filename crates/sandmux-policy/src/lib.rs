@@ -1,20 +1,26 @@
 //! Política do sandmux: baseline de segurança, toolchains, proteção do git e
 //! presets de harness, compostos numa [`sandmux_spec::LaunchSpec`].
 
+pub mod assistant;
 pub mod compose;
 pub mod config;
 pub mod git;
 pub mod hermes_config;
 pub mod home;
 pub mod host;
+pub mod knownhosts;
 pub mod layout;
+pub mod limits;
 pub mod lists;
+pub mod mcp;
+pub mod netcatalog;
 pub mod presets;
 pub mod toolchains;
+pub mod toolsecrets;
 
 use std::path::PathBuf;
 
-pub use compose::{Composed, LayerMode, RunOptions, check_dangerous, compose};
+pub use compose::{Composed, LayerMode, RunOptions, check_dangerous, compose, compose_docker_view};
 pub use host::Host;
 pub use layout::Layout;
 

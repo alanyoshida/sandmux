@@ -138,6 +138,31 @@ fn join(lines: Vec<String>, original: &str) -> String {
     s
 }
 
+/// PID do gateway do hermes num `gateway.pid` (JSON com `pid`, ou só o
+/// número).
+pub fn gateway_pid(text: &str) -> Option<i32> {
+    let t = text.trim();
+    if let Ok(n) = t.parse() {
+        return Some(n);
+    }
+    let v: serde_json::Value = serde_json::from_str(t).ok()?;
+    v.get("pid")?.as_i64().map(|n| n as i32)
+}
+
+/// Aviso quando o gateway do hermes do host (`~/.hermes/gateway.pid` do HOME
+/// real) está rodando: dois gateways no mesmo bot disputam as mensagens.
+pub fn host_gateway_alive(home: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(home.join(".hermes/gateway.pid")).ok()?;
+    let pid = gateway_pid(&text)?;
+    let cmd = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    // O hermes roda `... gateway run`: um argumento exatamente `gateway`.
+    cmd.split(|b| *b == 0).any(|a| a == b"gateway").then(|| {
+        format!(
+            "o gateway do hermes do host está rodando (PID {pid}): os dois disputam as mensagens dos mesmos bots; pare o do host com `hermes gateway stop`"
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +248,45 @@ mod tests {
                 .to_string();
             assert!(err.contains("K") && !err.contains(v), "{err}");
         }
+    }
+
+    #[test]
+    fn pid_do_gateway_do_host() {
+        assert_eq!(
+            gateway_pid(r#"{"pid": 2443, "kind": "hermes-gateway"}"#),
+            Some(2443)
+        );
+        assert_eq!(gateway_pid("77\n"), Some(77));
+        assert_eq!(gateway_pid("lixo"), None);
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(host_gateway_alive(d.path()), None);
+        std::fs::create_dir_all(d.path().join(".hermes")).unwrap();
+        // Um processo vivo que não é gateway: sem aviso.
+        let me = std::process::id();
+        std::fs::write(
+            d.path().join(".hermes/gateway.pid"),
+            format!("{{\"pid\": {me}}}"),
+        )
+        .unwrap();
+        assert_eq!(host_gateway_alive(d.path()), None);
+        // Um processo vivo com `gateway` na linha de comando: aviso.
+        let mut c = std::process::Command::new("sh")
+            .args(["-c", "sleep 5; true", "gateway"])
+            .spawn()
+            .unwrap();
+        std::fs::write(d.path().join(".hermes/gateway.pid"), c.id().to_string()).unwrap();
+        // Até o `exec` do sh, a linha de comando ainda é a do teste.
+        let mut w = None;
+        for _ in 0..50 {
+            w = host_gateway_alive(d.path());
+            if w.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let w = w.unwrap();
+        assert!(w.contains(&format!("PID {}", c.id())), "{w}");
+        let _ = c.kill();
+        let _ = c.wait();
     }
 }

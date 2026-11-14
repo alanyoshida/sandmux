@@ -6,6 +6,9 @@
 //! comando. O formato é JSON, com um campo de versão; um campo desconhecido ou
 //! uma versão diferente fazem a leitura falhar.
 
+pub mod files;
+pub mod net;
+
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +35,173 @@ pub struct LaunchSpec {
     pub command: Vec<String>,
     /// Pasta em que o comando começa, dentro do sandbox.
     pub cwd: PathBuf,
+    /// Rede do sandbox. Sem ela, o sandbox usa a rede do host (só a visão do
+    /// Docker privado e os testes do lançador).
+    #[serde(default)]
+    pub network: Option<NetworkSpec>,
+    /// Registro dos acessos às pastas do agente. Sem ele, as aberturas
+    /// continuam passando pelo supervisor, sem registro.
+    #[serde(default)]
+    pub files: Option<FilesSpec>,
+}
+
+/// Lugar das pastas novas dentro do sandbox.
+pub const FOLDERS_DIR: &str = "/mnt/sandmux";
+
+/// Uma pasta do host montada em `/mnt/sandmux/<name>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveFolder {
+    pub name: String,
+    pub path: PathBuf,
+    pub rw: bool,
+}
+
+impl LiveFolder {
+    /// Caminho dentro do sandbox.
+    pub fn dest(&self) -> PathBuf {
+        Path::new(FOLDERS_DIR).join(&self.name)
+    }
+}
+
+/// O texto do `/mnt/sandmux/PASTAS.txt`.
+pub fn folders_text(list: &[LiveFolder]) -> String {
+    let mut s = String::from(
+        "# Pastas do host liberadas pelo usuário nesta sessão (sandmux).\n# nome\tmodo\tpasta no host\n",
+    );
+    for f in list {
+        s.push_str(&format!(
+            "{}\t{}\t{}\n",
+            f.name,
+            if f.rw {
+                "leitura e escrita"
+            } else {
+                "somente leitura"
+            },
+            f.path.display()
+        ));
+    }
+    s
+}
+
+/// O registro de arquivos de um lançamento.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilesSpec {
+    /// Pasta do registro, no host.
+    pub log_dir: PathBuf,
+    /// Etiqueta deste lançamento.
+    pub tag: String,
+    /// Pasta de trabalho.
+    pub workdir: PathBuf,
+    /// Pastas do agente, na visão do agente: só os acessos a elas vão para o
+    /// registro.
+    pub roots: Vec<PathBuf>,
+    /// Pastas dentro delas que ficam fora do registro (caches e toolchains
+    /// montados no HOME).
+    #[serde(default)]
+    pub exclude: Vec<PathBuf>,
+    /// Política de arquivos inicial.
+    #[serde(default)]
+    pub policy: files::FilePolicy,
+    /// Arquivo com a política atual, regravado pelo daemon; o supervisor o
+    /// relê. Vazio no `run` sem terminal.
+    #[serde(default)]
+    pub policy_file: Option<PathBuf>,
+    /// Pasta dos arquivos criados pelo agente e dos caminhos conhecidos, por
+    /// pasta de trabalho.
+    #[serde(default)]
+    pub state_dir: Option<PathBuf>,
+    /// Socket de controle do supervisor (pastas ao vivo), só nas sessões do
+    /// daemon.
+    #[serde(default)]
+    pub control_socket: Option<PathBuf>,
+    /// Pastas montadas no lançamento em `/mnt/sandmux`.
+    #[serde(default)]
+    pub folders: Vec<LiveFolder>,
+}
+
+/// Uma linha do registro de arquivos.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileEntry {
+    pub ts: String,
+    pub tag: String,
+    pub workdir: PathBuf,
+    /// Caminho na visão do agente.
+    pub path: PathBuf,
+    /// `r`, `w`, `rw` ou `create`.
+    pub access: String,
+    /// Motivo do bloqueio, ou `None`.
+    pub blocked: Option<String>,
+    /// O caminho apareceu pela primeira vez nesta pasta de trabalho.
+    #[serde(default)]
+    pub new: bool,
+}
+
+/// Modo de rede.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetMode {
+    /// Tudo pelo gateway, registrado.
+    Open,
+    /// Só o `lo`.
+    None,
+}
+
+/// Rede de um sandbox: namespace próprio, TUN e gateway no supervisor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkSpec {
+    pub mode: NetMode,
+    /// Pasta do registro de rede, no host.
+    pub log_dir: PathBuf,
+    /// Etiqueta deste lançamento no registro.
+    pub tag: String,
+    /// Pasta de trabalho, para o registro e os domínios conhecidos.
+    pub workdir: PathBuf,
+    /// Servidores de nome do host, para o DNS do gateway.
+    pub nameservers: Vec<String>,
+    /// Política compilada do lançamento.
+    #[serde(default)]
+    pub policy: net::NetPolicy,
+    /// Arquivo com a política atual, regravado pelo daemon quando ela muda;
+    /// o gateway o relê. Vazio no `run` sem terminal.
+    #[serde(default)]
+    pub policy_file: Option<PathBuf>,
+    /// Arquivo onde o supervisor lista as portas publicadas no host.
+    #[serde(default)]
+    pub ports_file: Option<PathBuf>,
+    /// Na visão do Docker: o socket do daemon para onde vai o TUN (o gateway
+    /// roda no daemon, não no supervisor).
+    #[serde(default)]
+    pub tun_socket: Option<PathBuf>,
+    /// CA do lançamento, para decifrar o TLS (a chave só vive no memfd da
+    /// especificação e na memória do supervisor).
+    #[serde(default)]
+    pub tls: Option<TlsSpec>,
+    /// Socket do daemon e as pastas da saudação, para o gateway pedir os
+    /// valores reais dos segredos (só nas sessões do daemon).
+    #[serde(default)]
+    pub vault: Option<VaultAccess>,
+}
+
+/// Como o gateway fala com o daemon para pedir os segredos.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultAccess {
+    pub socket: PathBuf,
+    pub data_dir: PathBuf,
+    pub config_dir: PathBuf,
+}
+
+/// CA de um lançamento e a CA adicional dos destinos.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TlsSpec {
+    pub ca_cert_pem: String,
+    pub ca_key_pem: String,
+    /// CA a mais para verificar os destinos (servidor local com HTTPS).
+    #[serde(default)]
+    pub upstream_ca_pem: Option<String>,
 }
 
 /// Uma variável de ambiente.
@@ -79,6 +249,8 @@ pub enum Mount {
     Proc { dest: PathBuf },
     /// Instância nova de pseudoterminais.
     Devpts { dest: PathBuf },
+    /// `/sys` novo, do namespace de rede de quem monta (visão do Docker).
+    Sysfs { dest: PathBuf },
 }
 
 /// Onde fica a camada de escrita de um overlay.
@@ -216,7 +388,8 @@ impl Mount {
             | Mount::File { dest, .. }
             | Mount::Symlink { dest, .. }
             | Mount::Proc { dest }
-            | Mount::Devpts { dest } => dest,
+            | Mount::Devpts { dest }
+            | Mount::Sysfs { dest } => dest,
         }
     }
 
@@ -327,6 +500,8 @@ mod tests {
             }],
             command: vec!["true".into()],
             cwd: "/tmp".into(),
+            network: None,
+            files: None,
         }
     }
 
