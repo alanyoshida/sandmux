@@ -104,7 +104,7 @@ O `.github/workflows/release.yml` roda numa tag `v*`, em `ubuntu-latest`:
 2. roda `scripts/dist.sh`;
 3. publica com `gh release create` e os arquivos de `dist/`.
 
-A primeira release pode ser criada localmente com o mesmo `dist.sh` e o `gh`. Por isso a publicação não depende do workflow rodar.
+O `.SRCINFO` vai como `SRCINFO`, porque o GitHub tira o ponto do começo do nome de um arquivo da release (ele virava `default.SRCINFO`). A primeira release pode ser criada localmente com o mesmo `dist.sh` e o `gh`. Por isso a publicação não depende do workflow rodar.
 
 ### Teste nas distros
 
@@ -125,5 +125,5 @@ O kernel e o AppArmor são os da máquina.
 
 - **[O teste em contêiner não troca o kernel]** Landlock, seccomp e user namespace são os do kernel desta máquina. O teste prova os binários, os pacotes e o espaço de usuário de cada distro, não o kernel delas. Fica registrado nas verificações do roadmap.
 - **[`sudo -v` logo de início pede a senha mesmo quando o perfil não é preciso]** É a decisão 2.1 ("pede `sudo` logo de início"). `--no-sudo` evita.
-- **[Release publicada antes da v1]** A `v0.1.0` é marcada como pré-release no GitHub.
+- **[Release publicada antes da v1]** A versão `0.x` indica que é antes da v1. A `v0.1.0` saiu primeiro como pré-release, mas o GitHub não serve pré-releases em `/releases/latest/`, e o comando de instalação documentado dava 404. Por decisão do usuário (2026-11-14), ela virou uma release comum (a mais nova), e o workflow publica as próximas assim.
 - **[Script baixado e executado (`curl | sh`)]** A soma confere o tarball. O script vem do mesmo lugar e mostra o que vai fazer antes do `sudo`.

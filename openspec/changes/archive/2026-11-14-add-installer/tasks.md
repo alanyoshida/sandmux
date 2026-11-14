@@ -14,4 +14,4 @@
 - [x] 3.1 Teste do `install.sh` sem privilégio nesta máquina, num HOME temporário
 - [x] 3.2 `scripts/distro-test.sh` com Debian 13, Fedora atual e Arch em contêineres, sob o vigia de memória
 - [x] 3.3 `docs/install.md`, README e teste de documentação
-- [ ] 3.4 Publicação da release `v0.1.0` no GitHub, depois da confirmação do usuário sobre os commits e a tag
+- [x] 3.4 Publicação da release `v0.1.0` no GitHub, depois da confirmação do usuário sobre os commits e a tag
