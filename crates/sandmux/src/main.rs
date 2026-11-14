@@ -1,6 +1,7 @@
 //! `sandmux`: linha de comando do multiplexador: `run`, os comandos de
 //! sessão, `import`, `doctor` e `daemon`.
 
+mod configcmd;
 mod doctor;
 mod sessions;
 
@@ -49,6 +50,9 @@ enum Cmd {
     Daemon(DaemonCmd),
     /// Copia a configuração existente de um harness para o HOME sintético.
     Import(ImportArgs),
+    /// Mostra e altera o arquivo de configuração (perfis e ajustes).
+    #[command(subcommand)]
+    Config(configcmd::ConfigCmd),
     /// Mostra se a máquina tem o suporte necessário e o que falta.
     Doctor,
 }
@@ -87,18 +91,33 @@ struct RunArgs {
     /// Na primeira execução, começa com o HOME sintético vazio sem perguntar.
     #[arg(long = "no-import")]
     no_import: bool,
+    /// Aplica um perfil nomeado do arquivo de configuração.
+    #[arg(long, value_name = "NOME")]
+    profile: Option<String>,
     /// Numa subpasta de repositório, monta o repositório inteiro em somente leitura.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "no_repo")]
     repo: bool,
+    /// Não monta o repositório inteiro, mesmo que a configuração peça.
+    #[arg(long = "no-repo")]
+    no_repo: bool,
     /// Libera /dev/kvm dentro do sandbox.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "no_kvm")]
     kvm: bool,
+    /// Não libera /dev/kvm, mesmo que a configuração peça.
+    #[arg(long = "no-kvm")]
+    no_kvm: bool,
+    /// Expõe a GPU, mesmo que a configuração a desligue.
+    #[arg(long, conflicts_with = "no_gpu")]
+    gpu: bool,
     /// Não expõe a GPU dentro do sandbox.
     #[arg(long = "no-gpu")]
     no_gpu: bool,
     /// Deixa o harness gravar no clipboard do seu terminal (OSC 52).
-    #[arg(long = "allow-clipboard")]
+    #[arg(long = "allow-clipboard", conflicts_with = "no_allow_clipboard")]
     allow_clipboard: bool,
+    /// Bloqueia a gravação no clipboard, mesmo que a configuração libere.
+    #[arg(long = "no-allow-clipboard")]
+    no_allow_clipboard: bool,
     /// Argumentos repassados ao harness (depois de `--`).
     #[arg(last = true, value_name = "ARGUMENTOS")]
     args: Vec<String>,
@@ -133,6 +152,7 @@ fn main() -> ExitCode {
             DaemonCmd::Disable => sessions::daemon_disable(),
         },
         Cmd::Import(a) => cmd_import(a).map(|_| 0),
+        Cmd::Config(c) => configcmd::run(c),
         Cmd::Doctor => doctor::run(),
     };
     match result {
@@ -290,11 +310,21 @@ fn launch_options(host: &Host, a: &RunArgs) -> LaunchOptions {
         ro: a.ro.iter().map(abs).collect(),
         rw: a.rw.iter().map(abs).collect(),
         pass_env: a.pass_env.clone(),
-        repo: a.repo,
-        kvm: a.kvm,
-        no_gpu: a.no_gpu,
-        allow_clipboard: a.allow_clipboard,
+        profile: a.profile.clone(),
+        repo: flag(a.repo, a.no_repo),
+        kvm: flag(a.kvm, a.no_kvm),
+        gpu: flag(a.gpu, a.no_gpu),
+        allow_clipboard: flag(a.allow_clipboard, a.no_allow_clipboard),
         args: a.args.clone(),
+    }
+}
+
+/// Par de opções positiva e negativa: `None` quando nenhuma foi dada.
+fn flag(on: bool, off: bool) -> Option<bool> {
+    match (on, off) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
     }
 }
 
@@ -305,11 +335,13 @@ fn cmd_run(a: RunArgs) -> Result<i32> {
     }
     // Recusa cedo um harness não instalado, antes de criar qualquer coisa.
     presets::plan(&a.harness, &host, &[], &[])?;
+    let opts = launch_options(&host, &a);
+    // Configuração inválida e perfil inexistente também recusam cedo.
+    let effective = launch::effective(&host, &opts)?;
     let layout = Layout::new(&host.data_dir);
     first_run(&host, &layout, &a)?;
-    let opts = launch_options(&host, &a);
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-        return sessions::run_session(opts);
+        return sessions::run_session(opts, &effective.pass_env_names());
     }
     let prepared = launch::prepare(&host, &opts)?;
     prepared.warnings.iter().for_each(warn);

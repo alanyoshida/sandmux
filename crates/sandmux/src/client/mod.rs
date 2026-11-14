@@ -36,6 +36,19 @@ pub fn data_dir() -> PathBuf {
     }
 }
 
+/// Pasta de configuração do cliente, o mesmo cálculo do `Host`.
+pub fn config_dir() -> PathBuf {
+    let env: BTreeMap<String, String> = ["XDG_CONFIG_HOME"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
+        .collect();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let home = home.canonicalize().unwrap_or(home);
+    sandmux_policy::host::config_dir_from(&env, &home)
+}
+
 /// Uma conexão aceita pelo daemon.
 pub struct Conn {
     pub stream: UnixStream,
@@ -63,6 +76,7 @@ impl Conn {
                 protocol: PROTOCOL,
                 version: VERSION.into(),
                 data_dir: data_dir(),
+                config_dir: config_dir(),
             },
         )?;
         let reply = match read_frame(&mut stream)? {
@@ -185,10 +199,17 @@ pub fn start_daemon() -> Result<()> {
     if start_mode() == "systemd" {
         let exec = launch::sibling("sandmuxd");
         let exec = exec.canonicalize().unwrap_or(exec);
-        let data_home = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute());
-        match systemd::install_and_start(&exec, data_home.as_deref()) {
+        let abs = |k: &str| {
+            std::env::var_os(k)
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+        };
+        let (data, config) = (abs("XDG_DATA_HOME"), abs("XDG_CONFIG_HOME"));
+        let homes = systemd::Homes {
+            data: data.as_deref(),
+            config: config.as_deref(),
+        };
+        match systemd::install_and_start(&exec, homes) {
             Ok(()) => return Ok(()),
             Err(e) => eprintln!("sandmux: aviso: {e:#}; subindo o daemon sem o systemd"),
         }

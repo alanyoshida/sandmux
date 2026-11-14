@@ -2,6 +2,7 @@
 //! presets de harness, compostos numa [`sandmux_spec::LaunchSpec`].
 
 pub mod compose;
+pub mod config;
 pub mod git;
 pub mod hermes_config;
 pub mod home;
@@ -27,8 +28,12 @@ pub enum PolicyError {
         searched: Vec<PathBuf>,
         hint: String,
     },
-    #[error("{} não pode ser usado: {reason}. Use uma subpasta", .path.display())]
-    Dangerous { path: PathBuf, reason: String },
+    #[error("{} não pode ser usado: {reason}. {hint}", .path.display())]
+    Dangerous {
+        path: PathBuf,
+        reason: String,
+        hint: String,
+    },
     #[error("caminho não existe: {}", .0.display())]
     MissingPath(PathBuf),
     #[error("a variável {0}, pedida em --pass-env, não existe no ambiente")]

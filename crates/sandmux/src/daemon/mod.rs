@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use nix::sys::signal::{SigSet, Signal};
 use sandmux_policy::Host;
-use sandmux_proto::{PROTOCOL, SessionInfo, SessionState};
+use sandmux_proto::{LaunchOptions, PROTOCOL, SessionInfo, SessionState};
 
 use crate::paths;
 pub use session::{Out, Session};
@@ -63,6 +63,7 @@ impl Shared {
     /// Grava a lista de sessões. Erros vão para o log; a sessão segue.
     pub fn persist(&self, st: &State) {
         let saved = store::Saved {
+            version: store::VERSION,
             next_id: st.next_id,
             sessions: st
                 .sessions
@@ -71,6 +72,7 @@ impl Shared {
                     id: s.id,
                     name: s.name.clone(),
                     opts: s.opts.clone(),
+                    pass_env: s.pass_env.clone(),
                     state: s.state.clone(),
                 })
                 .collect(),
@@ -314,6 +316,28 @@ fn run(history: usize) -> Result<()> {
 }
 
 /// Lê a lista guardada e relança as sessões que estavam vivas.
+/// Por que uma sessão viva não pode voltar sozinha: pasta apagada,
+/// configuração inválida, perfil que sumiu ou variáveis de `pass-env`, cujos
+/// valores nunca vão para o disco.
+fn blocked_restore(shared: &Shared, opts: &LaunchOptions, id: u32) -> Option<String> {
+    if !opts.workdir.is_dir() {
+        return Some(format!(
+            "a pasta de trabalho {} não existe mais",
+            opts.workdir.display()
+        ));
+    }
+    let mut host = shared.base.clone();
+    host.cwd = opts.workdir.clone();
+    match crate::launch::effective(&host, opts) {
+        Err(e) => Some(format!("{e:#}; corrija e rode `sandmux restart {id}`")),
+        Ok(eff) if !eff.pass_env.is_empty() => Some(format!(
+            "precisa de --pass-env {}; rode `sandmux restart {id}` num terminal com as variáveis",
+            eff.pass_env_names().join(", ")
+        )),
+        Ok(_) => None,
+    }
+}
+
 fn restore(shared: &Arc<Shared>) {
     let saved = match store::load(&shared.sessions_file()) {
         Ok(s) => s,
@@ -329,26 +353,14 @@ fn restore(shared: &Arc<Shared>) {
         for s in saved.sessions {
             let mut state = s.state.clone();
             if state == SessionState::Viva {
-                if !s.opts.pass_env.is_empty() {
-                    state = SessionState::Parada {
-                        motivo: format!(
-                            "precisa de --pass-env {}; rode `sandmux restart {}` num terminal com as variáveis",
-                            s.opts.pass_env.join(", "),
-                            s.id
-                        ),
-                    };
-                } else if !s.opts.workdir.is_dir() {
-                    state = SessionState::Parada {
-                        motivo: format!(
-                            "a pasta de trabalho {} não existe mais",
-                            s.opts.workdir.display()
-                        ),
-                    };
+                if let Some(motivo) = blocked_restore(shared, &s.opts, s.id) {
+                    state = SessionState::Parada { motivo };
                 } else {
                     relaunch.push(s.id);
                 }
             }
-            let sess = Session::new(s.id, s.name, s.opts, state, shared.history, None);
+            let mut sess = Session::new(s.id, s.name, s.opts, state, shared.history, None);
+            sess.pass_env = s.pass_env;
             st.sessions.insert(s.id, sess);
         }
         shared.persist(&st);

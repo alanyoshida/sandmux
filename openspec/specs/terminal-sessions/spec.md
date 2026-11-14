@@ -13,7 +13,7 @@ Quando `sandmux run <harness>` é chamado com terminal interativo na entrada e n
 - **THEN** uma sessão `opencode:proj` é criada no daemon e a interface do opencode aparece no terminal
 
 ### Requirement: Verificações do run antes de criar a sessão
-O `run` com terminal MUST fazer, antes de pedir a sessão, as mesmas verificações e perguntas do `run` direto: preset desconhecido, harness não instalado, pasta de trabalho perigosa, caminho inexistente em `--ro` e `--rw`, variável de `--pass-env` ausente e importação na primeira execução. Uma recusa MUST terminar o comando com a mesma mensagem e sem criar sessão. Os avisos do lançamento MUST aparecer no terminal que pediu a sessão.
+O `run` com terminal MUST fazer, antes de pedir a sessão, as mesmas verificações e perguntas do `run` direto: arquivo de configuração inválido, perfil inexistente, preset desconhecido, harness não instalado, pasta de trabalho perigosa, caminho inexistente em `--ro`, `--rw` ou nas listas da configuração efetiva, variável de `pass-env` ausente e importação na primeira execução. Uma recusa MUST terminar o comando com a mesma mensagem e sem criar sessão. Os avisos do lançamento MUST aparecer no terminal que pediu a sessão.
 
 #### Scenario: Pasta perigosa
 - **WHEN** o usuário roda `sandmux run shell` num terminal, com o HOME como pasta atual
@@ -22,6 +22,14 @@ O `run` com terminal MUST fazer, antes de pedir a sessão, as mesmas verificaç�
 #### Scenario: Aviso de variável passada
 - **WHEN** o usuário roda `sandmux run opencode --pass-env OPENROUTER_API_KEY` num terminal
 - **THEN** o aviso de que a variável fica ao alcance do agente aparece no terminal antes da interface do harness
+
+#### Scenario: Configuração inválida
+- **WHEN** o arquivo de configuração tem uma chave desconhecida e o usuário roda `sandmux run shell` num terminal
+- **THEN** o comando termina com o erro do arquivo, com a linha, e nenhuma sessão aparece em `sandmux ls`
+
+#### Scenario: Perfil inexistente
+- **WHEN** o usuário roda `sandmux run shell --profile nada` num terminal e não existe esse perfil
+- **THEN** o comando termina com erro listando os perfis e nenhuma sessão é criada
 
 ### Requirement: Listar sessões
 `sandmux ls` MUST listar as sessões do usuário com o identificador, o nome, o harness, a pasta de trabalho, o estado (viva, encerrada com o código de saída, ou parada com o motivo) e quantos clientes estão anexados. Sem sessões, o comando MUST dizer isso e terminar com código zero.
@@ -124,7 +132,7 @@ Quando o harness de uma sessão termina, a sessão MUST continuar na lista como 
 - **THEN** o harness é encerrado à força, nenhum processo do sandbox continua no host e a sessão some de `sandmux ls`
 
 ### Requirement: Reiniciar uma sessão
-`sandmux restart <id>` MUST relançar uma sessão encerrada ou parada com o mesmo harness, a mesma pasta e as mesmas opções, e anexar o terminal quando houver um. Os valores de `--pass-env` MUST vir do ambiente do terminal que pediu o reinício, e uma variável ausente MUST impedir o reinício com erro. Uma sessão viva MUST NOT ser reiniciada.
+`sandmux restart <id>` MUST relançar uma sessão encerrada ou parada com o mesmo harness, a mesma pasta, as mesmas opções do `run` e o mesmo perfil nomeado, resolvendo as camadas com a configuração do momento, e anexar o terminal quando houver um. Os valores das variáveis de `pass-env` da política efetiva MUST vir do ambiente do terminal que pediu o reinício, e uma variável ausente MUST impedir o reinício com erro. Uma sessão viva MUST NOT ser reiniciada.
 
 #### Scenario: Reinício de sessão encerrada
 - **WHEN** o harness da sessão 2 terminou e o usuário roda `sandmux restart 2`
@@ -138,6 +146,14 @@ Quando o harness de uma sessão termina, a sessão MUST continuar na lista como 
 - **WHEN** o usuário roda `sandmux restart 1` e a sessão 1 está viva
 - **THEN** o comando termina com erro dizendo que a sessão está viva, sem afetá-la
 
+#### Scenario: Configuração mudou
+- **WHEN** a sessão 2 foi criada com `--profile vm`, o usuário tira `kvm = true` do perfil `vm` e roda `sandmux restart 2`
+- **THEN** o harness relançado não tem `/dev/kvm`
+
+#### Scenario: Perfil apagado
+- **WHEN** a sessão 2 foi criada com `--profile vm`, o perfil `vm` foi apagado e o usuário roda `sandmux restart 2`
+- **THEN** o comando termina com erro dizendo que o perfil não existe, e a sessão continua como estava
+
 ### Requirement: Histórico em memória
 O daemon MUST guardar as últimas 10.000 linhas que saíram da tela principal de cada sessão, valor ajustável por uma opção do `sandmuxd`. Linhas mais antigas MUST ser descartadas. O histórico e a saída das sessões MUST NOT ser gravados em disco.
 
@@ -150,7 +166,7 @@ O daemon MUST guardar as últimas 10.000 linhas que saíram da tela principal de
 - **THEN** o marcador não aparece em nenhum arquivo do diretório de dados, do `$XDG_RUNTIME_DIR` ou da pasta de estado do sandmux
 
 ### Requirement: Escrita no clipboard bloqueada por padrão
-O daemon MUST retirar da saída da sessão, antes de enviá-la aos clientes, as sequências que pedem ao terminal do usuário para gravar no clipboard (OSC 52). Com `sandmux run --allow-clipboard`, a gravação MUST passar para aquela sessão, e a opção MUST valer também no reinício e na restauração.
+O daemon MUST retirar da saída da sessão, antes de enviá-la aos clientes, as sequências que pedem ao terminal do usuário para gravar no clipboard (OSC 52). Quando a política efetiva liga `clipboard`, por `sandmux run --allow-clipboard` ou pela configuração, a gravação MUST passar para aquela sessão. A política MUST ser resolvida de novo no reinício e na restauração.
 
 #### Scenario: Padrão
 - **WHEN** o harness de uma sessão sem a opção escreve uma sequência OSC 52 de gravação
@@ -158,6 +174,10 @@ O daemon MUST retirar da saída da sessão, antes de enviá-la aos clientes, as 
 
 #### Scenario: Liberado
 - **WHEN** a sessão foi criada com `--allow-clipboard` e o harness escreve uma sequência OSC 52 de gravação
+- **THEN** os clientes anexados recebem a sequência
+
+#### Scenario: Liberado pelo perfil
+- **WHEN** o perfil do projeto tem `clipboard = true`, a sessão foi criada na pasta do projeto sem opções e o harness escreve uma sequência OSC 52 de gravação
 - **THEN** os clientes anexados recebem a sequência
 
 ### Requirement: Leitura do clipboard sempre bloqueada

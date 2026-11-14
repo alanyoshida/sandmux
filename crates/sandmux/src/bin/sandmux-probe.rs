@@ -392,6 +392,17 @@ fn suite(args: &[String]) -> i32 {
     for p in ["/usr/sandmux-fuga", "/etc/sandmux-fuga", "/sandmux-fuga"] {
         add(format!("escrever em {p}"), write_path(p));
     }
+    for c in get("config") {
+        add(
+            format!("escrever na configuração do sandmux {c}"),
+            write_path(&c),
+        );
+        add(format!("apagar a configuração do sandmux {c}"), unlink(&c));
+        add(
+            format!("renomear a configuração do sandmux {c}"),
+            rename(&c, &format!("{c}.x")),
+        );
+    }
     let inbox = one("inbox");
     add(
         "escrever na pasta de entrada".into(),

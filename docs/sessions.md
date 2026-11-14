@@ -17,7 +17,7 @@ O `sandmuxd` é o processo de cada usuário que segura as sessões. Uma sessão 
 | `sandmux attach [id]` | Anexa o terminal. Sem identificador, à única sessão viva |
 | `sandmux detach <id>` | Desanexa todos os terminais da sessão |
 | `sandmux kill <id>` | Pede ao harness que termine (SIGTERM e SIGHUP); depois de 5 segundos, encerra à força. A sessão sai da lista |
-| `sandmux restart <id>` | Relança uma sessão encerrada ou parada, com as mesmas opções. Os valores de `--pass-env` vêm do terminal que pede |
+| `sandmux restart <id>` | Relança uma sessão encerrada ou parada, com as mesmas opções e o mesmo perfil, resolvendo a configuração de novo. Os valores de `pass-env` vêm do terminal que pede |
 | `sandmux daemon status` | Estado do daemon, sem iniciá-lo |
 | `sandmux daemon stop` | Encerra os harnesses e para o daemon. As sessões vivas voltam na próxima subida |
 | `sandmux daemon restart` | Para e sobe com o binário instalado; use depois de atualizar o sandmux |
@@ -69,20 +69,21 @@ Socket Unix de fluxo. Cada quadro tem 4 bytes de tamanho (big-endian, só o cont
 | 0 | Mensagem de controle em JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Bytes de terminal: entrada do cliente ou saída da sessão |
 
-A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão e o diretório de dados do cliente. Esta versão usa o protocolo 1. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados diferente também é recusado, com as duas pastas na mensagem.
+A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados e a pasta de configuração do cliente. Esta versão usa o protocolo 2. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
 
-O cliente envia ao daemon, junto com o pedido de sessão, a pasta atual, as variáveis da lista segura, o `SHELL` e os valores de `--pass-env`. O daemon compõe a especificação de lançamento com a mesma função do `run` direto.
+O cliente envia ao daemon, junto com o pedido de sessão, as opções dadas no `run`, o perfil nomeado, a pasta atual, as variáveis da lista segura, o `SHELL` e os valores de `pass-env` da política efetiva. O daemon resolve as camadas de configuração ([docs/config.md](config.md)) e compõe a especificação de lançamento com a mesma função do `run` direto.
 
 ## Lista de sessões e restauração
 
-O daemon grava `sessions.json` no diretório de dados (modo 600, de forma atômica) a cada mudança. Para cada sessão: identificador, nome, harness, pasta, opções do `run`, nomes das variáveis de `--pass-env` e estado. Nunca os valores das variáveis, nunca a saída.
+O daemon grava `sessions.json` no diretório de dados (modo 600, de forma atômica) a cada mudança. Para cada sessão: identificador, nome, harness, pasta, opções dadas no `run`, perfil nomeado, nomes das variáveis de `pass-env` do último lançamento e estado. Nunca os valores das variáveis, nunca a política resolvida, nunca a saída. O arquivo tem `"version": 2`; a lista sem versão, gravada pelo change anterior, é lida e convertida.
 
 Ao subir, o daemon lê a lista:
 
 | Sessão guardada | Ao subir |
 |---|---|
-| Viva, sem `--pass-env` | Relançada sozinha, sem terminal anexado, com `TERM=xterm-256color` |
-| Viva, com `--pass-env` | Parada até `sandmux restart <id>` num terminal com as variáveis |
+| Viva, sem `pass-env` na política resolvida agora | Relançada sozinha, sem terminal anexado, com `TERM=xterm-256color` |
+| Viva, com `pass-env` (pela opção ou pela configuração) | Parada até `sandmux restart <id>` num terminal com as variáveis |
+| Viva, com o perfil nomeado apagado ou a configuração inválida | Parada, com o motivo |
 | Viva, com a pasta apagada | Parada, com o motivo |
 | Encerrada ou parada | Volta como estava |
 

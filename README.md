@@ -75,6 +75,7 @@ O `doctor` confere o kernel (Landlock ABI 6 ou mais novo), se user namespaces se
 | `sandmux kill <id>` | Encerra a sessão e a tira da lista |
 | `sandmux restart <id>` | Relança uma sessão encerrada ou parada, na mesma pasta e com as mesmas opções |
 | `sandmux daemon status`, `stop`, `restart`, `disable` | Estado do daemon; parar (as sessões vivas voltam na próxima subida); reiniciar com o binário instalado; parar e remover a unidade systemd |
+| `sandmux config show`, `list`, `set`, `unset`, `add`, `remove` | Mostra a política efetiva com a origem de cada valor, lista os perfis e altera o arquivo de configuração (`~/.config/sandmux/config.toml`) |
 | `sandmux import <harness>` | Copia a configuração existente do harness para o HOME sintético, trocando os segredos por valores falsos. Rodado de novo, copia só o que é novo; `--overwrite` substitui |
 | `sandmux doctor` | Mostra se a máquina tem o suporte necessário e o que falta |
 
@@ -86,10 +87,11 @@ Opções de `run`:
 | `--ro <caminho>`, `--rw <caminho>` | Acrescenta um caminho do host em somente leitura ou com escrita. Montar uma credencial conhecida (`~/.kube`, `~/.aws`) gera aviso |
 | `--pass-env <NOME>` | Passa uma variável do seu ambiente para dentro, com aviso. É o jeito de entregar a chave do modelo enquanto o cofre não existe |
 | `--import`, `--no-import` | Responde à pergunta da primeira execução sem terminal interativo |
-| `--repo` | Numa subpasta de repositório, monta o repositório inteiro em somente leitura para o git funcionar |
-| `--kvm` | Libera `/dev/kvm` |
-| `--no-gpu` | Não expõe a GPU (exposta por padrão quando existe) |
-| `--allow-clipboard` | Deixa o harness gravar no clipboard do seu terminal (OSC 52). Por padrão a gravação é bloqueada, e a leitura do clipboard é sempre bloqueada |
+| `--profile <nome>` | Aplica um perfil nomeado do arquivo de configuração |
+| `--repo`, `--no-repo` | Numa subpasta de repositório, monta (ou não) o repositório inteiro em somente leitura para o git funcionar |
+| `--kvm`, `--no-kvm` | Libera (ou não) `/dev/kvm` |
+| `--gpu`, `--no-gpu` | Expõe (ou não) a GPU, exposta por padrão quando existe |
+| `--allow-clipboard`, `--no-allow-clipboard` | Deixa (ou não) o harness gravar no clipboard do seu terminal (OSC 52). Por padrão a gravação é bloqueada, e a leitura do clipboard é sempre bloqueada |
 | `-- <argumentos>` | Argumentos repassados ao harness |
 
 Exemplos:
@@ -100,6 +102,16 @@ sandmux run shell -- -c "id -u; ls ~"
 
 ```bash
 sandmux run opencode --pass-env OPENROUTER_API_KEY
+```
+
+As opções negativas existem para desfazer o que um perfil ligou.
+
+### Configuração e perfis
+
+O arquivo `~/.config/sandmux/config.toml` guarda as exceções que você quer repetir: ajustes globais (`[global]`), perfis nomeados (`[profile.<nome>]`, com `--profile`) e perfis de projeto (`[project."<pasta>"]`), que entram sozinhos na pasta e nas subpastas. As chaves são as mesmas das opções do `run`: `ro`, `rw`, `pass-env` (só nomes), `repo`, `kvm`, `gpu` e `clipboard`. Vence a camada mais específica, e as opções do `run` vencem todas. O agente nunca consegue gravar nesse arquivo, e nada dentro da pasta de trabalho muda a política. Detalhes em [docs/config.md](docs/config.md).
+
+```bash
+sandmux config set kvm true --profile vm
 ```
 
 ### Sessões
@@ -195,8 +207,9 @@ O projeto usa [OpenSpec](https://github.com/Fission-AI/OpenSpec) para planejar c
 | [docs/launch-spec.md](docs/launch-spec.md) | Formato da especificação de lançamento entre o cliente e o lançador |
 | [docs/git.md](docs/git.md) | O que a proteção do `.git` cobre e como o git se comporta dentro do sandbox |
 | [docs/sessions.md](docs/sessions.md) | O daemon de sessões: socket, protocolo, lista de sessões, restauração e limites |
+| [docs/config.md](docs/config.md) | O arquivo de configuração: seções, chaves, camadas, perfis e comandos |
 | [openspec/roadmap.md](openspec/roadmap.md) | Todas as decisões do projeto e o plano em 10 etapas |
-| [openspec/specs/](openspec/specs/) | Specs vigentes: isolamento, sistema de arquivos, presets dos harnesses e importação de estado |
+| [openspec/specs/](openspec/specs/) | Specs vigentes: isolamento, sistema de arquivos, presets dos harnesses, importação de estado, daemon e sessões, e configuração |
 | [openspec/changes/archive/2026-11-13-add-sandbox-cli/proposal.md](openspec/changes/archive/2026-11-13-add-sandbox-cli/proposal.md) | Proposta do primeiro change: o confinamento por linha de comando |
 | [openspec/changes/archive/2026-11-13-add-sandbox-cli/design.md](openspec/changes/archive/2026-11-13-add-sandbox-cli/design.md) | Desenho técnico do primeiro change |
 | [AGENTS.md](AGENTS.md) | Regras para agentes que trabalham neste repositório |

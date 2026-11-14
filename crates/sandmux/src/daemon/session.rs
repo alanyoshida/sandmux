@@ -51,6 +51,10 @@ pub struct Session {
     pub size: Size,
     pub live: Option<Live>,
     pub killing: bool,
+    /// Escrita no clipboard liberada no último lançamento.
+    pub clipboard: bool,
+    /// Nomes de `pass-env` do último lançamento.
+    pub pass_env: Vec<String>,
     history: usize,
 }
 
@@ -70,7 +74,9 @@ impl Session {
         size: Option<Size>,
     ) -> Self {
         let size = size.unwrap_or(DEFAULT_SIZE);
-        let filter = OscFilter::new(opts.allow_clipboard);
+        let clipboard = opts.allow_clipboard == Some(true);
+        let filter = OscFilter::new(clipboard);
+        let pass_env = opts.pass_env.clone();
         Session {
             id,
             name,
@@ -83,6 +89,8 @@ impl Session {
             size,
             live: None,
             killing: false,
+            clipboard,
+            pass_env,
             history,
         }
     }
@@ -99,7 +107,8 @@ impl Session {
             workdir: self.opts.workdir.clone(),
             state: self.state.clone(),
             clients: self.clients.len(),
-            pass_env: self.opts.pass_env.clone(),
+            pass_env: self.pass_env.clone(),
+            opts: self.opts.clone(),
         }
     }
 
@@ -108,7 +117,7 @@ impl Session {
         self.size = size;
         self.parser = vt100::Parser::new(nz(size.rows), nz(size.cols), self.history);
         self.tracker = ModeTracker::new();
-        self.filter = OscFilter::new(self.opts.allow_clipboard);
+        self.filter = OscFilter::new(self.clipboard);
     }
 
     /// Envia a todos os clientes; quem tem a fila cheia é desanexado.
@@ -303,6 +312,9 @@ pub struct Spawned {
     pub child: Child,
     pub master: Arc<File>,
     pub warnings: Vec<String>,
+    /// Política efetiva do lançamento que importa ao daemon.
+    pub clipboard: bool,
+    pub pass_env: Vec<String>,
 }
 
 /// Compõe e lança um sandbox num PTY novo.
@@ -347,16 +359,26 @@ pub fn spawn(
         child,
         master: Arc::new(File::from(pty.master)),
         warnings: prepared.warnings,
+        clipboard: prepared.clipboard,
+        pass_env: prepared.pass_env,
     })
 }
 
 /// Liga um processo lançado à sessão `id` e começa a ler a saída.
 pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Size) {
-    let Spawned { child, master, .. } = spawned;
+    let Spawned {
+        child,
+        master,
+        clipboard,
+        pass_env,
+        ..
+    } = spawned;
     let pid = child.id() as i32;
     {
         let mut st = shared.lock();
         if let Some(s) = st.sessions.get_mut(&id) {
+            s.clipboard = clipboard;
+            s.pass_env = pass_env;
             s.reset_terminal(size);
             s.state = SessionState::Viva;
             s.killing = false;

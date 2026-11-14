@@ -11,7 +11,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 use sandmux_launcher::support::{self, SupportReport};
-use sandmux_policy::{Host, LayerMode, Layout, RunOptions, compose, home};
+use sandmux_policy::{Host, LayerMode, Layout, compose, config, home};
 use sandmux_proto::LaunchOptions;
 
 /// Caminho de um binário irmão (na mesma pasta do executável atual), com o
@@ -71,6 +71,10 @@ pub struct Prepared {
     lock: Option<File>,
     pub warnings: Vec<String>,
     pub runner: PathBuf,
+    /// Escrita no clipboard liberada pela política efetiva.
+    pub clipboard: bool,
+    /// Nomes das variáveis de `pass-env` da política efetiva.
+    pub pass_env: Vec<String>,
 }
 
 impl Prepared {
@@ -106,6 +110,7 @@ impl Prepared {
 /// vazio se não existir (a pergunta da importação é feita antes, por quem
 /// tem terminal).
 pub fn prepare(host: &Host, opts: &LaunchOptions) -> Result<Prepared> {
+    let eff = effective(host, opts)?;
     let layout = Layout::new(&host.data_dir);
     let mut warnings = Vec::new();
     if !layout.home(&opts.harness).exists() {
@@ -137,18 +142,7 @@ pub fn prepare(host: &Host, opts: &LaunchOptions) -> Result<Prepared> {
         (true, Some(_)) => LayerMode::Persistent,
         (true, None) => LayerMode::Temporary,
     };
-    let run = RunOptions {
-        harness: opts.harness.clone(),
-        workdir: Some(opts.workdir.clone()),
-        ro: opts.ro.clone(),
-        rw: opts.rw.clone(),
-        pass_env: opts.pass_env.clone(),
-        repo: opts.repo,
-        kvm: opts.kvm,
-        no_gpu: opts.no_gpu,
-        args: opts.args.clone(),
-        layer: mode,
-    };
+    let run = eff.run_options(&opts.harness, &opts.workdir, &opts.args, mode);
     let composed = compose(host, &run)?;
     warnings.extend(composed.warnings);
     for d in &composed.dirs_to_create {
@@ -169,7 +163,35 @@ pub fn prepare(host: &Host, opts: &LaunchOptions) -> Result<Prepared> {
         lock,
         warnings,
         runner,
+        clipboard: eff.clipboard.value,
+        pass_env: eff.pass_env_names(),
     })
+}
+
+/// A camada das opções dadas no `run`.
+pub fn run_layer(opts: &LaunchOptions) -> config::Layer {
+    config::Layer {
+        ro: opts.ro.clone(),
+        rw: opts.rw.clone(),
+        pass_env: opts.pass_env.clone(),
+        repo: opts.repo,
+        kvm: opts.kvm,
+        gpu: opts.gpu,
+        clipboard: opts.allow_clipboard,
+    }
+}
+
+/// Lê o arquivo de configuração de `host` e resolve as camadas de `opts`.
+pub fn effective(host: &Host, opts: &LaunchOptions) -> Result<config::Effective> {
+    let cfg = config::Config::load(&config::path(host))?;
+    let run = run_layer(opts);
+    let req = config::Request {
+        harness: &opts.harness,
+        workdir: &opts.workdir,
+        profile: opts.profile.as_deref(),
+        run: &run,
+    };
+    Ok(config::resolve(&cfg, host, &req)?)
 }
 
 /// Caminho absoluto, relativo a `base` quando preciso. Não resolve links nem

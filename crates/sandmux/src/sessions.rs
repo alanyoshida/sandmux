@@ -15,9 +15,10 @@ fn need_terminal(what: &str) -> Result<()> {
     Ok(())
 }
 
-/// `run` com terminal: cria a sessão no daemon e anexa.
-pub fn run_session(opts: LaunchOptions) -> Result<i32> {
-    let vars = client::client_vars(&opts.pass_env)?;
+/// `run` com terminal: cria a sessão no daemon e anexa. `pass_env` são os
+/// nomes da política efetiva, cujos valores vão ao daemon.
+pub fn run_session(opts: LaunchOptions, pass_env: &[String]) -> Result<i32> {
+    let vars = client::client_vars(pass_env)?;
     let mut conn = client::connect_or_start()?;
     conn.call(&Msg::Create {
         opts,
@@ -118,7 +119,11 @@ pub fn restart(id: u32) -> Result<i32> {
     let Some(s) = sessions.iter().find(|s| s.id == id) else {
         bail!("não existe a sessão {id}");
     };
-    let vars = client::client_vars(&s.pass_env)?;
+    // A política é resolvida de novo: os nomes de `pass-env` vêm da
+    // configuração de agora, com as opções e o perfil guardados.
+    let host = sandmux_policy::Host::detect()?;
+    let names = sandmux::launch::effective(&host, &s.opts)?.pass_env_names();
+    let vars = client::client_vars(&names)?;
     let attach = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let reply = conn.call(&Msg::Restart {
         id,

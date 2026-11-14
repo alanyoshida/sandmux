@@ -41,10 +41,10 @@ O foco principal é o sandbox, não a interface:
 
 | Tema | Decisão |
 |---|---|
-| Camadas de política | Baseline embutida, preset do harness, ajustes globais, ajustes da aba ou perfil. Negar sempre vence |
-| Arquivo de configuração | TOML. Guarda só a diferença em relação às camadas embutidas |
-| Gerenciamento | Cada regra aparece como "padrão" ou "modificada"; desligar regra da baseline é ato explícito |
-| Perfil de um projeto | Lido só de fora da pasta de trabalho: fica na configuração do usuário, ligado ao caminho da pasta. Nada dentro da pasta altera a política, porque o agente poderia editar o arquivo. Custo aceito: o perfil não é versionado no repositório |
+| Camadas de política | Baseline embutida, preset do harness, `[global]`, perfil nomeado, perfil do projeto e opções do `run` (aba, quando a TUI chegar). Nas opções de liga e desliga vence a camada mais específica; as listas se somam, e um caminho em `ro` e `rw` de camadas diferentes é decidido pela mais específica (decisão do usuário, 2026-11-13, change 3). "Negar sempre vence" passa a valer para as listas de negação das etapas de rede e arquivos |
+| Arquivo de configuração | TOML, em `$XDG_CONFIG_HOME/sandmux/config.toml` (por padrão `~/.config/sandmux/config.toml`), com seções `[global]`, `[profile.<nome>]` e `[project."<pasta>"]`. Guarda só a diferença em relação às camadas embutidas. Arquivo inválido recusa o lançamento, com a linha. Editado por `sandmux config set/unset/add/remove/show/list` ou à mão, com comentários preservados (decisão do usuário, 2026-11-13) |
+| Gerenciamento | Cada regra aparece como "padrão" ou "modificada", com a camada de origem (`sandmux config show`); desligar regra da baseline é ato explícito. No change 3 os perfis só acrescentam ou ajustam `ro`, `rw`, `pass-env` (só nomes), `repo`, `kvm`, `gpu` e `clipboard`; desligar item da baseline fica para a etapa 6, com a tela de gerenciamento (decisão do usuário, 2026-11-13) |
+| Perfil de um projeto | Lido só de fora da pasta de trabalho: fica na configuração do usuário, ligado ao caminho da pasta. Nada dentro da pasta altera a política, porque o agente poderia editar o arquivo. Custo aceito: o perfil não é versionado no repositório. Vale para a pasta e as subpastas; com projetos aninhados, só o da pasta mais próxima. Perfis nomeados são escolhidos com `sandmux run --profile <nome>` (decisão do usuário, 2026-11-13). A pasta de configuração do sandmux nunca pode ser gravada pelo sandbox |
 | Toda aba tem sandbox | Não existe shell livre |
 | Opções do `run` no primeiro change | `--workdir`, `--ro`, `--rw`, `--pass-env`, `--import`, `--no-import`, `--repo`, `--kvm`, `--no-gpu`, e `--` para repassar argumentos ao harness. Os nomes foram propostos na spec e ainda não foram revisados pelo usuário |
 | Diretório de dados | `$XDG_DATA_HOME/sandmux` (por padrão `~/.local/share/sandmux`), com os HOMEs sintéticos, as camadas de escrita, a pasta de entrada e os manifestos de importação |
@@ -259,7 +259,7 @@ Objetivo: agentes que sobrevivem ao fechar o terminal, e um processo de longa du
 | # | Change | Situação | Conteúdo |
 |---|---|---|---|
 | 2 | `add-session-daemon` | Implementado e arquivado: 43 de 43 tarefas feitas em 2026-11-13, com 194 testes passando (a suíte de fuga agora com 53 tentativas, inclusive o socket do daemon), sessões reais do opencode e do hermes verificadas e a unidade systemd real testada. Arquivado em `openspec/changes/archive/2026-11-13-add-session-daemon/`; specs principais criadas em `openspec/specs/` (`session-daemon`, `terminal-sessions`) e `sandbox-isolation` atualizada (terminal do usuário e ciclo de vida) | Binário `sandmuxd`; um PTY por sessão, com o daemon no meio; lança o harness pelo `sandmux-run`; sessões sobrevivem ao cliente; um conjunto único de sessões por usuário, sem sessões nomeadas; sessão encerrada fica registrada com o código de saída e pode ser reiniciada; comandos para criar, listar, anexar, desanexar e encerrar; vários clientes anexados à mesma sessão, todos interagindo; histórico de 10.000 linhas por sessão em memória, ajustável; protocolo versionado entre cliente e daemon, com regra para versões diferentes após atualização; filtro de sequências de escape (escrita no clipboard bloqueada por padrão, liberável por opção); início automático no login e restauração das sessões após reboot |
-| 3 | `add-config-profiles` | A propor | Arquivo TOML; camadas de política (baseline, preset, global, perfil ou aba); só a diferença é gravada; perfis de sandbox; perfil de projeto ligado ao caminho da pasta, nunca lido de dentro dela; liberação de dispositivos e desligamento da GPU por perfil; liberação da escrita no clipboard por perfil ou aba; persistência das abas e de suas configurações; marcação de regra "padrão" ou "modificada" |
+| 3 | `add-config-profiles` | Implementado e arquivado: 25 de 25 tarefas feitas em 2026-11-13, com 255 testes passando (a suíte de fuga agora tenta gravar na configuração do sandmux e plantar configuração na pasta de trabalho) e uma sessão real do opencode verificada num projeto com perfil, inclusive depois do `daemon restart`. Capacidade nova `config-profiles`; muda `sandbox-filesystem` (dispositivos), `terminal-sessions` (verificações do run, reinício, clipboard) e `session-daemon` (lista de sessões, restauração); protocolo 2. A persistência das abas já existe desde o change 2 (lista de sessões); nomes de aba chegam no change 5. Arquivado em `openspec/changes/archive/2026-11-13-add-config-profiles/`; spec principal criada em `openspec/specs/config-profiles` e `sandbox-filesystem`, `session-daemon` e `terminal-sessions` atualizadas | Arquivo TOML; camadas de política (baseline, preset, global, perfil ou aba); só a diferença é gravada; perfis de sandbox; perfil de projeto ligado ao caminho da pasta, nunca lido de dentro dela; liberação de dispositivos e desligamento da GPU por perfil; liberação da escrita no clipboard por perfil ou aba; persistência das abas e de suas configurações; marcação de regra "padrão" ou "modificada" |
 | 4 | `add-resource-limits` | A propor | Teto generoso de processos e memória por sessão, ajustável; medição de consumo por sessão, incluindo os contêineres do Docker privado |
 | 24 | `add-container-engine` | A propor | Docker sem root, privado do sandbox, iniciado e mantido pelo daemon junto com a sessão; visão de arquivos igual à do sandbox; só o socket dele entra no sandbox; `docker` e `docker compose` funcionando; imagens e contêineres separados dos do host; um Docker privado por pasta de trabalho, com imagens e volumes que persistem; cache local de downloads de imagem; abas na mesma pasta dividem o Docker, com a política de rede mais restrita; sem Docker rootless na máquina, o agente sobe sem Docker e o diagnóstico explica |
 
@@ -434,7 +434,7 @@ Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
 
 | Decisão | Change |
 |---|---|
-| Nenhuma no momento | |
+| `--rw` (ou a chave `rw`) sobre arquivos que o host executa: `~/.bashrc`, `~/.profile`, `~/.zshrc`, `~/.config/autostart`, `~/.local/bin` e afins deixam o agente plantar algo que roda fora do sandbox. Achado ao propor o change 3, que só fecha a pasta de configuração do sandmux (e, com ela, `--rw ~/.config` inteiro, que inclui o systemd de usuário). Falta decidir entre recusar, avisar como as credenciais conhecidas, ou deixar para a política de arquivos | 16 |
 
 As demais decisões levantadas até 2026-11-13 estão resolvidas e registradas nas seções 2 e 4.
 
@@ -470,7 +470,7 @@ Novas decisões em aberto que surgirem ao propor um change devem ser anotadas aq
 | Temas de cores | Change 6 |
 | Modal de chat e aba de conversa | Change 21 |
 | Modal que gera e injeta comando shell | Change 22; o terminal de shell vem do preset `shell` (change 1) |
-| Configurações persistidas em arquivo | Change 3 |
+| Configurações persistidas em arquivo | Change 3 (a persistência das sessões e de suas opções veio no change 2; nomes de aba, no change 5) |
 | Agentes sobrevivem ao fechar | Change 2 |
 | API keys e OAuth | Change 13 (API key) e pós-v1 (OAuth) |
 | Segredos fora do sandbox; keyring depois | Change 11 e pós-v1 |

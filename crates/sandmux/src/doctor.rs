@@ -103,11 +103,46 @@ pub fn run() -> Result<i32> {
             layout.inbox().display()
         );
     }
+    config_section();
     daemon_section();
     println!("\nRede: nesta versão o sandbox usa a rede do host, sem filtro e sem registro.");
     println!("Arquivos de segredo que já estão na pasta de trabalho ficam legíveis pelo agente.");
 
     Ok(if r.can_launch() { 0 } else { 1 })
+}
+
+/// Arquivo de configuração: caminho e validade, sem alterar nada.
+fn config_section() {
+    use sandmux_policy::config::{self, Config};
+    println!("\nConfiguração:");
+    let path = match sandmux_policy::Host::detect() {
+        Ok(h) => config::path(&h),
+        Err(e) => {
+            println!("  não foi possível ler o ambiente: {e}");
+            return;
+        }
+    };
+    println!("  arquivo: {}", path.display());
+    if !path.exists() {
+        println!("  estado: não existe (só a baseline e os presets valem)");
+        return;
+    }
+    match Config::load(&path) {
+        Ok(c) => {
+            let n = |k: usize, um: &str, varios: &str| {
+                format!("{k} {}", if k == 1 { um } else { varios })
+            };
+            println!(
+                "  estado: válido ({}, {})",
+                n(c.profiles.len(), "perfil", "perfis"),
+                n(c.projects.len(), "projeto", "projetos")
+            )
+        }
+        Err(e) => {
+            let at = e.line.map(|l| format!("linha {l}: ")).unwrap_or_default();
+            println!("  estado: inválido, {at}{}", e.message);
+        }
+    }
 }
 
 /// Estado do daemon e da unidade systemd, sem iniciar nada.
