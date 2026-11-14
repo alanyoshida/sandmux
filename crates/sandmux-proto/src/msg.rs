@@ -42,6 +42,50 @@ pub struct LaunchOptions {
     pub kvm: Option<bool>,
     pub gpu: Option<bool>,
     pub allow_clipboard: Option<bool>,
+    /// Tetos dados no `run` (`--memory`, `--processes`), como texto.
+    #[serde(default)]
+    pub memory: Option<String>,
+    #[serde(default)]
+    pub processes: Option<String>,
+    /// Modo de rede dado no `run` (`--network`).
+    #[serde(default)]
+    pub network: Option<String>,
+    /// Padrões de destino negados e liberados na aba (`--deny`, `--allow`,
+    /// `sandmux net deny|allow`).
+    #[serde(default)]
+    pub deny: Vec<String>,
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// Padrões de destino cujo TLS é decifrado (`--decrypt`).
+    #[serde(default)]
+    pub decrypt: Vec<String>,
+    /// Chaves SSH do cofre para o agente da sessão (`--ssh-key`).
+    #[serde(default)]
+    pub ssh_keys: Vec<String>,
+    /// Padrões de arquivo negados e liberados nesta aba (`--file-deny`,
+    /// `--file-allow`).
+    #[serde(default)]
+    pub file_deny: Vec<String>,
+    #[serde(default)]
+    pub file_allow: Vec<String>,
+    /// Portas de entrada da aba (`--port`, protocolo 18).
+    #[serde(default)]
+    pub ports: Vec<String>,
+    /// Conexões de banco do cofre para o MCP da aba (`--db`, protocolo 17).
+    #[serde(default)]
+    pub db: Vec<String>,
+    /// Servidores MCP desabilitados e habilitados nesta aba (protocolo 16).
+    #[serde(default)]
+    pub mcp_deny: Vec<String>,
+    #[serde(default)]
+    pub mcp_allow: Vec<String>,
+    /// Pastas do host em `/mnt/sandmux`, lembradas na aba (protocolo 15).
+    #[serde(default)]
+    pub folders: Vec<sandmux_spec::LiveFolder>,
+    /// Sessão do gateway do hermes (`--gateway`, protocolo 19): reinicia ao
+    /// cair e espera o cofre depois de um reboot.
+    #[serde(default)]
+    pub gateway: bool,
     pub args: Vec<String>,
 }
 
@@ -58,6 +102,21 @@ impl LaunchOptions {
             kvm: None,
             gpu: None,
             allow_clipboard: None,
+            memory: None,
+            processes: None,
+            network: None,
+            deny: vec![],
+            allow: vec![],
+            decrypt: vec![],
+            ssh_keys: vec![],
+            file_deny: vec![],
+            file_allow: vec![],
+            folders: vec![],
+            mcp_deny: vec![],
+            mcp_allow: vec![],
+            db: vec![],
+            ports: vec![],
+            gateway: false,
             args: vec![],
         }
     }
@@ -68,8 +127,19 @@ impl LaunchOptions {
 #[serde(tag = "estado", rename_all = "snake_case")]
 pub enum SessionState {
     Viva,
-    Encerrada { codigo: i32 },
-    Parada { motivo: String },
+    Encerrada {
+        codigo: i32,
+    },
+    Parada {
+        motivo: String,
+    },
+    /// Restaurada depois de um reboot, esperando o cofre ser desbloqueado
+    /// para subir com os valores de `pass-env` guardados nele.
+    AguardandoCofre,
+    /// Gateway do hermes que terminou: volta depois da espera (protocolo 19).
+    Reiniciando {
+        segundos: u64,
+    },
 }
 
 impl std::fmt::Display for SessionState {
@@ -78,6 +148,8 @@ impl std::fmt::Display for SessionState {
             SessionState::Viva => write!(f, "viva"),
             SessionState::Encerrada { codigo } => write!(f, "encerrada ({codigo})"),
             SessionState::Parada { motivo } => write!(f, "parada: {motivo}"),
+            SessionState::AguardandoCofre => write!(f, "aguardando cofre"),
+            SessionState::Reiniciando { segundos } => write!(f, "reiniciando em {segundos} s"),
         }
     }
 }
@@ -97,6 +169,180 @@ pub struct SessionInfo {
     /// Opções dadas no `run` e o perfil nomeado, para o reinício resolver a
     /// política de novo.
     pub opts: LaunchOptions,
+    /// Consumo atual e tetos, quando a sessão está viva e o cgroup é lido.
+    #[serde(default)]
+    pub usage: Option<Usage>,
+    /// Processos mortos por falta de memória no último lançamento.
+    #[serde(default)]
+    pub oom_kills: u64,
+}
+
+/// Consumo atual de uma sessão, com os tetos (`None` é sem teto).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Usage {
+    pub memory: u64,
+    pub memory_max: Option<u64>,
+    pub processes: u64,
+    pub processes_max: Option<u64>,
+}
+
+/// O que foi aplicado no lançamento de uma sessão: a proteção ativa.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PolicySummary {
+    /// Nível de proteção, com a ABI do Landlock.
+    pub level: String,
+    /// Camada de escrita das toolchains e caches.
+    pub layer: String,
+    pub workdir: PathBuf,
+    pub ro: Vec<PathBuf>,
+    pub rw: Vec<PathBuf>,
+    pub gpu: bool,
+    pub kvm: bool,
+    pub clipboard: bool,
+    pub pass_env: Vec<String>,
+    /// Tetos ativos (falso: sem suporte, sem teto).
+    pub limits: bool,
+    pub memory_max: Option<u64>,
+    pub processes_max: Option<u64>,
+    pub network: String,
+}
+
+/// Consumo do Docker privado da pasta de uma sessão.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockerStats {
+    pub memory: u64,
+    pub memory_max: Option<u64>,
+    pub processes: u64,
+    pub processes_max: Option<u64>,
+    pub containers: u64,
+}
+
+/// Uma porta publicada no `127.0.0.1` do host: a do sandbox (ou do
+/// contêiner), a do host e de onde vem (`sandbox` ou o nome do contêiner).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortInfo {
+    pub guest: u16,
+    pub host: u16,
+    pub source: String,
+    /// Endereço do host; `None` é o `127.0.0.1` (protocolo 18).
+    #[serde(default)]
+    pub addr: Option<std::net::Ipv4Addr>,
+}
+
+/// Detalhe do consumo de uma sessão viva.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stats {
+    pub usage: Usage,
+    pub memory_peak: u64,
+    pub processes_peak: u64,
+    /// Tempo de CPU usado, em microssegundos.
+    pub cpu_usec: u64,
+}
+
+/// Um segredo do cofre, sem o valor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultEntry {
+    pub name: String,
+    pub domains: Vec<String>,
+    pub fake: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// `ssh` numa chave SSH (protocolo 13); vazio num token.
+    #[serde(default)]
+    pub kind: String,
+    /// Impressão digital `SHA256:...` de uma chave SSH.
+    #[serde(default)]
+    pub fingerprint: String,
+}
+
+/// Uma conexão de banco, com a senha (só entre o cliente e o daemon).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbConn {
+    pub name: String,
+    /// `postgres` ou `mysql`.
+    pub kind: String,
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub user: String,
+    pub password: String,
+}
+
+impl std::fmt::Debug for DbConn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DbConn")
+            .field("name", &self.name)
+            .field("kind", &self.kind)
+            .field("host", &self.host)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Uma conexão de banco, sem a senha.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbEntry {
+    pub name: String,
+    pub kind: String,
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub user: String,
+}
+
+/// Um servidor MCP com o estado.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpEntry {
+    pub name: String,
+    pub kind: String,
+    pub target: String,
+    pub origin: String,
+    pub enabled: bool,
+}
+
+/// Um segredo com o valor real, para o gateway trocar no tráfego.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Injection {
+    pub name: String,
+    pub domains: Vec<String>,
+    pub fake: String,
+    pub value: String,
+}
+
+impl std::fmt::Debug for Injection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Injection")
+            .field("name", &self.name)
+            .field("domains", &self.domains)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Uma linha do registro de rede, com a sessão dona (`None` para um `run`
+/// direto ou um lançamento que a lista de sessões já não conhece).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetLine {
+    pub session: Option<u32>,
+    pub ts: String,
+    pub tag: String,
+    pub proto: String,
+    pub domain: String,
+    pub ip: String,
+    pub port: u16,
+    pub up: u64,
+    pub down: u64,
+    pub ms: u64,
+    pub blocked: Option<String>,
+    pub new: bool,
+    /// Pedido decifrado: método, caminho sem a query e status.
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub status: Option<u16>,
+    /// Nome do segredo trocado no pedido.
+    #[serde(default)]
+    pub secret: Option<String>,
 }
 
 /// Mensagens de controle, nos dois sentidos.
@@ -126,7 +372,9 @@ pub enum Msg {
     /// Cria uma sessão. `vars` são a lista segura, o `SHELL` e os valores de
     /// `--pass-env`, só em memória.
     Create {
-        opts: LaunchOptions,
+        /// Em caixa: as opções são a maior parte de uma mensagem, e as filas de
+        /// saída do daemon guardam muitas mensagens.
+        opts: Box<LaunchOptions>,
         vars: BTreeMap<String, String>,
         size: Size,
         attach: bool,
@@ -153,6 +401,107 @@ pub enum Msg {
     },
     Status,
     Stop,
+    /// Detalhe do consumo de uma sessão.
+    Stats {
+        id: u32,
+    },
+    /// Troca o nome de uma sessão.
+    Rename {
+        id: u32,
+        name: String,
+    },
+    /// Últimas linhas do registro de rede (protocolo 7): de uma sessão ou de
+    /// todas, só as de `since` em diante (`AAAA-MM-DDTHH:MM:SS`), no máximo
+    /// `limit`.
+    Net {
+        id: Option<u32>,
+        since: Option<String>,
+        limit: u32,
+    },
+
+    /// Muda a camada da aba de uma sessão (protocolo 8): `action` é `deny`,
+    /// `allow` ou `forget` (com um padrão de destino) ou `mode` (com o modo).
+    NetEdit {
+        id: u32,
+        action: String,
+        value: String,
+    },
+
+    // --- cofre (protocolo 10)
+    VaultStatus,
+    /// Cria o cofre, já desbloqueado.
+    VaultInit {
+        password: String,
+    },
+    VaultUnlock {
+        password: String,
+    },
+    VaultLock,
+    VaultPasswd {
+        old: String,
+        new: String,
+    },
+    /// Acrescenta ou substitui um segredo pelo nome.
+    VaultAdd {
+        name: String,
+        value: String,
+        domains: Vec<String>,
+        fake: Option<String>,
+        /// Ferramentas (protocolo 12); vazio deriva dos domínios conhecidos.
+        #[serde(default)]
+        tools: Vec<String>,
+    },
+    /// Guarda uma chave SSH sem passphrase (protocolo 13).
+    VaultAddSsh {
+        name: String,
+        key: String,
+        servers: Vec<String>,
+    },
+    VaultRemove {
+        name: String,
+    },
+    VaultList,
+    /// Monta (`add`, com `rw`) ou desmonta (`remove`, pelo nome) uma pasta em
+    /// `/mnt/sandmux` na aba da sessão (protocolo 15).
+    FolderEdit {
+        id: u32,
+        action: String,
+        value: String,
+        #[serde(default)]
+        rw: bool,
+    },
+    FolderList {
+        id: u32,
+    },
+    /// Guarda uma conexão de banco no cofre (protocolo 17).
+    DbAdd {
+        conn: DbConn,
+    },
+    DbList,
+    /// Os servidores MCP do harness da sessão (protocolo 16).
+    McpList {
+        id: u32,
+    },
+    /// Os segredos com domínio, com os valores reais, para o gateway de um
+    /// lançamento (protocolo 11).
+    VaultInject {
+        tag: String,
+    },
+
+    /// O cofre e a chave do host de um provedor, para o chat (protocolo 20).
+    ChatCheck {
+        host: String,
+    },
+    /// Uma pergunta respondida numa execução confinada, sem aba (protocolo
+    /// 20). `vars` como no `Create`.
+    Ask {
+        model: String,
+        text: String,
+        vars: BTreeMap<String, String>,
+        /// Texto de sistema (protocolo 21; o modal de comando).
+        #[serde(default)]
+        system: Option<String>,
+    },
 
     // --- respostas e eventos do daemon
     Ok,
@@ -182,6 +531,58 @@ pub enum Msg {
     Detached {
         reason: String,
     },
+    StatsOf {
+        id: u32,
+        state: SessionState,
+        /// `None` quando a sessão não está viva ou não tem cgroup.
+        stats: Option<Stats>,
+        oom_kills: u64,
+        fork_refusals: u64,
+        /// Docker privado da pasta, quando está rodando.
+        #[serde(default)]
+        docker: Option<DockerStats>,
+        /// Proteção aplicada no último lançamento (em caixa: é a maior
+        /// parte da mensagem).
+        #[serde(default)]
+        policy: Option<Box<PolicySummary>>,
+        /// Portas publicadas da sessão e do Docker da pasta (protocolo 9).
+        #[serde(default)]
+        ports: Vec<PortInfo>,
+    },
+    NetLog {
+        lines: Vec<NetLine>,
+    },
+    VaultInfo {
+        exists: bool,
+        unlocked: bool,
+        secrets: usize,
+    },
+    /// Resposta ao `ChatCheck`: o cofre existe, está desbloqueado e tem
+    /// segredo para o host.
+    ChatStatus {
+        exists: bool,
+        unlocked: bool,
+        key: bool,
+    },
+    /// Resposta ao `Ask`.
+    Answer {
+        text: String,
+    },
+    Folders {
+        list: Vec<sandmux_spec::LiveFolder>,
+    },
+    Mcps {
+        list: Vec<McpEntry>,
+    },
+    DbEntries {
+        list: Vec<DbEntry>,
+    },
+    VaultEntries {
+        entries: Vec<VaultEntry>,
+    },
+    Injections {
+        secrets: Vec<Injection>,
+    },
     StatusInfo {
         pid: u32,
         protocol: u32,
@@ -190,6 +591,24 @@ pub enum Msg {
         sessions: usize,
         socket: PathBuf,
     },
+}
+
+/// Confere um nome de sessão: de 1 a 40 caracteres, sem caracteres de
+/// controle.
+pub fn check_session_name(name: &str) -> Result<(), String> {
+    let n = name.chars().count();
+    if n == 0 || name.trim().is_empty() {
+        return Err("o nome da sessão não pode ser vazio".into());
+    }
+    if n > 40 {
+        return Err(format!(
+            "o nome da sessão tem {n} caracteres; o máximo é 40"
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err("o nome da sessão não pode ter caracteres de controle".into());
+    }
+    Ok(())
 }
 
 /// Resposta do daemon à saudação: a mensagem a enviar e se a conexão segue.
@@ -335,6 +754,56 @@ mod tests {
     }
 
     #[test]
+    fn consumo_e_stats_ida_e_volta() {
+        let u = Usage {
+            memory: 1 << 20,
+            memory_max: None,
+            processes: 3,
+            processes_max: Some(8192),
+        };
+        let m = Msg::StatsOf {
+            id: 1,
+            state: SessionState::Viva,
+            stats: Some(Stats {
+                usage: u,
+                memory_peak: 2 << 20,
+                processes_peak: 4,
+                cpu_usec: 10,
+            }),
+            oom_kills: 1,
+            fork_refusals: 2,
+            docker: Some(DockerStats {
+                memory: 1,
+                memory_max: None,
+                processes: 2,
+                processes_max: Some(10),
+                containers: 3,
+            }),
+            ports: vec![PortInfo {
+                guest: 3000,
+                host: 3001,
+                source: "sandbox".into(),
+                addr: Some(std::net::Ipv4Addr::UNSPECIFIED),
+            }],
+            policy: Some(Box::new(PolicySummary {
+                level: "nível 1".into(),
+                kvm: true,
+                ro: vec!["/d".into()],
+                ..Default::default()
+            })),
+        };
+        let back: Msg = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back, m);
+        // Opções do protocolo 2, sem os tetos, ainda são lidas.
+        let o: LaunchOptions = serde_json::from_str(
+            r#"{"harness":"shell","workdir":"/w","ro":[],"rw":[],"pass_env":[],"profile":null,
+                "repo":null,"kvm":null,"gpu":null,"allow_clipboard":null,"args":[]}"#,
+        )
+        .unwrap();
+        assert_eq!((o.memory, o.processes), (None, None));
+    }
+
+    #[test]
     fn opcoes_sem_valor_e_perfil() {
         let mut o = LaunchOptions::new("shell");
         o.kvm = Some(false);
@@ -434,5 +903,40 @@ mod tests {
             })
         );
         assert_eq!(Size::min_of([]), None);
+    }
+
+    #[test]
+    fn cofre_e_estado_novo() {
+        let s = SessionState::AguardandoCofre;
+        let j = serde_json::to_string(&s).unwrap();
+        assert_eq!(j, r#"{"estado":"aguardando_cofre"}"#);
+        assert_eq!(serde_json::from_str::<SessionState>(&j).unwrap(), s);
+        assert_eq!(s.to_string(), "aguardando cofre");
+        let m = Msg::VaultAdd {
+            name: "openrouter".into(),
+            value: "v".into(),
+            domains: vec!["openrouter.ai".into()],
+            fake: None,
+            tools: vec![],
+        };
+        let j = serde_json::to_string(&m).unwrap();
+        assert!(j.contains(r#""t":"vault_add""#), "{j}");
+        assert_eq!(serde_json::from_str::<Msg>(&j).unwrap(), m);
+    }
+
+    #[test]
+    fn injecao_sem_valor_no_debug() {
+        let i = Injection {
+            name: "openrouter".into(),
+            domains: vec!["openrouter.ai".into()],
+            fake: "sandmux-fake-x".into(),
+            value: "sk-real".into(),
+        };
+        assert!(!format!("{i:?}").contains("sk-real"));
+        let m = Msg::Injections { secrets: vec![i] };
+        let j = serde_json::to_string(&m).unwrap();
+        assert_eq!(serde_json::from_str::<Msg>(&j).unwrap(), m);
+        let q = Msg::VaultInject { tag: "s1-1".into() };
+        assert!(serde_json::to_string(&q).unwrap().contains("vault_inject"));
     }
 }

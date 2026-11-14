@@ -48,6 +48,25 @@ fn read_path(p: &str) -> Result<String, std::io::Error> {
     }
 }
 
+/// Grava um valor num arquivo existente (arquivos de cgroup).
+fn write_value(p: &str, v: &str) -> Result<String, std::io::Error> {
+    let mut f = std::fs::OpenOptions::new().write(true).open(p)?;
+    f.write_all(v.as_bytes())?;
+    Ok("gravado".into())
+}
+
+/// Pasta do cgroup deste processo, vista em `/sys/fs/cgroup`.
+fn own_cgroup() -> std::path::PathBuf {
+    let rel = std::fs::read_to_string("/proc/self/cgroup")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("0::").map(str::to_string))
+        })
+        .unwrap_or_default();
+    std::path::Path::new("/sys/fs/cgroup").join(rel.trim().trim_start_matches('/'))
+}
+
 fn write_path(p: &str) -> Result<String, std::io::Error> {
     let mut f = std::fs::OpenOptions::new()
         .create(true)
@@ -120,7 +139,13 @@ fn ioctl_attempt(name: &str) -> Result<String, std::io::Error> {
     let f = std::fs::File::open("/dev/null")?;
     let c: u8 = b'x';
     // SAFETY: descritor válido e ponteiro para um byte.
-    let r = unsafe { libc::ioctl(std::os::fd::AsRawFd::as_raw_fd(&f), cmd, &c as *const u8) };
+    let r = unsafe {
+        libc::ioctl(
+            std::os::fd::AsRawFd::as_raw_fd(&f),
+            cmd as _,
+            &c as *const u8,
+        )
+    };
     sys_result(r as libc::c_long, name)
 }
 
@@ -392,6 +417,29 @@ fn suite(args: &[String]) -> i32 {
     for p in ["/usr/sandmux-fuga", "/etc/sandmux-fuga", "/sandmux-fuga"] {
         add(format!("escrever em {p}"), write_path(p));
     }
+    // Os tetos de recurso: o sandbox não pode afrouxá-los nem sair do cgroup.
+    let cg = own_cgroup();
+    let parent = cg.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let me = std::process::id().to_string();
+    for (dir, nome) in [(&cg, "próprio"), (&parent, "pai")] {
+        for (f, v) in [("memory.max", "max"), ("pids.max", "max")] {
+            let p = dir.join(f).display().to_string();
+            add(
+                format!("afrouxar {f} do cgroup {nome} ({p})"),
+                write_value(&p, v),
+            );
+        }
+    }
+    let p = parent.join("cgroup.procs").display().to_string();
+    add(
+        format!("sair para o cgroup pai ({p})"),
+        write_value(&p, &me),
+    );
+    let p = cg.join("sandmux-fuga").display().to_string();
+    add(
+        format!("criar cgroup filho ({p})"),
+        std::fs::create_dir(&p).map(|_| "criado".into()),
+    );
     for c in get("config") {
         add(
             format!("escrever na configuração do sandmux {c}"),

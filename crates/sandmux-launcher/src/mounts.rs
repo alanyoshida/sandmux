@@ -285,6 +285,19 @@ impl Builder {
                 )?;
                 self.attach(mnt, dest, Kind::Dir)
             }
+            Mount::Sysfs { dest } => {
+                let fsc = ctx(FsContext::open("sysfs"), || "sysfs".into())?;
+                let mnt = ctx(
+                    fsc.mount(
+                        MOUNT_ATTR_NOSUID
+                            | MOUNT_ATTR_NODEV
+                            | MOUNT_ATTR_NOEXEC
+                            | MOUNT_ATTR_RDONLY,
+                    ),
+                    || "sysfs".into(),
+                )?;
+                self.attach(mnt, dest, Kind::Dir)
+            }
             Mount::Devpts { dest } => {
                 let fsc = ctx(FsContext::open("devpts"), || "devpts".into())?;
                 ctx(fsc.set_string("ptmxmode", "0666"), || "devpts".into())?;

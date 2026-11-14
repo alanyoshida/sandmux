@@ -40,7 +40,7 @@ Para o opencode, a importação MUST copiar de `~/.config/opencode` os arquivos 
 - **THEN** elas existem no HOME sintético depois da importação
 
 ### Requirement: Itens importados do hermes
-Para o hermes, a importação MUST copiar de `~/.hermes` o `config.yaml`, o `SOUL.md` e as pastas `skills`, `memories`, `plugins` e `hooks`, e MUST copiar `.env` e `auth.json` com os segredos trocados.
+Para o hermes, a importação MUST copiar de `~/.hermes` o `config.yaml`, o `SOUL.md` e as pastas `skills`, `memories`, `plugins` e `hooks`, e MUST copiar `.env` e `auth.json` com os segredos trocados. O pareamento de canais de mensagem e as tarefas agendadas MUST ficar de fora: eles são criados dentro do sandbox.
 
 #### Scenario: Memórias
 - **WHEN** o usuário tem memórias em `~/.hermes/memories`
@@ -48,7 +48,7 @@ Para o hermes, a importação MUST copiar de `~/.hermes` o `config.yaml`, o `SOU
 
 #### Scenario: Canais e agendamentos
 - **WHEN** o estado real do hermes tem pareamento de canais de mensagem e tarefas agendadas
-- **THEN** nada disso é copiado nesta fatia
+- **THEN** nada disso é copiado, e o relatório lista `pairing` e `cron` como ignorados
 
 ### Requirement: Histórico não é copiado
 A importação MUST NOT copiar histórico nem dados de execução: bancos de sessões, conversas, saídas de ferramenta, logs, caches, snapshots, filas de mensagens, arquivos de trava e o estado do gateway.

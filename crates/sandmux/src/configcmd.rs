@@ -20,15 +20,16 @@ pub enum ConfigCmd {
     },
     /// Lista os perfis nomeados e as pastas com perfil de projeto.
     List,
-    /// Define uma chave de liga e desliga (repo, kvm, gpu, clipboard).
+    /// Define uma chave de liga e desliga (repo, kvm, gpu, clipboard) ou um teto
+    /// (memory, processes).
     Set {
         chave: String,
-        /// true ou false (também sim ou não).
+        /// true ou false (também sim ou não); nos tetos, 50%, 16G, 512 ou max.
         valor: String,
         #[command(flatten)]
         alvo: Alvo,
     },
-    /// Apaga uma chave de liga e desliga.
+    /// Apaga uma chave de liga e desliga ou um teto.
     Unset {
         chave: String,
         #[command(flatten)]
@@ -89,10 +90,17 @@ pub fn run(cmd: ConfigCmd) -> Result<i32> {
         ConfigCmd::Show { workdir, profile } => show(&host, &path, workdir, profile),
         ConfigCmd::List => list(&path),
         ConfigCmd::Set { chave, valor, alvo } => {
-            let v = edit::parse_bool(&valor).ok_or_else(|| {
-                anyhow!("valor inválido para `{chave}`: {valor:?}. Use true ou false")
-            })?;
-            change(&host, &path, &alvo, edit::Op::Set(chave, v))
+            let op = if config::LIMIT_KEYS.contains(&chave.as_str())
+                || config::NET_KEYS.contains(&chave.as_str())
+            {
+                edit::Op::SetLimit(chave, valor)
+            } else {
+                let v = edit::parse_bool(&valor).ok_or_else(|| {
+                    anyhow!("valor inválido para `{chave}`: {valor:?}. Use true ou false")
+                })?;
+                edit::Op::Set(chave, v)
+            };
+            change(&host, &path, &alvo, op)
         }
         ConfigCmd::Unset { chave, alvo } => change(&host, &path, &alvo, edit::Op::Unset(chave)),
         ConfigCmd::Add { chave, item, alvo } => {
@@ -169,6 +177,21 @@ fn rows(eff: &Effective) -> Vec<[String; 3]> {
         let s = eff.setting(k).expect("chave de liga e desliga");
         rows.push([k.to_string(), s.value.to_string(), s.origin.to_string()]);
     }
+    rows.push([
+        "memory".into(),
+        eff.memory.value.to_string(),
+        eff.memory.origin.to_string(),
+    ]);
+    rows.push([
+        "processes".into(),
+        eff.processes.value.to_string(),
+        eff.processes.origin.to_string(),
+    ]);
+    rows.push([
+        "network".into(),
+        eff.network.value.to_string(),
+        eff.network.origin.to_string(),
+    ]);
     let mut list = |key: &str, items: Vec<(String, &Origin)>| {
         if items.is_empty() {
             rows.push([key.into(), "(nenhum)".into(), Origin::Default.to_string()]);
@@ -190,6 +213,82 @@ fn rows(eff: &Effective) -> Vec<[String; 3]> {
         "pass-env",
         eff.pass_env.iter().map(|(n, o)| (n.clone(), o)).collect(),
     );
+    for (k, v) in [
+        ("file-deny", &eff.file_deny),
+        ("file-allow", &eff.file_allow),
+        ("secret-files", &eff.secret_files),
+        ("secret-files-off", &eff.secret_files_off),
+    ] {
+        if !v.is_empty() {
+            rows.push([k.into(), v.join(", "), "somada das camadas".into()]);
+        }
+    }
+    if eff.ssh_keys.is_empty() {
+        rows.push([
+            "ssh-keys".into(),
+            "(nenhuma)".into(),
+            Origin::Default.to_string(),
+        ]);
+    } else {
+        rows.push([
+            "ssh-keys".into(),
+            eff.ssh_keys.join(", "),
+            "somada das camadas".into(),
+        ]);
+    }
+    // Regras de rede das camadas; os catálogos num resumo (o detalhe está em
+    // `sandmux net rules`).
+    use sandmux_spec::net::RuleKind;
+    for (key, kind) in [("deny", RuleKind::Deny), ("allow", RuleKind::Allow)] {
+        let mine: Vec<_> = eff
+            .net_rules
+            .iter()
+            .filter(|r| r.kind == kind && !r.origin.starts_with("catálogo"))
+            .collect();
+        if mine.is_empty() {
+            rows.push([key.into(), "(nenhum)".into(), Origin::Default.to_string()]);
+        }
+        for r in mine {
+            let v = if r.enabled {
+                r.pattern.to_string()
+            } else {
+                format!("{} (desligado)", r.pattern)
+            };
+            rows.push([key.into(), v, format!("modificada ({})", r.origin)]);
+        }
+    }
+    let count = |origin: &dyn Fn(&str) -> bool| {
+        let all: Vec<_> = eff.net_rules.iter().filter(|r| origin(&r.origin)).collect();
+        (all.iter().filter(|r| r.enabled).count(), all.len())
+    };
+    let (ex_on, ex_all) = count(&|o| o == sandmux_policy::netcatalog::EXFIL_ORIGIN);
+    let (inf_on, inf_all) = count(&|o| o == sandmux_policy::netcatalog::INFERENCE_ORIGIN);
+    let groups: Vec<&str> = sandmux_policy::netcatalog::COMMON
+        .iter()
+        .filter(|(g, _)| {
+            eff.net_rules
+                .iter()
+                .any(|r| r.enabled && r.origin == sandmux_policy::netcatalog::common_origin(g))
+        })
+        .map(|(g, _)| *g)
+        .collect();
+    let default = ex_on == ex_all && inf_on == inf_all && groups.is_empty();
+    rows.push([
+        "catálogos".into(),
+        format!(
+            "exfiltração {ex_on}/{ex_all}, inferência {inf_on}/{inf_all}, comuns: {}",
+            if groups.is_empty() {
+                "nenhum".to_string()
+            } else {
+                groups.join(", ")
+            }
+        ),
+        if default {
+            Origin::Default.to_string()
+        } else {
+            "modificada".into()
+        },
+    ]);
     rows
 }
 

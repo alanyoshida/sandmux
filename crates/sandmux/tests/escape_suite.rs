@@ -92,7 +92,7 @@ fn suite_completa_de_fuga() {
     let summary: serde_json::Value = serde_json::from_str(report.lines().last().unwrap()).unwrap();
     assert_eq!(summary["resumo"]["conseguiram"], 0);
     assert!(
-        summary["resumo"]["tentativas"].as_u64().unwrap() >= 56,
+        summary["resumo"]["tentativas"].as_u64().unwrap() >= 62,
         "{report}"
     );
     assert_eq!(out.status.code(), Some(0));

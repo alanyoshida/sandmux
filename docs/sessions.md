@@ -13,7 +13,20 @@ O `sandmuxd` é o processo de cada usuário que segura as sessões. Uma sessão 
 
 | Comando | Efeito |
 |---|---|
-| `sandmux ls` | Lista as sessões com identificador, nome (`<harness>:<pasta>`), estado, terminais anexados e pasta |
+| `sandmux ls` | Lista as sessões com identificador, nome (`<harness>:<pasta>`), estado, terminais anexados, memória e processos em uso com os tetos, e pasta |
+| `sandmux stats <id>` | Detalhe do consumo: memória e processos em uso, picos e tetos, CPU usada, mortes por falta de memória e criações de processo recusadas ([docs/limits.md](limits.md)), e as portas publicadas no host ([docs/network.md](network.md)) |
+| `sandmux net [<id>]` | As últimas conexões de rede registradas, de uma sessão ou de todas ([docs/network.md](network.md)) |
+| `sandmux net deny\|allow\|forget <padrão> <id>` | Muda as regras de rede da aba de uma sessão viva, com efeito na conexão seguinte |
+| `sandmux net mode <modo> <id>` | Troca o modo de rede da aba |
+| `sandmux files deny\|allow\|forget <padrão> <id>` | Nega, libera ou tira um padrão de arquivo da aba de uma sessão, com efeito na abertura seguinte ([docs/files.md](files.md)) |
+| `sandmux db add\|list\|remove\|log` | Conexões de banco no cofre e o registro das queries do MCP de banco ([docs/database.md](database.md)) |
+| `sandmux mcp list [<id>]` | Os servidores MCP da sessão, ou do harness na pasta atual, com o estado ([docs/mcp.md](mcp.md)) |
+| `sandmux mcp deny\|allow\|forget <nome> <id>` | Desabilita, põe na allowlist ou tira das regras um servidor MCP na aba; vale no próximo lançamento |
+| `sandmux folder add <id> <pasta> [--rw]` | Monta uma pasta do host em `/mnt/sandmux/<nome>` na sessão, na hora ([docs/files.md](files.md#pastas-novas-ao-vivo)) |
+| `sandmux folder remove <id> <nome>` | Desmonta uma pasta de `/mnt/sandmux` |
+| `sandmux folder list <id>` | Lista as pastas da sessão em `/mnt/sandmux` |
+| `sandmux files [<id>] [--days N]` | Os acessos às pastas do agente registrados, de uma sessão ou de todas ([docs/files.md](files.md)) |
+| `sandmux net rules [<id>]` | O modo e as regras de rede efetivas, com a origem |
 | `sandmux attach [id]` | Anexa o terminal. Sem identificador, à única sessão viva |
 | `sandmux detach <id>` | Desanexa todos os terminais da sessão |
 | `sandmux kill <id>` | Pede ao harness que termine (SIGTERM e SIGHUP); depois de 5 segundos, encerra à força. A sessão sai da lista |
@@ -23,7 +36,7 @@ O `sandmuxd` é o processo de cada usuário que segura as sessões. Uma sessão 
 | `sandmux daemon restart` | Para e sobe com o binário instalado; use depois de atualizar o sandmux |
 | `sandmux daemon disable` | Para o daemon e remove a unidade systemd |
 
-Estados de uma sessão: **viva**, **encerrada** (com o código de saída do harness) e **parada** (com o motivo: falta de `--pass-env` depois de uma restauração, pasta de trabalho apagada, falha ao relançar).
+Estados de uma sessão: **viva**, **encerrada** (com o código de saída do harness e, quando houve morte por falta de memória, a nota "memória esgotada"), **parada** (com o motivo: falta de `--pass-env` depois de uma restauração, pasta de trabalho apagada, falha ao relançar) **aguardando cofre** (restaurada com os valores de `--pass-env` guardados no [cofre](vault.md), ou a sessão do gateway do hermes ou uma aba de chat com o cofre criado; sobe quando o cofre é desbloqueado) e **reiniciando em N s** (o [gateway do hermes](hermes.md) terminou e volta depois da espera).
 
 ## Modo anexado
 
@@ -69,7 +82,7 @@ Socket Unix de fluxo. Cada quadro tem 4 bytes de tamanho (big-endian, só o cont
 | 0 | Mensagem de controle em JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Bytes de terminal: entrada do cliente ou saída da sessão |
 
-A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados e a pasta de configuração do cliente. Esta versão usa o protocolo 2. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
+A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados e a pasta de configuração do cliente. Esta versão usa o protocolo 21. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
 
 O cliente envia ao daemon, junto com o pedido de sessão, as opções dadas no `run`, o perfil nomeado, a pasta atual, as variáveis da lista segura, o `SHELL` e os valores de `pass-env` da política efetiva. O daemon resolve as camadas de configuração ([docs/config.md](config.md)) e compõe a especificação de lançamento com a mesma função do `run` direto.
 
@@ -82,7 +95,10 @@ Ao subir, o daemon lê a lista:
 | Sessão guardada | Ao subir |
 |---|---|
 | Viva, sem `pass-env` na política resolvida agora | Relançada sozinha, sem terminal anexado, com `TERM=xterm-256color` |
-| Viva, com `pass-env` (pela opção ou pela configuração) | Parada até `sandmux restart <id>` num terminal com as variáveis |
+| Viva, com `pass-env` e os valores guardados no [cofre](vault.md) | Aguardando cofre; sobe sozinha quando o cofre é desbloqueado |
+| Viva, com `pass-env` sem os valores no cofre | Parada até `sandmux restart <id>` num terminal com as variáveis |
+| Gateway do hermes, vivo ou reiniciando, com o cofre criado | Aguardando cofre; sobe sozinha quando o cofre é desbloqueado |
+| Aba de chat viva, com o cofre criado | Aguardando cofre; sobe sozinha, com a conversa, quando o cofre é desbloqueado ([chat.md](chat.md)) |
 | Viva, com o perfil nomeado apagado ou a configuração inválida | Parada, com o motivo |
 | Viva, com a pasta apagada | Parada, com o motivo |
 | Encerrada ou parada | Volta como estava |

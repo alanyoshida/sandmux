@@ -1,0 +1,36 @@
+# Release: numa tag v*, gera os binários estáticos, o tarball, o .deb, o .rpm,
+# o PKGBUILD e a fórmula (scripts/dist.sh) e cria a release no GitHub.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ferramentas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools rpm
+          rustup toolchain install stable --profile minimal
+          rustup target add x86_64-unknown-linux-musl
+      - name: Distribuição
+        run: ./scripts/dist.sh
+      - name: Versão da tag confere com o Cargo.toml
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          test "v$v" = "$GITHUB_REF_NAME"
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --prerelease \
+            --title "sandmux $GITHUB_REF_NAME" --notes-file packaging/release-notes.md \
+            dist/*.tar.gz dist/*.sha256 dist/*.deb dist/*.rpm dist/install.sh \
+            dist/aur/PKGBUILD dist/aur/.SRCINFO dist/homebrew/sandmux.rb

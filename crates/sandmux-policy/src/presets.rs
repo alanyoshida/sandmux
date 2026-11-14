@@ -82,6 +82,81 @@ fn opencode_provider(var: &str) -> Option<String> {
         .map(|p| p.to_ascii_lowercase().replace('_', "-"))
 }
 
+/// Provedores de inferência conhecidos: a variável que os harnesses leem e o
+/// domínio dono da chave.
+pub const PROVIDERS: &[(&str, &str)] = &[
+    ("OPENROUTER_API_KEY", "openrouter.ai"),
+    ("ANTHROPIC_API_KEY", "api.anthropic.com"),
+    ("OPENAI_API_KEY", "api.openai.com"),
+    ("GEMINI_API_KEY", "generativelanguage.googleapis.com"),
+    ("DEEPSEEK_API_KEY", "api.deepseek.com"),
+    ("MISTRAL_API_KEY", "api.mistral.ai"),
+    ("GROQ_API_KEY", "api.groq.com"),
+    ("XAI_API_KEY", "api.x.ai"),
+];
+
+/// Ferramentas que recebem o valor falso de um segredo.
+pub const TOOLS: &[&str] = &[
+    "gh",
+    "git",
+    "npm",
+    "pip",
+    "cargo",
+    "docker",
+    "telegram",
+    "discord",
+    "slack",
+    "slack-app",
+];
+
+/// Ferramentas dos domínios conhecidos, para segredos sem `--tool`.
+pub const KNOWN_TOOLS: &[(&str, &[&str])] = &[
+    ("github.com", &["gh", "git"]),
+    ("registry.npmjs.org", &["npm"]),
+    ("pypi.org", &["pip"]),
+    ("crates.io", &["cargo"]),
+    ("ghcr.io", &["docker"]),
+    ("registry-1.docker.io", &["docker"]),
+    ("docker.io", &["docker"]),
+    ("api.telegram.org", &["telegram"]),
+    ("discord.com", &["discord"]),
+    ("slack.com", &["slack"]),
+];
+
+/// As ferramentas de um segredo pelos domínios e pelo valor: no `slack.com`,
+/// um token `xapp-` é da conexão do app (`slack-app`), não do bot.
+pub fn tools_for_secret(domains: &[String], value: &str) -> Vec<String> {
+    let mut t = tools_for(domains);
+    if value.starts_with("xapp-") {
+        for x in t.iter_mut() {
+            if x == "slack" {
+                *x = "slack-app".into();
+            }
+        }
+    }
+    t
+}
+
+/// As ferramentas de um segredo pelos domínios dele.
+pub fn tools_for(domains: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for d in domains {
+        for (k, tools) in KNOWN_TOOLS {
+            if d.eq_ignore_ascii_case(k) {
+                for t in *tools {
+                    if !out.iter().any(|x| x == t) {
+                        out.push(t.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Os harnesses que recebem as chaves falsas dos provedores.
+pub const FAKE_KEY_HARNESSES: &[&str] = &["opencode", "hermes", "chat"];
+
 /// Configuração injetada no opencode para que a chave passada por
 /// `--pass-env` vença o valor falso do `auth.json` importado.
 pub fn opencode_config_content(pass_env: &[String]) -> Option<String> {
@@ -193,6 +268,16 @@ pub fn plan(
                 shell,
             })
         }
+        // Aba de chat: o programa entra pelo lançamento (`chat_bin`).
+        "chat" => Ok(PresetPlan {
+            mounts: vec![],
+            layered: vec![],
+            env: vec![],
+            command: std::iter::once(crate::compose::CHAT_BIN.to_string())
+                .chain(args.iter().cloned())
+                .collect(),
+            shell: system_shell(host),
+        }),
         other => Err(PolicyError::UnknownHarness(other.into())),
     }
 }
@@ -200,6 +285,26 @@ pub fn plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ferramentas_pelos_dominios() {
+        assert_eq!(tools_for(&["github.com".into()]), vec!["gh", "git"]);
+        assert_eq!(
+            tools_for(&["GHCR.io".into(), "docker.io".into()]),
+            vec!["docker"]
+        );
+        assert!(tools_for(&["npm.empresa.com".into()]).is_empty());
+        let slack = ["slack.com".to_string()];
+        assert_eq!(tools_for_secret(&slack, "xoxb-1"), vec!["slack"]);
+        assert_eq!(tools_for_secret(&slack, "xapp-1"), vec!["slack-app"]);
+        assert_eq!(
+            tools_for_secret(&["api.telegram.org".into()], "1:a"),
+            vec!["telegram"]
+        );
+        for (_, t) in KNOWN_TOOLS {
+            assert!(t.iter().all(|x| TOOLS.contains(x)));
+        }
+    }
 
     #[test]
     fn config_do_opencode_aponta_para_a_variavel() {

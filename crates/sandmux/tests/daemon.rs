@@ -54,7 +54,7 @@ fn protocolo_diferente_recusado_com_as_duas_versoes() {
     let err = stderr(&out);
     assert!(
         err.contains("protocolo 999")
-            && err.contains("protocolo 2 ")
+            && err.contains(&format!("protocolo {} ", sandmux_proto::PROTOCOL))
             && err.contains("sandmux daemon restart"),
         "{err}"
     );
@@ -119,7 +119,7 @@ fn status_e_stop() {
     let s = stdout(&out);
     assert!(
         s.contains("está rodando")
-            && s.contains("protocolo 2")
+            && s.contains(&format!("protocolo {}", sandmux_proto::PROTOCOL))
             && s.contains("iniciado por: direct")
             && s.contains("sessões: 0"),
         "{s}"

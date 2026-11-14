@@ -15,6 +15,9 @@ use toml_edit::{Document, Item, Value};
 
 use crate::compose::{LayerMode, RunOptions};
 use crate::host::Host;
+use crate::limits::{self, Limits, MemoryLimit, ProcessLimit};
+use crate::netcatalog;
+use sandmux_spec::net::{NetPolicy, Pattern, Rule, RuleKind};
 
 /// Nome do arquivo dentro da pasta de configuração.
 pub const FILE: &str = "config.toml";
@@ -23,6 +26,111 @@ pub const FILE: &str = "config.toml";
 pub const LIST_KEYS: &[&str] = &["ro", "rw", "pass-env"];
 /// Chaves de liga e desliga.
 pub const BOOL_KEYS: &[&str] = &["repo", "kvm", "gpu", "clipboard"];
+/// Chaves de teto.
+pub const LIMIT_KEYS: &[&str] = &["memory", "processes"];
+/// Chaves da rede: o modo, em qualquer seção; a retenção do registro, só em
+/// `[global]`.
+pub const NET_KEYS: &[&str] = &["network"];
+/// Listas da política de rede: padrões de destino, e os grupos do catálogo
+/// comum em `catalog`.
+pub const NET_LIST_KEYS: &[&str] = &[
+    "deny",
+    "allow",
+    "allow-off",
+    "catalog",
+    "catalog-off",
+    "decrypt",
+];
+pub const GLOBAL_ONLY_KEYS: &[&str] = &["net-log-days", "net-log-max"];
+/// Chaves SSH do cofre que a sessão pode usar (`"*"` é todas).
+pub const SSH_KEYS: &str = "ssh-keys";
+/// Conexões de banco do cofre que a sessão pode usar (`"*"` é todas).
+pub const DB_KEY: &str = "db";
+/// Portas de entrada publicadas (`8642` ou `8443@0.0.0.0`).
+pub const PORTS_KEY: &str = "ports";
+
+/// Listas de servidores MCP (nomes).
+pub const MCP_LIST_KEYS: &[&str] = &["mcp-deny", "mcp-allow"];
+
+/// Listas da política de arquivos (padrões de arquivo).
+pub const FILE_LIST_KEYS: &[&str] = &[
+    "file-deny",
+    "file-allow",
+    "secret-files",
+    "secret-files-off",
+];
+
+/// Confere um padrão de arquivo (o `~/` vale como o HOME de quem lança).
+pub fn valid_file_pattern(s: &str) -> Result<(), String> {
+    sandmux_spec::files::FilePattern::parse(s, Some(std::path::Path::new("/h"))).map(|_| ())
+}
+
+/// Um nome de chave SSH aceito em `ssh-keys`.
+pub fn valid_ssh_key_name(s: &str) -> bool {
+    !s.is_empty() && !s.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+/// Modo de rede do sandbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkMode {
+    Aberta,
+    Inferencia,
+    Custom,
+    SemRede,
+}
+
+impl NetworkMode {
+    pub const ALL: [NetworkMode; 4] = [
+        NetworkMode::Aberta,
+        NetworkMode::Inferencia,
+        NetworkMode::Custom,
+        NetworkMode::SemRede,
+    ];
+
+    pub fn parse(s: &str) -> Result<NetworkMode, String> {
+        match s.trim() {
+            "aberta" => Ok(NetworkMode::Aberta),
+            "inferencia" => Ok(NetworkMode::Inferencia),
+            "custom" => Ok(NetworkMode::Custom),
+            "sem-rede" => Ok(NetworkMode::SemRede),
+            other => Err(format!(
+                "modo de rede inválido: {other:?}; use \"aberta\", \"inferencia\", \"custom\" ou \"sem-rede\""
+            )),
+        }
+    }
+
+    /// O modo do gateway; `None` sem rede.
+    pub fn policy_mode(self) -> Option<sandmux_spec::net::PolicyMode> {
+        use sandmux_spec::net::PolicyMode;
+        match self {
+            NetworkMode::Aberta => Some(PolicyMode::Open),
+            NetworkMode::Inferencia => Some(PolicyMode::Inference),
+            NetworkMode::Custom => Some(PolicyMode::Custom),
+            NetworkMode::SemRede => None,
+        }
+    }
+
+    /// Descrição curta, para o resumo da política.
+    pub fn describe(self) -> &'static str {
+        match self {
+            NetworkMode::Aberta => "aberta, registrada",
+            NetworkMode::Inferencia => "só inferência, registrada",
+            NetworkMode::Custom => "custom (allowlist), registrada",
+            NetworkMode::SemRede => "sem rede",
+        }
+    }
+}
+
+impl std::fmt::Display for NetworkMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            NetworkMode::Aberta => "aberta",
+            NetworkMode::Inferencia => "inferencia",
+            NetworkMode::Custom => "custom",
+            NetworkMode::SemRede => "sem-rede",
+        })
+    }
+}
 
 /// Caminho do arquivo de configuração do host.
 pub fn path(host: &Host) -> PathBuf {
@@ -68,9 +176,58 @@ pub struct Layer {
     pub kvm: Option<bool>,
     pub gpu: Option<bool>,
     pub clipboard: Option<bool>,
+    pub memory: Option<MemoryLimit>,
+    pub processes: Option<ProcessLimit>,
+    pub network: Option<NetworkMode>,
+    pub deny: Vec<Pattern>,
+    pub allow: Vec<Pattern>,
+    pub allow_off: Vec<Pattern>,
+    pub catalog: Vec<String>,
+    pub catalog_off: Vec<Pattern>,
+    /// Domínios cujo TLS é decifrado.
+    pub decrypt: Vec<Pattern>,
+    /// Chaves SSH do cofre que a sessão pode usar.
+    pub ssh_keys: Vec<String>,
+    /// Conexões de banco do cofre que a sessão pode usar.
+    pub db: Vec<String>,
+    /// Portas de entrada publicadas.
+    pub ports: Vec<sandmux_spec::net::PortRule>,
+    /// Política de arquivos: `file-deny`, `file-allow`, `secret-files` e
+    /// `secret-files-off`, como escritos.
+    pub file_deny: Vec<String>,
+    pub file_allow: Vec<String>,
+    pub secret_files: Vec<String>,
+    pub secret_files_off: Vec<String>,
+    /// Servidores MCP desabilitados e, quando não vazia, os únicos
+    /// habilitados.
+    pub mcp_deny: Vec<String>,
+    pub mcp_allow: Vec<String>,
 }
 
 impl Layer {
+    /// Uma lista da política de arquivos, pelo nome da chave.
+    pub fn file_list_mut(&mut self, key: &str) -> Option<&mut Vec<String>> {
+        match key {
+            "file-deny" => Some(&mut self.file_deny),
+            "file-allow" => Some(&mut self.file_allow),
+            "secret-files" => Some(&mut self.secret_files),
+            "secret-files-off" => Some(&mut self.secret_files_off),
+            _ => None,
+        }
+    }
+
+    /// Uma lista de padrões da rede, pelo nome da chave.
+    pub fn patterns_mut(&mut self, key: &str) -> Option<&mut Vec<Pattern>> {
+        match key {
+            "deny" => Some(&mut self.deny),
+            "decrypt" => Some(&mut self.decrypt),
+            "allow" => Some(&mut self.allow),
+            "allow-off" => Some(&mut self.allow_off),
+            "catalog-off" => Some(&mut self.catalog_off),
+            _ => None,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         *self == Layer::default()
     }
@@ -123,16 +280,270 @@ impl Layer {
                 out.push(format!("{k} = {v}"));
             }
         }
+        if let Some(m) = self.memory {
+            out.push(format!("memory = \"{m}\""));
+        }
+        if let Some(n) = self.network {
+            out.push(format!("network = \"{n}\""));
+        }
+        let pats = |v: &[Pattern]| v.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        for (k, v) in [
+            ("deny", &self.deny),
+            ("allow", &self.allow),
+            ("allow-off", &self.allow_off),
+            ("catalog-off", &self.catalog_off),
+            ("decrypt", &self.decrypt),
+        ] {
+            if !v.is_empty() {
+                out.push(format!("{k} = [{}]", list(&pats(v))));
+            }
+        }
+        if !self.catalog.is_empty() {
+            out.push(format!("catalog = [{}]", list(&self.catalog)));
+        }
+        if !self.ssh_keys.is_empty() {
+            out.push(format!("ssh-keys = [{}]", list(&self.ssh_keys)));
+        }
+        if !self.db.is_empty() {
+            out.push(format!("db = [{}]", list(&self.db)));
+        }
+        if !self.ports.is_empty() {
+            let v: Vec<String> = self.ports.iter().map(|p| p.to_string()).collect();
+            out.push(format!("ports = [{}]", list(&v)));
+        }
+        for (k, v) in [
+            ("file-deny", &self.file_deny),
+            ("file-allow", &self.file_allow),
+            ("secret-files", &self.secret_files),
+            ("secret-files-off", &self.secret_files_off),
+            ("mcp-deny", &self.mcp_deny),
+            ("mcp-allow", &self.mcp_allow),
+        ] {
+            if !v.is_empty() {
+                out.push(format!("{k} = [{}]", list(v)));
+            }
+        }
+        match self.processes {
+            Some(ProcessLimit::Count(n)) => out.push(format!("processes = {n}")),
+            Some(ProcessLimit::Max) => out.push("processes = \"max\"".into()),
+            None => {}
+        }
         out
+    }
+}
+
+/// Ações da TUI com tecla configurável, na ordem da ajuda, com a tecla
+/// padrão.
+pub const TUI_ACTIONS: &[(&str, char)] = &[
+    ("new", 'c'),
+    ("next", 'n'),
+    ("prev", 'p'),
+    ("list", 'w'),
+    ("rename", ','),
+    ("restart", 'r'),
+    ("close", 'x'),
+    ("paste-image", 'v'),
+    ("detach", 'd'),
+    ("help", '?'),
+    ("panel", 's'),
+    ("network", 'a'),
+    ("files", 'f'),
+    ("folders", 'o'),
+    ("mcp", 'm'),
+    ("chat", 'i'),
+    ("command", 'g'),
+];
+
+/// Uma cor do tema da TUI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeColor {
+    /// A cor do terminal.
+    Default,
+    Indexed(u8),
+    Rgb(u8, u8, u8),
+}
+
+const ANSI_NAMES: &[&str] = &[
+    "black",
+    "red",
+    "green",
+    "yellow",
+    "blue",
+    "magenta",
+    "cyan",
+    "white",
+    "bright-black",
+    "bright-red",
+    "bright-green",
+    "bright-yellow",
+    "bright-blue",
+    "bright-magenta",
+    "bright-cyan",
+    "bright-white",
+];
+
+/// Formatos de cor aceitos, para mensagens.
+pub const COLOR_FORMATS: &str = "\"#rrggbb\", um índice de 0 a 255, um dos 16 nomes ANSI (\"red\", \"bright-blue\"…) ou \"default\"";
+
+impl ThemeColor {
+    pub fn parse(s: &str) -> Option<ThemeColor> {
+        let s = s.trim();
+        if s == "default" {
+            return Some(ThemeColor::Default);
+        }
+        if let Some(h) = s.strip_prefix('#') {
+            if h.len() != 6 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
+            let v = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok();
+            return Some(ThemeColor::Rgb(v(0)?, v(2)?, v(4)?));
+        }
+        if let Ok(n) = s.parse::<u8>() {
+            return Some(ThemeColor::Indexed(n));
+        }
+        ANSI_NAMES
+            .iter()
+            .position(|n| *n == s)
+            .map(|i| ThemeColor::Indexed(i as u8))
+    }
+}
+
+/// Elementos com cor no tema, na ordem da documentação.
+pub const THEME_ELEMENTS: &[&str] = &[
+    "tab-active-fg",
+    "tab-active-bg",
+    "tab-fg",
+    "tab-bg",
+    "bar-bg",
+    "status-fg",
+    "note-fg",
+    "note-bg",
+    "modal-border",
+    "modal-title",
+    "selected-fg",
+    "selected-bg",
+    "error-fg",
+    "selection-fg",
+    "selection-bg",
+];
+
+/// Temas embutidos.
+pub const THEMES: &[&str] = &["padrao", "escuro", "claro"];
+
+/// Tema resolvido: cor por elemento (sem cor é o estilo do tema `padrao`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Theme {
+    pub name: String,
+    pub colors: BTreeMap<String, ThemeColor>,
+}
+
+impl Theme {
+    pub fn builtin(name: &str) -> Option<Theme> {
+        let pairs: &[(&str, &str)] = match name {
+            "padrao" => &[],
+            "escuro" => &[
+                ("bar-bg", "#1e1e2e"),
+                ("tab-active-fg", "#1e1e2e"),
+                ("tab-active-bg", "#89b4fa"),
+                ("tab-fg", "#a6adc8"),
+                ("tab-bg", "#1e1e2e"),
+                ("status-fg", "#f9e2af"),
+                ("note-fg", "#1e1e2e"),
+                ("note-bg", "#f38ba8"),
+                ("modal-border", "#89b4fa"),
+                ("modal-title", "#89b4fa"),
+                ("selected-fg", "#1e1e2e"),
+                ("selected-bg", "#89b4fa"),
+                ("error-fg", "#f38ba8"),
+                ("selection-fg", "#1e1e2e"),
+                ("selection-bg", "#f9e2af"),
+            ],
+            "claro" => &[
+                ("bar-bg", "#eff1f5"),
+                ("tab-active-fg", "#eff1f5"),
+                ("tab-active-bg", "#1e66f5"),
+                ("tab-fg", "#4c4f69"),
+                ("tab-bg", "#eff1f5"),
+                ("status-fg", "#df8e1d"),
+                ("note-fg", "#eff1f5"),
+                ("note-bg", "#d20f39"),
+                ("modal-border", "#1e66f5"),
+                ("modal-title", "#1e66f5"),
+                ("selected-fg", "#eff1f5"),
+                ("selected-bg", "#1e66f5"),
+                ("error-fg", "#d20f39"),
+                ("selection-fg", "#eff1f5"),
+                ("selection-bg", "#df8e1d"),
+            ],
+            _ => return None,
+        };
+        Some(Theme {
+            name: name.into(),
+            colors: pairs
+                .iter()
+                .filter_map(|(k, v)| ThemeColor::parse(v).map(|c| (k.to_string(), c)))
+                .collect(),
+        })
+    }
+
+    pub fn get(&self, element: &str) -> Option<ThemeColor> {
+        self.colors.get(element).copied()
+    }
+}
+
+/// Tecla de prefixo, atalhos e tema da TUI (`[tui]`). Não é camada de
+/// política.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TuiConfig {
+    /// Letra do prefixo, com Ctrl (`C-b`).
+    pub prefix: char,
+    pub keys: BTreeMap<String, char>,
+    pub theme: Theme,
+    /// Painel lateral visível ao abrir.
+    pub panel: bool,
+}
+
+impl Default for TuiConfig {
+    fn default() -> Self {
+        TuiConfig {
+            prefix: 'b',
+            keys: TUI_ACTIONS
+                .iter()
+                .map(|(a, k)| (a.to_string(), *k))
+                .collect(),
+            theme: Theme::builtin("padrao").unwrap_or_default(),
+            panel: true,
+        }
+    }
+}
+
+impl TuiConfig {
+    /// A ação ligada à tecla `c`.
+    pub fn action_for(&self, c: char) -> Option<&str> {
+        self.keys
+            .iter()
+            .find(|(_, k)| **k == c)
+            .map(|(a, _)| a.as_str())
+    }
+
+    pub fn key(&self, action: &str) -> char {
+        self.keys.get(action).copied().unwrap_or('\0')
     }
 }
 
 /// O arquivo lido e validado.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
+    /// Dias de registro de rede guardados (`net-log-days`, só em `[global]`).
+    pub net_log_days: Option<u32>,
+    /// Teto do registro de rede em bytes (`net-log-max`, só em `[global]`).
+    pub net_log_max: Option<u64>,
     pub global: Layer,
     pub profiles: BTreeMap<String, Layer>,
     pub projects: BTreeMap<PathBuf, Layer>,
+    pub tui: TuiConfig,
+    /// Seção `[assistant]`: modelos e provedores do assistente.
+    pub assistant: crate::assistant::AssistantConfig,
 }
 
 impl Config {
@@ -169,7 +580,34 @@ impl Config {
                             "`global` precisa ser uma seção `[global]`".into(),
                         )
                     })?;
-                    cfg.global = layer(t, &err)?;
+                    cfg.global = layer_in(t, &err, true)?;
+                    for k in GLOBAL_ONLY_KEYS {
+                        let Some(item) = t.get(k) else { continue };
+                        let span = item.span();
+                        match *k {
+                            "net-log-days" => {
+                                let n = item
+                                    .as_integer()
+                                    .filter(|n| (1..=3650).contains(n))
+                                    .ok_or_else(|| {
+                                        err(span, "`net-log-days` precisa ser um número de dias de 1 a 3650".into())
+                                    })?;
+                                cfg.net_log_days = Some(n as u32);
+                            }
+                            _ => {
+                                let b = item
+                                    .as_str()
+                                    .and_then(|s| match MemoryLimit::parse(s) {
+                                        Ok(MemoryLimit::Bytes(b)) => Some(b),
+                                        _ => None,
+                                    })
+                                    .ok_or_else(|| {
+                                        err(span, "`net-log-max` precisa ser um tamanho como \"500M\" ou \"2G\" (mínimo 128M)".into())
+                                    })?;
+                                cfg.net_log_max = Some(b);
+                            }
+                        }
+                    }
                 }
                 "profile" | "project" => {
                     let t = item.as_table_like().ok_or_else(|| {
@@ -211,11 +649,26 @@ impl Config {
                         }
                     }
                 }
+                "tui" => {
+                    let t = item.as_table_like().ok_or_else(|| {
+                        err(kspan.clone(), "`tui` precisa ser uma seção `[tui]`".into())
+                    })?;
+                    cfg.tui = tui_section(t, &err)?;
+                }
+                "assistant" => {
+                    let t = item.as_table_like().ok_or_else(|| {
+                        err(
+                            kspan.clone(),
+                            "`assistant` precisa ser uma seção `[assistant]`".into(),
+                        )
+                    })?;
+                    cfg.assistant = assistant_section(t, &err)?;
+                }
                 other => {
                     return Err(err(
                         kspan,
                         format!(
-                            "seção desconhecida: `{other}`. Seções aceitas: `[global]`, `[profile.<nome>]` e `[project.\"<pasta>\"]`"
+                            "seção desconhecida: `{other}`. Seções aceitas: `[global]`, `[profile.<nome>]`, `[project.\"<pasta>\"]`, `[tui]` e `[assistant]`"
                         ),
                     ));
                 }
@@ -241,6 +694,14 @@ fn line_of(text: &str, offset: usize) -> usize {
 type ErrFn<'a> = dyn Fn(Option<std::ops::Range<usize>>, String) -> ConfigError + 'a;
 
 fn layer(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<Layer, ConfigError> {
+    layer_in(t, err, false)
+}
+
+fn layer_in(
+    t: &dyn toml_edit::TableLike,
+    err: &ErrFn<'_>,
+    global: bool,
+) -> Result<Layer, ConfigError> {
     let mut l = Layer::default();
     for (key, item) in t.iter() {
         let kspan = t.key(key).and_then(|k| k.span());
@@ -285,6 +746,119 @@ fn layer(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<Layer, ConfigE
                 })?;
                 *l.bool_mut(key).expect("chave de liga e desliga") = Some(v);
             }
+            "memory" => {
+                let s = item.as_str().ok_or_else(|| {
+                    err(
+                        vspan.clone(),
+                        format!("`memory` precisa ser um texto: {}", limits::MEMORY_FORMATS),
+                    )
+                })?;
+                l.memory = Some(MemoryLimit::parse(s).map_err(|m| err(vspan.clone(), m))?);
+            }
+            "processes" => {
+                let v = if let Some(n) = item.as_integer() {
+                    u32::try_from(n)
+                        .map_err(|_| format!("teto de processos inválido: {n}"))
+                        .and_then(ProcessLimit::count)
+                } else if let Some(s) = item.as_str() {
+                    ProcessLimit::parse(s)
+                } else {
+                    Err(format!(
+                        "`processes` precisa ser {}",
+                        limits::PROCESS_FORMATS
+                    ))
+                };
+                l.processes = Some(v.map_err(|m| err(vspan.clone(), m))?);
+            }
+            "network" => {
+                let s = item.as_str().unwrap_or("");
+                l.network = Some(NetworkMode::parse(s).map_err(|m| err(vspan.clone(), m))?);
+            }
+            "deny" | "allow" | "allow-off" | "catalog-off" | "decrypt" => {
+                let mut out = Vec::new();
+                for (s, span) in strings(item, key, vspan.clone(), err)? {
+                    out.push(
+                        s.parse::<Pattern>()
+                            .map_err(|m| err(span, format!("`{key}`: {m}")))?,
+                    );
+                }
+                *l.patterns_mut(key).expect("lista de padrões") = out;
+            }
+            "catalog" => {
+                for (s, span) in strings(item, key, vspan.clone(), err)? {
+                    if !netcatalog::is_group(&s) {
+                        return Err(err(
+                            span,
+                            format!(
+                                "`catalog`: grupo desconhecido {s:?}. Grupos: {}",
+                                netcatalog::group_names()
+                            ),
+                        ));
+                    }
+                    l.catalog.push(s);
+                }
+            }
+            k if MCP_LIST_KEYS.contains(&k) => {
+                let mut out = Vec::new();
+                for (s, span) in strings(item, key, vspan.clone(), err)? {
+                    if !valid_ssh_key_name(&s) || s == "*" {
+                        return Err(err(
+                            span,
+                            format!("`{key}` aceita nomes de servidores MCP: {s:?}"),
+                        ));
+                    }
+                    out.push(s);
+                }
+                if key == "mcp-deny" {
+                    l.mcp_deny = out;
+                } else {
+                    l.mcp_allow = out;
+                }
+            }
+            k if FILE_LIST_KEYS.contains(&k) => {
+                let mut out = Vec::new();
+                for (s, span) in strings(item, key, vspan.clone(), err)? {
+                    valid_file_pattern(&s).map_err(|m| err(span, format!("`{key}`: {m}")))?;
+                    out.push(s);
+                }
+                *l.file_list_mut(key).expect("lista de arquivos") = out;
+            }
+            PORTS_KEY => {
+                for (s, span) in strings(item, key, vspan.clone(), err)? {
+                    l.ports.push(
+                        s.parse::<sandmux_spec::net::PortRule>()
+                            .map_err(|m| err(span, format!("`ports`: {m}")))?,
+                    );
+                }
+            }
+            DB_KEY => {
+                for (s, span) in strings(item, key, vspan.clone(), err)? {
+                    if !valid_ssh_key_name(&s) {
+                        return Err(err(
+                            span,
+                            format!("`db` aceita nomes de conexões do cofre, ou \"*\": {s:?}"),
+                        ));
+                    }
+                    l.db.push(s);
+                }
+            }
+            SSH_KEYS => {
+                for (s, span) in strings(item, key, vspan.clone(), err)? {
+                    if !valid_ssh_key_name(&s) {
+                        return Err(err(
+                            span,
+                            format!("`ssh-keys` aceita nomes de chaves do cofre, ou \"*\": {s:?}"),
+                        ));
+                    }
+                    l.ssh_keys.push(s);
+                }
+            }
+            other if GLOBAL_ONLY_KEYS.contains(&other) => {
+                // Lidas por quem chama, e só em `[global]`.
+                if !global {
+                    return Err(err(kspan, format!("`{other}` só é aceita em `[global]`")));
+                }
+            }
             other => {
                 return Err(err(
                     kspan,
@@ -293,6 +867,12 @@ fn layer(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<Layer, ConfigE
                         LIST_KEYS
                             .iter()
                             .chain(BOOL_KEYS)
+                            .chain(LIMIT_KEYS)
+                            .chain(NET_KEYS)
+                            .chain(NET_LIST_KEYS)
+                            .chain([&SSH_KEYS, &DB_KEY, &PORTS_KEY])
+                            .chain(FILE_LIST_KEYS)
+                            .chain(MCP_LIST_KEYS)
                             .map(|k| format!("`{k}`"))
                             .collect::<Vec<_>>()
                             .join(", ")
@@ -310,6 +890,263 @@ fn layer(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<Layer, ConfigE
         ));
     }
     Ok(l)
+}
+
+/// Lê a seção `[assistant]`.
+fn assistant_section(
+    t: &dyn toml_edit::TableLike,
+    err: &ErrFn<'_>,
+) -> Result<crate::assistant::AssistantConfig, ConfigError> {
+    use crate::assistant::{AssistantConfig, KNOWN, url_host, valid_provider_name};
+    let mut cfg = AssistantConfig::default();
+    // Os provedores primeiro: os modelos são conferidos contra eles.
+    if let Some(item) = t.get("provider") {
+        let kspan = t.key("provider").and_then(|k| k.span());
+        let pt = item.as_table_like().ok_or_else(|| {
+            err(
+                kspan.clone(),
+                "`provider` precisa ser uma seção `[assistant.provider.<nome>]`".into(),
+            )
+        })?;
+        for (name, sub) in pt.iter() {
+            let nspan = pt.key(name).and_then(|k| k.span()).or(kspan.clone());
+            if !valid_provider_name(name) {
+                return Err(err(
+                    nspan,
+                    format!(
+                        "nome de provedor inválido: {name:?}. Use letras minúsculas, números, `-` e `_`"
+                    ),
+                ));
+            }
+            if KNOWN.iter().any(|(n, _, _)| *n == name) {
+                return Err(err(
+                    nspan,
+                    format!("`{name}` já é um provedor conhecido; escolha outro nome"),
+                ));
+            }
+            let st = sub.as_table_like().ok_or_else(|| {
+                err(
+                    nspan.clone(),
+                    format!(
+                        "`provider.{name}` precisa ser uma seção `[assistant.provider.{name}]`"
+                    ),
+                )
+            })?;
+            let mut url = None;
+            for (k, v) in st.iter() {
+                let ks = st.key(k).and_then(|x| x.span());
+                match k {
+                    "url" => {
+                        let u = v.as_str().unwrap_or("");
+                        if url_host(u).is_none() {
+                            return Err(err(
+                                v.span().or(ks),
+                                format!(
+                                    "`url` precisa começar por http:// ou https:// e ter um host: {u:?}"
+                                ),
+                            ));
+                        }
+                        url = Some(u.trim_end_matches('/').to_string());
+                    }
+                    other => {
+                        return Err(err(
+                            ks,
+                            format!(
+                                "chave desconhecida em `[assistant.provider.{name}]`: `{other}`. Chave aceita: `url`"
+                            ),
+                        ));
+                    }
+                }
+            }
+            let url = url.ok_or_else(|| {
+                err(
+                    nspan.clone(),
+                    format!("falta `url` em `[assistant.provider.{name}]`"),
+                )
+            })?;
+            cfg.providers.insert(name.to_string(), url);
+        }
+    }
+    let check = |cfg: &AssistantConfig, m: &str, span| -> Result<(), ConfigError> {
+        cfg.resolve(m).map(|_| ()).map_err(|e| err(span, e))
+    };
+    for (key, item) in t.iter() {
+        let kspan = t.key(key).and_then(|k| k.span());
+        let vspan = item.span().or(kspan.clone());
+        match key {
+            "provider" => {}
+            "chat-model" | "command-model" => {
+                let m = item.as_str().ok_or_else(|| {
+                    err(vspan.clone(), format!("`{key}` precisa ser um texto como \"openrouter/deepseek/deepseek-v4.1-flash-1017\""))
+                })?;
+                check(&cfg, m, vspan.clone())?;
+                if key == "chat-model" {
+                    cfg.chat_model = Some(m.trim().to_string());
+                } else {
+                    cfg.command_model = Some(m.trim().to_string());
+                }
+            }
+            "models" => {
+                let a = item.as_array().ok_or_else(|| {
+                    err(
+                        vspan.clone(),
+                        "`models` precisa ser uma lista de modelos".into(),
+                    )
+                })?;
+                for v in a.iter() {
+                    let m = v.as_str().ok_or_else(|| {
+                        err(
+                            v.span().or(vspan.clone()),
+                            "`models` precisa ser uma lista de textos".into(),
+                        )
+                    })?;
+                    check(&cfg, m, v.span().or(vspan.clone()))?;
+                    cfg.models.push(m.trim().to_string());
+                }
+            }
+            other => {
+                return Err(err(
+                    kspan,
+                    format!(
+                        "chave desconhecida em `[assistant]`: `{other}`. Chaves aceitas: `chat-model`, `command-model`, `models`, `provider`"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(cfg)
+}
+
+fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfig, ConfigError> {
+    let mut cfg = TuiConfig::default();
+    // O tema vem antes das cores, que ficam por cima dele.
+    if let Some(item) = t.get("theme") {
+        let span = item
+            .span()
+            .or_else(|| t.key("theme").and_then(|k| k.span()));
+        let name = item.as_str().unwrap_or("");
+        cfg.theme = Theme::builtin(name).ok_or_else(|| {
+            err(
+                span,
+                format!("tema desconhecido: {name:?}. Temas: {}", THEMES.join(", ")),
+            )
+        })?;
+    }
+    for (key, item) in t.iter() {
+        let kspan = t.key(key).and_then(|k| k.span());
+        let vspan = item.span().or(kspan.clone());
+        match key {
+            "prefix" => {
+                let s = item.as_str().unwrap_or("");
+                let letter = s
+                    .strip_prefix("C-")
+                    .filter(|r| r.len() == 1)
+                    .and_then(|r| r.chars().next())
+                    .filter(|c| c.is_ascii_lowercase());
+                cfg.prefix = letter.ok_or_else(|| {
+                    err(
+                        vspan.clone(),
+                        format!(
+                            "`prefix` precisa ser Ctrl com uma letra minúscula, como \"C-b\": {s:?}"
+                        ),
+                    )
+                })?;
+            }
+            "keys" => {
+                let k = item.as_table_like().ok_or_else(|| {
+                    err(
+                        kspan.clone(),
+                        "`keys` precisa ser uma seção `[tui.keys]`".into(),
+                    )
+                })?;
+                for (action, v) in k.iter() {
+                    let aspan = k.key(action).and_then(|x| x.span());
+                    if !TUI_ACTIONS.iter().any(|(a, _)| *a == action) {
+                        return Err(err(
+                            aspan,
+                            format!(
+                                "ação desconhecida em `[tui.keys]`: `{action}`. Ações: {}",
+                                TUI_ACTIONS
+                                    .iter()
+                                    .map(|(a, _)| *a)
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                        ));
+                    }
+                    let vs = v.span().or(aspan.clone());
+                    let s = v.as_str().unwrap_or("");
+                    let mut chars = s.chars();
+                    let c = match (chars.next(), chars.next()) {
+                        (Some(c), None) if !c.is_control() && !c.is_ascii_digit() && c != ' ' => c,
+                        _ => {
+                            return Err(err(
+                                vs,
+                                format!(
+                                    "a tecla de `{action}` precisa ser um caractere visível que não seja dígito: {s:?}"
+                                ),
+                            ));
+                        }
+                    };
+                    cfg.keys.insert(action.to_string(), c);
+                }
+            }
+            "theme" => {}
+            "panel" => {
+                cfg.panel = item.as_bool().ok_or_else(|| {
+                    err(vspan.clone(), "`panel` precisa ser true ou false".into())
+                })?;
+            }
+            "colors" => {
+                let c = item.as_table_like().ok_or_else(|| {
+                    err(
+                        kspan.clone(),
+                        "`colors` precisa ser uma seção `[tui.colors]`".into(),
+                    )
+                })?;
+                for (el, v) in c.iter() {
+                    let espan = c.key(el).and_then(|x| x.span());
+                    if !THEME_ELEMENTS.contains(&el) {
+                        return Err(err(
+                            espan,
+                            format!(
+                                "elemento desconhecido em `[tui.colors]`: `{el}`. Elementos: {}",
+                                THEME_ELEMENTS.join(", ")
+                            ),
+                        ));
+                    }
+                    let vs = v.span().or(espan);
+                    let parsed = v.as_str().and_then(ThemeColor::parse).or_else(|| {
+                        v.as_integer()
+                            .and_then(|n| u8::try_from(n).ok())
+                            .map(ThemeColor::Indexed)
+                    });
+                    let color = parsed.ok_or_else(|| {
+                        err(vs, format!("cor inválida em `{el}`; use {COLOR_FORMATS}"))
+                    })?;
+                    cfg.theme.colors.insert(el.to_string(), color);
+                }
+            }
+            other => {
+                return Err(err(
+                    kspan,
+                    format!(
+                        "chave desconhecida em `[tui]`: `{other}`. Chaves aceitas: `prefix`, `theme`, `panel`, `keys`, `colors`"
+                    ),
+                ));
+            }
+        }
+    }
+    let mut seen: BTreeMap<char, &str> = BTreeMap::new();
+    for (a, c) in &cfg.keys {
+        if let Some(other) = seen.insert(*c, a) {
+            return Err(err(
+                t.key("keys").and_then(|k| k.span()),
+                format!("as ações `{other}` e `{a}` usam a mesma tecla {c:?}"),
+            ));
+        }
+    }
+    Ok(cfg)
 }
 
 type Spanned = (String, Option<std::ops::Range<usize>>);
@@ -441,9 +1278,92 @@ pub struct Effective {
     pub kvm: Setting,
     pub gpu: Setting,
     pub clipboard: Setting,
+    pub memory: LimitSetting<MemoryLimit>,
+    pub processes: LimitSetting<ProcessLimit>,
+    pub network: LimitSetting<NetworkMode>,
+    /// Todas as regras de rede, com a origem e o estado, inclusive as que o
+    /// modo atual não usa (para `sandmux net rules`).
+    pub net_rules: Vec<Rule>,
+    /// Domínios decifrados, somados de todas as camadas.
+    pub decrypt: Vec<Pattern>,
+    /// Chaves SSH escolhidas, somadas de todas as camadas.
+    pub ssh_keys: Vec<String>,
+    /// Conexões de banco escolhidas, somadas de todas as camadas.
+    pub db: Vec<String>,
+    /// Portas de entrada, somadas de todas as camadas.
+    pub ports: Vec<sandmux_spec::net::PortRule>,
+    /// Listas da política de arquivos, somadas de todas as camadas.
+    pub file_deny: Vec<String>,
+    pub file_allow: Vec<String>,
+    pub secret_files: Vec<String>,
+    pub secret_files_off: Vec<String>,
+    /// Servidores MCP, somados de todas as camadas.
+    pub mcp_deny: Vec<String>,
+    pub mcp_allow: Vec<String>,
     pub profile: Option<String>,
     /// Pasta do perfil de projeto aplicado.
     pub project: Option<PathBuf>,
+}
+
+impl Effective {
+    /// Confinamento da aba de chat: só inferência (mais os hosts dos
+    /// provedores próprios), sem pastas extras, `pass-env`, repositório,
+    /// chaves SSH, bancos nem portas. As regras de bloqueio continuam.
+    pub fn confine_chat(&mut self, a: &crate::assistant::AssistantConfig) {
+        use sandmux_spec::net::{Pattern, Rule, RuleKind};
+        self.extras.clear();
+        self.pass_env.clear();
+        self.repo.value = false;
+        self.kvm.value = false;
+        self.gpu.value = false;
+        self.clipboard.value = false;
+        self.ssh_keys.clear();
+        self.db.clear();
+        self.ports.clear();
+        self.network = LimitSetting {
+            value: NetworkMode::Inferencia,
+            origin: Origin::Default,
+        };
+        for p in a.all_providers().iter().filter(|p| !p.is_known()) {
+            if let Ok(pattern) = p.host().parse::<Pattern>() {
+                self.net_rules.push(Rule {
+                    pattern,
+                    kind: RuleKind::Allow,
+                    origin: crate::assistant::ORIGIN.into(),
+                    enabled: true,
+                });
+            }
+        }
+    }
+}
+
+impl Effective {
+    /// A política de arquivos compilada: `~/` vira `home`.
+    pub fn file_policy(&self, home: &Path, workdir: &Path) -> sandmux_spec::files::FilePolicy {
+        use sandmux_spec::files::{FilePattern, default_secrets};
+        let pats = |v: &[String]| -> Vec<FilePattern> {
+            v.iter()
+                .filter_map(|s| FilePattern::parse(s, Some(home)).ok())
+                .collect()
+        };
+        let (mut secrets, mut secret_exceptions) = default_secrets();
+        secrets.extend(pats(&self.secret_files));
+        secret_exceptions.extend(pats(&self.secret_files_off));
+        sandmux_spec::files::FilePolicy {
+            deny: pats(&self.file_deny),
+            allow: pats(&self.file_allow),
+            secrets,
+            secret_exceptions,
+            workdir: workdir.to_path_buf(),
+        }
+    }
+}
+
+/// Um teto com a origem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LimitSetting<T> {
+    pub value: T,
+    pub origin: Origin,
 }
 
 impl Effective {
@@ -467,6 +1387,15 @@ impl Effective {
         self.pass_env.iter().map(|(n, _)| n.clone()).collect()
     }
 
+    /// Os tetos em bytes e em número, para uma máquina com `mem_total` bytes
+    /// de RAM.
+    pub fn limits(&self, mem_total: u64) -> Limits {
+        Limits {
+            memory: self.memory.value.bytes(mem_total),
+            processes: self.processes.value.value(),
+        }
+    }
+
     /// As opções de composição desta política.
     pub fn run_options(
         &self,
@@ -486,7 +1415,54 @@ impl Effective {
             no_gpu: !self.gpu.value,
             args: args.to_vec(),
             layer,
+            docker_socket: None,
+            network: self.network.value,
+            net_policy: self.net_policy(),
+            fake_env: Vec::new(),
+            tool_secrets: Vec::new(),
+            ssh_agent_socket: None,
+            ssh_servers: Vec::new(),
+            files_log: None,
+            file_policy: Default::default(),
+            file_policy_file: None,
+            folders: Vec::new(),
+            control_socket: None,
+            mcp_deny: self.mcp_deny.clone(),
+            mcp_allow: self.mcp_allow.clone(),
+            db_socket: None,
+            db_mcp: None,
+            chat_bin: None,
+            chat_env: Vec::new(),
+            net: None,
         }
+    }
+
+    /// A política de rede do gateway, com só as regras que o modo usa;
+    /// `None` no modo sem rede.
+    pub fn net_policy(&self) -> Option<NetPolicy> {
+        use sandmux_spec::net::PolicyMode;
+        let mode = self.network.value.policy_mode()?;
+        let rules = self
+            .net_rules
+            .iter()
+            .filter(|r| match (r.kind, mode) {
+                (RuleKind::Deny, _) => true,
+                (RuleKind::Allow, PolicyMode::Open) => false,
+                (RuleKind::Allow, PolicyMode::Inference) => {
+                    r.origin == netcatalog::INFERENCE_ORIGIN || r.origin == crate::assistant::ORIGIN
+                }
+                (RuleKind::Allow, PolicyMode::Custom) => r.origin != netcatalog::INFERENCE_ORIGIN,
+            })
+            .cloned()
+            .collect();
+        Some(NetPolicy {
+            mode,
+            rules,
+            decrypt: self.decrypt.clone(),
+            // Os servidores das chaves SSH vêm do cofre, pelo daemon.
+            ssh: Vec::new(),
+            ports: self.ports.clone(),
+        })
     }
 
     pub fn setting(&self, key: &str) -> Option<&Setting> {
@@ -533,6 +1509,115 @@ pub fn project_for<'c>(cfg: &'c Config, workdir: &Path) -> Option<(&'c PathBuf, 
         .max_by_key(|(p, _)| canon(p).components().count())
 }
 
+/// Nome curto da origem de uma regra de rede.
+pub fn rule_origin(o: &Origin) -> String {
+    match o {
+        Origin::Default => "padrão".into(),
+        Origin::Global => "global".into(),
+        Origin::Profile(n) => format!("perfil {n}"),
+        Origin::Project(p) => format!("projeto {}", p.display()),
+        Origin::Run => "aba".into(),
+    }
+}
+
+/// Compila as regras de rede de todas as camadas, da menos para a mais
+/// específica: catálogos, `deny`, `allow` e os itens desligados.
+fn net_rules(layers: &[(&Layer, Origin)]) -> Vec<Rule> {
+    let off: Vec<&Pattern> = layers.iter().flat_map(|(l, _)| &l.catalog_off).collect();
+    let allow_off: Vec<&Pattern> = layers.iter().flat_map(|(l, _)| &l.allow_off).collect();
+    let groups: Vec<&String> = layers.iter().flat_map(|(l, _)| &l.catalog).collect();
+    let mut rules: Vec<Rule> = Vec::new();
+    let push = |rules: &mut Vec<Rule>, r: Rule| {
+        // Um mesmo padrão e tipo aparece uma vez, com a origem mais específica.
+        rules.retain(|x| !(x.pattern == r.pattern && x.kind == r.kind));
+        rules.push(r);
+    };
+    let pat = |s: &str| s.parse::<Pattern>().expect("catálogo válido");
+    for (_, items) in netcatalog::EXFIL {
+        for i in *items {
+            let p = pat(i);
+            let enabled = !off.contains(&&p);
+            push(
+                &mut rules,
+                Rule {
+                    pattern: p,
+                    kind: RuleKind::Deny,
+                    origin: netcatalog::EXFIL_ORIGIN.into(),
+                    enabled,
+                },
+            );
+        }
+    }
+    for i in netcatalog::INFERENCE {
+        let p = pat(i);
+        let enabled = !off.contains(&&p);
+        push(
+            &mut rules,
+            Rule {
+                pattern: p,
+                kind: RuleKind::Allow,
+                origin: netcatalog::INFERENCE_ORIGIN.into(),
+                enabled,
+            },
+        );
+    }
+    for (g, items) in netcatalog::COMMON {
+        let enabled = groups.iter().any(|x| x.as_str() == *g);
+        for i in *items {
+            push(
+                &mut rules,
+                Rule {
+                    pattern: pat(i),
+                    kind: RuleKind::Allow,
+                    origin: netcatalog::common_origin(g),
+                    enabled,
+                },
+            );
+        }
+    }
+    for (l, o) in layers {
+        for p in &l.deny {
+            push(
+                &mut rules,
+                Rule {
+                    pattern: p.clone(),
+                    kind: RuleKind::Deny,
+                    origin: rule_origin(o),
+                    enabled: true,
+                },
+            );
+        }
+        for p in &l.allow {
+            push(
+                &mut rules,
+                Rule {
+                    pattern: p.clone(),
+                    kind: RuleKind::Allow,
+                    origin: rule_origin(o),
+                    enabled: !allow_off.contains(&p),
+                },
+            );
+        }
+    }
+    // Cadastrado e desligado sem `allow` em camada nenhuma: aparece desligado.
+    for (l, o) in layers {
+        for p in &l.allow_off {
+            if !rules
+                .iter()
+                .any(|r| r.kind == RuleKind::Allow && &r.pattern == p)
+            {
+                rules.push(Rule {
+                    pattern: p.clone(),
+                    kind: RuleKind::Allow,
+                    origin: rule_origin(o),
+                    enabled: false,
+                });
+            }
+        }
+    }
+    rules
+}
+
 /// Combina as camadas: baseline e preset (sem chaves hoje), global, perfil
 /// nomeado, projeto e `run`.
 pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective, ResolveError> {
@@ -564,9 +1649,69 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
         kvm: default(false),
         gpu: default(true),
         clipboard: default(false),
+        memory: LimitSetting {
+            value: limits::DEFAULT_MEMORY,
+            origin: Origin::Default,
+        },
+        processes: LimitSetting {
+            value: limits::DEFAULT_PROCESSES,
+            origin: Origin::Default,
+        },
+        network: LimitSetting {
+            value: NetworkMode::Aberta,
+            origin: Origin::Default,
+        },
+        net_rules: Vec::new(),
+        decrypt: Vec::new(),
+        ssh_keys: Vec::new(),
+        db: Vec::new(),
+        ports: Vec::new(),
+        file_deny: Vec::new(),
+        file_allow: Vec::new(),
+        secret_files: Vec::new(),
+        secret_files_off: Vec::new(),
+        mcp_deny: Vec::new(),
+        mcp_allow: Vec::new(),
         profile: req.profile.map(String::from),
         project: project.map(|(p, _)| p.clone()),
     };
+    eff.net_rules = net_rules(&layers);
+    for (l, _) in &layers {
+        for p in &l.decrypt {
+            if !eff.decrypt.contains(p) {
+                eff.decrypt.push(p.clone());
+            }
+        }
+        for k in &l.ssh_keys {
+            if !eff.ssh_keys.contains(k) {
+                eff.ssh_keys.push(k.clone());
+            }
+        }
+        for k in &l.db {
+            if !eff.db.contains(k) {
+                eff.db.push(k.clone());
+            }
+        }
+        for r in &l.ports {
+            // A mesma porta em duas camadas: vale a mais específica (a última).
+            eff.ports.retain(|x| x.port != r.port);
+            eff.ports.push(*r);
+        }
+        for (from, to) in [
+            (&l.file_deny, &mut eff.file_deny),
+            (&l.file_allow, &mut eff.file_allow),
+            (&l.secret_files, &mut eff.secret_files),
+            (&l.secret_files_off, &mut eff.secret_files_off),
+            (&l.mcp_deny, &mut eff.mcp_deny),
+            (&l.mcp_allow, &mut eff.mcp_allow),
+        ] {
+            for k in from {
+                if !to.contains(k) {
+                    to.push(k.clone());
+                }
+            }
+        }
+    }
     for (l, origin) in layers {
         for key in BOOL_KEYS {
             if let Some(v) = l.get_bool(key) {
@@ -581,6 +1726,24 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
                     origin: origin.clone(),
                 };
             }
+        }
+        if let Some(m) = l.memory {
+            eff.memory = LimitSetting {
+                value: m,
+                origin: origin.clone(),
+            };
+        }
+        if let Some(p) = l.processes {
+            eff.processes = LimitSetting {
+                value: p,
+                origin: origin.clone(),
+            };
+        }
+        if let Some(n) = l.network {
+            eff.network = LimitSetting {
+                value: n,
+                origin: origin.clone(),
+            };
         }
         for (list, writable) in [(&l.ro, false), (&l.rw, true)] {
             for p in list {
@@ -602,6 +1765,9 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
         }
     }
     let _ = req.harness;
+    if req.harness == crate::assistant::HARNESS {
+        eff.confine_chat(&cfg.assistant);
+    }
     Ok(eff)
 }
 
@@ -753,6 +1919,38 @@ repo = true
             profile,
             run,
         }
+    }
+
+    #[test]
+    fn aba_de_chat_so_inferencia() {
+        let h = host(Path::new("/home/ana"));
+        let c = parse(
+            "[global]\nnetwork = \"aberta\"\nrepo = true\nro = [\"/opt\"]\npass-env = [\"X\"]\ndeny = [\"openai.com\"]\n[assistant.provider.local]\nurl = \"https://llm.local:8443/v1\"\n",
+        )
+        .unwrap();
+        let run = Layer::default();
+        let mut r = req(Path::new("/w"), None, &run);
+        r.harness = crate::assistant::HARNESS;
+        let e = resolve(&c, &h, &r).unwrap();
+        assert_eq!(e.network.value, NetworkMode::Inferencia);
+        assert!(e.extras.is_empty() && e.pass_env.is_empty() && !e.repo.value);
+        let p = e.net_policy().unwrap();
+        let has = |s: &str, k: RuleKind| {
+            p.rules
+                .iter()
+                .any(|x| x.pattern.to_string() == s && x.kind == k)
+        };
+        assert!(has("openrouter.ai", RuleKind::Allow));
+        assert!(has("llm.local", RuleKind::Allow));
+        assert!(has("openai.com", RuleKind::Deny));
+        // Outra aba continua com a política dela.
+        let e = resolve(&c, &h, &req(Path::new("/w"), None, &run)).unwrap();
+        assert_eq!(e.network.value, NetworkMode::Aberta);
+        assert!(
+            !e.net_rules
+                .iter()
+                .any(|x| x.origin == crate::assistant::ORIGIN)
+        );
     }
 
     #[test]
@@ -914,6 +2112,378 @@ repo = true
         )
         .unwrap_err();
         assert!(e.to_string().contains("configuração do sandmux"), "{e}");
+    }
+
+    #[test]
+    fn tetos_no_arquivo() {
+        let c = parse("[global]\nmemory = \"8G\"\nprocesses = 512\n[profile.x]\nprocesses = \"max\"\nmemory = \"50%\"\n").unwrap();
+        assert_eq!(c.global.memory, Some(MemoryLimit::Bytes(8 << 30)));
+        assert_eq!(c.global.processes, Some(ProcessLimit::Count(512)));
+        assert_eq!(c.profiles["x"].processes, Some(ProcessLimit::Max));
+        assert_eq!(c.profiles["x"].memory, Some(MemoryLimit::Percent(50)));
+        let e = parse("[global]\n\nmemory = \"muito\"\n").unwrap_err();
+        assert_eq!(e.line, Some(3));
+        assert!(
+            e.message.contains("\"50%\"") && e.message.contains("max"),
+            "{e}"
+        );
+        let e = parse("[global]\nprocesses = 0\n").unwrap_err();
+        assert_eq!(e.line, Some(2));
+        assert!(e.message.contains("mínimo"), "{e}");
+        assert!(parse("[global]\nmemory = 8\n").is_err());
+        assert!(parse("[global]\nprocesses = true\n").is_err());
+        assert!(parse("[global]\nprocesses = -3\n").is_err());
+    }
+
+    #[test]
+    fn tetos_nas_camadas() {
+        let h = host(Path::new("/home/ana"));
+        let none = Layer::default();
+        let e = resolve(&Config::default(), &h, &req(Path::new("/w"), None, &none)).unwrap();
+        assert_eq!(e.memory.value, MemoryLimit::Percent(75));
+        assert_eq!(e.processes.value, ProcessLimit::Count(8192));
+        assert_eq!(e.memory.origin, Origin::Default);
+        let total = 46 * (1u64 << 30);
+        assert_eq!(
+            e.limits(total),
+            Limits {
+                memory: Some(total / 100 * 75),
+                processes: Some(8192)
+            }
+        );
+        // O projeto vence o global.
+        let c = parse("[global]\nmemory = \"8G\"\n[project.\"/w\"]\nmemory = \"max\"\n").unwrap();
+        let e = resolve(&c, &h, &req(Path::new("/w"), None, &none)).unwrap();
+        assert_eq!(e.memory.value, MemoryLimit::Max);
+        assert_eq!(e.memory.origin, Origin::Project("/w".into()));
+        assert_eq!(e.limits(total).memory, None);
+        // O run vence o projeto.
+        let run = Layer {
+            memory: Some(MemoryLimit::Bytes(1 << 30)),
+            processes: Some(ProcessLimit::Count(64)),
+            ..Default::default()
+        };
+        let e = resolve(&c, &h, &req(Path::new("/w"), None, &run)).unwrap();
+        assert_eq!(
+            e.limits(total),
+            Limits {
+                memory: Some(1 << 30),
+                processes: Some(64)
+            }
+        );
+        assert_eq!(e.processes.origin, Origin::Run);
+    }
+
+    #[test]
+    fn secao_do_assistente() {
+        let c = parse(
+            "[assistant]\nchat-model = \"openrouter/deepseek/x\"\nmodels = [\"local/llama3\"]\n[assistant.provider.local]\nurl = \"http://host.sandmux.internal:11434/v1/\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            c.assistant.chat_model.as_deref(),
+            Some("openrouter/deepseek/x")
+        );
+        assert_eq!(c.assistant.models, vec!["local/llama3"]);
+        assert_eq!(
+            c.assistant.providers["local"],
+            "http://host.sandmux.internal:11434/v1"
+        );
+        // Não é camada de política.
+        assert_eq!(c.global, Layer::default());
+        let e = parse("[assistant]\nchat-model = \"x/y\"\ncor = 1\n").unwrap_err();
+        assert!(e.message.contains("provedor desconhecido"), "{}", e.message);
+        let e = parse("[assistant]\ncor = 1\n").unwrap_err();
+        assert!(e.message.contains("`cor`") && e.line == Some(2), "{e:?}");
+        assert!(parse("[assistant]\nchat-model = \"semprovedor\"\n").is_err());
+        assert!(parse("[assistant.provider.openrouter]\nurl = \"https://x\"\n").is_err());
+        assert!(parse("[assistant.provider.l]\nurl = \"ftp://x\"\n").is_err());
+        assert!(parse("[assistant.provider.l]\n").is_err());
+        let c = parse("[tui.keys]\nchat = \"y\"\n").unwrap();
+        assert_eq!(c.tui.action_for('y'), Some("chat"));
+        assert_eq!(TuiConfig::default().key("chat"), 'i');
+        assert_eq!(TuiConfig::default().key("command"), 'g');
+        let c = parse("[assistant]\ncommand-model = \"openai/x\"\n").unwrap();
+        assert_eq!(c.assistant.command_model.as_deref(), Some("openai/x"));
+        assert_eq!(
+            c.assistant.default_command_model().as_deref(),
+            Some("openai/x")
+        );
+        assert!(parse("[assistant]\ncommand-model = \"nada/x\"\n").is_err());
+    }
+
+    #[test]
+    fn secao_da_tui() {
+        let c = parse("[tui]\nprefix = \"C-a\"\n[tui.keys]\nnew = \"t\"\n").unwrap();
+        assert_eq!(c.tui.prefix, 'a');
+        assert_eq!(c.tui.action_for('t'), Some("new"));
+        assert_eq!(c.tui.action_for('c'), None);
+        assert_eq!(c.tui.key("next"), 'n');
+        assert_eq!(Config::default().tui.action_for('x'), Some("close"));
+        // A seção não muda a política.
+        assert_eq!(c.global, Layer::default());
+        let e = parse("[tui]\nprefix = \"C-a\"\ncor = 1\n").unwrap_err();
+        assert_eq!(e.line, Some(3));
+        assert!(e.message.contains("`cor`"), "{e}");
+        assert!(parse("[tui]\nprefix = \"b\"\n").is_err());
+        assert!(parse("[tui]\nprefix = \"C-B\"\n").is_err());
+        assert!(parse("[tui.keys]\nvoar = \"z\"\n").is_err());
+        assert!(parse("[tui.keys]\nnew = \"1\"\n").is_err());
+        assert!(parse("[tui.keys]\nnew = \"ab\"\n").is_err());
+        let e = parse("[tui.keys]\nnext = \"x\"\n").unwrap_err();
+        assert!(
+            e.message.contains("close") && e.message.contains("next"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn tema_e_cores() {
+        assert_eq!(Config::default().tui.theme.name, "padrao");
+        assert!(Config::default().tui.theme.colors.is_empty());
+        let c = parse("[tui]\ntheme = \"escuro\"\n[tui.colors]\ntab-active-bg = \"#aa0000\"\ntab-fg = 3\nbar-bg = \"bright-blue\"\nerror-fg = \"default\"\n").unwrap();
+        assert_eq!(c.tui.theme.name, "escuro");
+        assert_eq!(
+            c.tui.theme.get("tab-active-bg"),
+            Some(ThemeColor::Rgb(0xaa, 0, 0))
+        );
+        assert_eq!(c.tui.theme.get("tab-fg"), Some(ThemeColor::Indexed(3)));
+        assert_eq!(c.tui.theme.get("bar-bg"), Some(ThemeColor::Indexed(12)));
+        assert_eq!(c.tui.theme.get("error-fg"), Some(ThemeColor::Default));
+        assert_eq!(c.tui.theme.get("status-fg"), ThemeColor::parse("#f9e2af"));
+        let e = parse("[tui]\n\ntheme = \"neon\"\n").unwrap_err();
+        assert_eq!(e.line, Some(3));
+        assert!(e.message.contains("escuro"), "{e}");
+        let e = parse("[tui.colors]\ntab-bg = \"roxo-claro\"\n").unwrap_err();
+        assert_eq!(e.line, Some(2));
+        assert!(e.message.contains("#rrggbb"), "{e}");
+        assert!(parse("[tui.colors]\nborda = \"red\"\n").is_err());
+        assert!(parse("[tui.colors]\ntab-bg = \"#12345\"\n").is_err());
+        assert!(parse("[tui.colors]\ntab-bg = 300\n").is_err());
+        for t in THEMES {
+            assert!(Theme::builtin(t).is_some());
+        }
+        assert_eq!(
+            Theme::builtin("escuro").unwrap().colors.len(),
+            THEME_ELEMENTS.len()
+        );
+        assert!(Config::default().tui.panel);
+        assert!(!parse("[tui]\npanel = false\n").unwrap().tui.panel);
+        assert!(parse("[tui]\npanel = \"sim\"\n").is_err());
+        assert_eq!(Config::default().tui.action_for('s'), Some("panel"));
+    }
+
+    #[test]
+    fn rede_nas_camadas_e_retencao() {
+        let h = host(Path::new("/home/ana"));
+        let none = Layer::default();
+        let e = resolve(&Config::default(), &h, &req(Path::new("/w"), None, &none)).unwrap();
+        assert_eq!(e.network.value, NetworkMode::Aberta);
+        let c = parse("[global]\nnet-log-days = 7\nnet-log-max = \"1G\"\n[project.\"/w\"]\nnetwork = \"sem-rede\"\n").unwrap();
+        assert_eq!((c.net_log_days, c.net_log_max), (Some(7), Some(1 << 30)));
+        let e = resolve(&c, &h, &req(Path::new("/w"), None, &none)).unwrap();
+        assert_eq!(e.network.value, NetworkMode::SemRede);
+        assert_eq!(e.network.origin, Origin::Project("/w".into()));
+        let run = Layer {
+            network: Some(NetworkMode::Aberta),
+            ..Default::default()
+        };
+        let e = resolve(&c, &h, &req(Path::new("/w"), None, &run)).unwrap();
+        assert_eq!(e.network.value, NetworkMode::Aberta);
+        assert!(parse("[global]\nnetwork = \"fechada\"\n").is_err());
+        let e = parse("[profile.x]\nnet-log-days = 3\n").unwrap_err();
+        assert!(e.message.contains("[global]"), "{e}");
+        assert!(parse("[global]\nnet-log-days = 0\n").is_err());
+        assert!(parse("[global]\nnet-log-max = \"10M\"\n").is_err());
+    }
+
+    #[test]
+    fn politica_de_arquivos() {
+        use sandmux_spec::files::FileVerdict;
+        let h = host(Path::new("/home/ana"));
+        let c = parse("[global]\nfile-deny = [\"*.sql\"]\nsecret-files = [\"*.cred\"]\n[project.\"/w\"]\nfile-allow = [\"/w/ok.sql\"]\nsecret-files-off = [\".npmrc\"]\nfile-deny = [\"~/privado\"]\n")
+            .unwrap();
+        let run = Layer {
+            file_deny: vec!["dump".into()],
+            ..Layer::default()
+        };
+        let e = resolve(&c, &h, &req(Path::new("/w"), None, &run)).unwrap();
+        assert_eq!(e.file_deny, vec!["*.sql", "~/privado", "dump"]);
+        let p = e.file_policy(Path::new("/home/ana"), Path::new("/w"));
+        let none = |_: &Path| false;
+        assert!(matches!(
+            p.decide(Path::new("/w/a.sql"), none),
+            FileVerdict::Deny(_)
+        ));
+        assert_eq!(p.decide(Path::new("/w/ok.sql"), none), FileVerdict::Pass);
+        assert!(matches!(
+            p.decide(Path::new("/home/ana/privado/x"), none),
+            FileVerdict::Deny(_)
+        ));
+        assert_eq!(p.decide(Path::new("/w/a.cred"), none), FileVerdict::Secret);
+        assert_eq!(p.decide(Path::new("/w/.npmrc"), none), FileVerdict::Pass);
+        assert_eq!(p.decide(Path::new("/w/.env"), none), FileVerdict::Secret);
+        assert!(parse("[global]\nfile-deny = [\"\"]\n").is_err());
+        assert!(parse("[global]\nfile-allow = [\"a/b\"]\n").is_err());
+        assert!(
+            c.global
+                .describe()
+                .contains(&"file-deny = [\"*.sql\"]".to_string())
+        );
+    }
+
+    #[test]
+    fn portas_de_entrada() {
+        let h = host(Path::new("/home/ana"));
+        let c = parse("[global]\nports = [\"8642\"]\n[project.\"/w\"]\nports = [\"8642@0.0.0.0\", \"3000\"]\n").unwrap();
+        let e = resolve(&c, &h, &req(Path::new("/w"), None, &Layer::default())).unwrap();
+        let v: Vec<String> = e.ports.iter().map(|p| p.to_string()).collect();
+        assert_eq!(v, vec!["8642@0.0.0.0", "3000"]);
+        assert_eq!(e.net_policy().unwrap().ports.len(), 2);
+        assert!(parse("[global]\nports = [\"abc\"]\n").is_err());
+    }
+
+    #[test]
+    fn chaves_ssh_somadas() {
+        let h = host(Path::new("/home/ana"));
+        let c = parse("[global]\nssh-keys = [\"github\"]\n[project.\"/w\"]\nssh-keys = [\"trabalho\", \"github\"]\n")
+            .unwrap();
+        assert_eq!(
+            c.global.describe(),
+            vec!["ssh-keys = [\"github\"]".to_string()]
+        );
+        let run = Layer {
+            ssh_keys: vec!["*".into()],
+            ..Layer::default()
+        };
+        let e = resolve(&c, &h, &req(Path::new("/w"), None, &run)).unwrap();
+        assert_eq!(e.ssh_keys, vec!["github", "trabalho", "*"]);
+        let e = resolve(&c, &h, &req(Path::new("/x"), None, &Layer::default())).unwrap();
+        assert_eq!(e.ssh_keys, vec!["github"]);
+        assert!(parse("[global]\nssh-keys = [\"com espaço\"]\n").is_err());
+        assert!(parse("[global]\nssh-keys = \"github\"\n").is_err());
+    }
+
+    #[test]
+    fn chaves_da_politica_de_rede() {
+        use sandmux_spec::net::{PolicyMode, Verdict};
+        let h = host(Path::new("/home/ana"));
+        let c = parse(
+            "[global]\ndeny = [\"A.test\"]\ncatalog-off = [\"pastebin.com\", \"api.openai.com\"]\nallow-off = [\"off.test\"]\n[project.\"/w\"]\nnetwork = \"custom\"\nallow = [\"*.exemplo.com\", \"off.test\"]\ncatalog = [\"npm\"]\ndeny = [\"api.exemplo.com\"]\n",
+        )
+        .unwrap();
+        assert_eq!(c.global.deny, vec!["a.test".parse().unwrap()]);
+        let d =
+            parse("[global]\ndecrypt = [\"a.test\"]\n[project.\"/w\"]\ndecrypt = [\"*.b.test\"]\n")
+                .unwrap();
+        let run = Layer {
+            decrypt: vec!["c.test".parse().unwrap()],
+            ..Layer::default()
+        };
+        let e = resolve(&d, &h, &req(Path::new("/w"), None, &run)).unwrap();
+        let pol = e.net_policy().unwrap();
+        assert!(pol.decrypts("a.test") && pol.decrypts("x.b.test") && pol.decrypts("c.test"));
+        assert!(!pol.decrypts("b.test"));
+        assert!(parse("[global]\ndecrypt = [\"https://x\"]\n").is_err());
+        let run = Layer {
+            deny: vec!["b.test".parse().unwrap()],
+            ..Layer::default()
+        };
+        let e = resolve(&c, &h, &req(Path::new("/w"), None, &run)).unwrap();
+        assert_eq!(e.network.value, NetworkMode::Custom);
+        let find = |p: &str, k: RuleKind| {
+            e.net_rules
+                .iter()
+                .find(|r| r.pattern.to_string() == p && r.kind == k)
+                .unwrap_or_else(|| panic!("{p}"))
+                .clone()
+        };
+        assert_eq!(find("a.test", RuleKind::Deny).origin, "global");
+        assert_eq!(find("b.test", RuleKind::Deny).origin, "aba");
+        assert_eq!(find("api.exemplo.com", RuleKind::Deny).origin, "projeto /w");
+        assert!(!find("pastebin.com", RuleKind::Deny).enabled);
+        assert!(find("paste.ee", RuleKind::Deny).enabled);
+        assert!(!find("off.test", RuleKind::Allow).enabled);
+        assert!(find("registry.npmjs.org", RuleKind::Allow).enabled);
+        assert!(!find("pypi.org", RuleKind::Allow).enabled);
+        assert!(!find("api.openai.com", RuleKind::Allow).enabled);
+        // Custom: allowlist e catálogo comum; sem o catálogo de inferência.
+        let pol = e.net_policy().unwrap();
+        assert_eq!(pol.mode, PolicyMode::Custom);
+        assert_eq!(pol.decide_name("www.exemplo.com"), Verdict::Pass);
+        assert!(matches!(
+            pol.decide_name("api.exemplo.com"),
+            Verdict::Block(_)
+        ));
+        assert_eq!(pol.decide_name("registry.npmjs.org"), Verdict::Pass);
+        assert!(matches!(
+            pol.decide_name("openrouter.ai"),
+            Verdict::Block(_)
+        ));
+        assert!(matches!(pol.decide_name("off.test"), Verdict::Block(_)));
+        // Aberta: só a denylist.
+        let open = Layer {
+            network: Some(NetworkMode::Aberta),
+            ..Layer::default()
+        };
+        let e = resolve(&c, &h, &req(Path::new("/w"), None, &open)).unwrap();
+        let pol = e.net_policy().unwrap();
+        assert!(pol.rules.iter().all(|r| r.kind == RuleKind::Deny));
+        assert_eq!(pol.decide_name("pastebin.com"), Verdict::Pass);
+        assert!(
+            matches!(pol.decide_name("paste.ee"), Verdict::Block(m) if m.contains("exfiltração"))
+        );
+        assert_eq!(pol.decide_name("qualquer.test"), Verdict::Pass);
+        // Inferência: só o catálogo de provedores, menos os desligados.
+        let inf = Layer {
+            network: Some(NetworkMode::Inferencia),
+            ..Layer::default()
+        };
+        let e = resolve(&c, &h, &req(Path::new("/w"), None, &inf)).unwrap();
+        let pol = e.net_policy().unwrap();
+        assert_eq!(pol.decide_name("openrouter.ai"), Verdict::Pass);
+        assert!(matches!(
+            pol.decide_name("api.openai.com"),
+            Verdict::Block(_)
+        ));
+        assert!(matches!(
+            pol.decide_name("registry.npmjs.org"),
+            Verdict::Block(_)
+        ));
+        // Sem rede: sem política de gateway.
+        let none = Layer {
+            network: Some(NetworkMode::SemRede),
+            ..Layer::default()
+        };
+        assert!(
+            resolve(&c, &h, &req(Path::new("/w"), None, &none))
+                .unwrap()
+                .net_policy()
+                .is_none()
+        );
+        // Erros.
+        for bad in [
+            "[global]\ndeny = [\"http://x.test/a\"]\n",
+            "[global]\ncatalog = [\"nada\"]\n",
+            "[global]\nnetwork = \"fechada\"\n",
+            "[global]\nallow = \"x.test\"\n",
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+        let e = parse("[global]\nnetwork = \"fechada\"\n").unwrap_err();
+        assert!(
+            e.message.contains("inferencia") && e.message.contains("custom"),
+            "{e}"
+        );
+        assert!(
+            c.projects
+                .values()
+                .next()
+                .unwrap()
+                .describe()
+                .iter()
+                .any(|l| l == "catalog = [\"npm\"]")
+        );
     }
 
     #[test]

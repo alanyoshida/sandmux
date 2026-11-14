@@ -111,6 +111,278 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 let _ = stream.flush();
                 shared.stop();
             }
+            Msg::Stats { id } => {
+                let st = shared.lock();
+                let found = st.sessions.get(&id).map(|s| {
+                    (
+                        s.stats(),
+                        s.opts.workdir.clone(),
+                        s.live.as_ref().and(s.tags.last().cloned()),
+                    )
+                });
+                let text = list_text(&st);
+                drop(st);
+                let reply = match found {
+                    Some((
+                        Msg::StatsOf {
+                            id,
+                            state,
+                            stats,
+                            oom_kills,
+                            fork_refusals,
+                            policy,
+                            ..
+                        },
+                        w,
+                        tag,
+                    )) => {
+                        let mut ports: Vec<sandmux_proto::msg::PortInfo> = tag
+                            .and_then(|t| crate::launch::ports_file(&t).ok())
+                            .map(|f| sandmux_net::ports::read_list(&f))
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|p| sandmux_proto::msg::PortInfo {
+                                guest: p.guest,
+                                host: p.host,
+                                source: "sandbox".into(),
+                                addr: p.addr,
+                            })
+                            .collect();
+                        ports.extend(shared.docker.ports(&w));
+                        Msg::StatsOf {
+                            id,
+                            state,
+                            stats,
+                            oom_kills,
+                            fork_refusals,
+                            docker: shared.docker.stats(&w),
+                            policy,
+                            ports,
+                        }
+                    }
+                    Some((m, _, _)) => m,
+                    None => Msg::Error {
+                        message: format!("não existe a sessão {id}.{text}"),
+                    },
+                };
+                write_control(&mut stream, &reply)?;
+            }
+            Msg::Rename { id, name } => {
+                let reply = match sandmux_proto::msg::check_session_name(&name) {
+                    Err(e) => Msg::Error { message: e },
+                    Ok(()) => {
+                        let mut st = shared.lock();
+                        let text = list_text(&st);
+                        match st.sessions.get_mut(&id) {
+                            Some(s) => {
+                                s.name = name.trim().to_string();
+                                shared.persist(&st);
+                                Msg::Ok
+                            }
+                            None => Msg::Error {
+                                message: format!("não existe a sessão {id}.{text}"),
+                            },
+                        }
+                    }
+                };
+                write_control(&mut stream, &reply)?;
+            }
+            Msg::VaultStatus => {
+                let v = shared.vault.lock().unwrap_or_else(|e| e.into_inner());
+                let reply = Msg::VaultInfo {
+                    exists: v.exists(),
+                    unlocked: v.unlocked(),
+                    secrets: v.count(),
+                };
+                drop(v);
+                write_control(&mut stream, &reply)?;
+            }
+            Msg::VaultInit { password } => {
+                let r = shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .init(&password);
+                reply_unit(&mut stream, r)?;
+            }
+            Msg::VaultUnlock { password } => {
+                let r = shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .unlock(&password);
+                if r.is_ok() {
+                    super::session::vault_unlocked(shared);
+                    let s = shared.clone();
+                    std::thread::spawn(move || super::net::recompile_all(&s));
+                }
+                reply_unit(&mut stream, r)?;
+            }
+            Msg::VaultLock => {
+                shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .lock();
+                let s = shared.clone();
+                std::thread::spawn(move || super::net::recompile_all(&s));
+                write_control(&mut stream, &Msg::Ok)?;
+            }
+            Msg::VaultPasswd { old, new } => {
+                let r = shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .passwd(&old, &new);
+                reply_unit(&mut stream, r)?;
+            }
+            Msg::VaultAdd {
+                name,
+                value,
+                domains,
+                fake,
+                tools,
+            } => {
+                let r = shared.vault.lock().unwrap_or_else(|e| e.into_inner()).add(
+                    sandmux_vault::Secret {
+                        name,
+                        value,
+                        domains,
+                        fake,
+                        tools,
+                        kind: String::new(),
+                    },
+                );
+                if r.is_ok() {
+                    let s = shared.clone();
+                    std::thread::spawn(move || super::net::recompile_all(&s));
+                }
+                reply_unit(&mut stream, r)?;
+            }
+            Msg::VaultRemove { name } => {
+                let r = shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&name);
+                if r.is_ok() {
+                    let s = shared.clone();
+                    std::thread::spawn(move || super::net::recompile_all(&s));
+                }
+                reply_unit(&mut stream, r)?;
+            }
+            Msg::VaultAddSsh { name, key, servers } => {
+                let r = shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .add_ssh(name, key, servers);
+                if r.is_ok() {
+                    let s = shared.clone();
+                    std::thread::spawn(move || super::net::recompile_all(&s));
+                }
+                reply_unit(&mut stream, r)?;
+            }
+            Msg::VaultInject { tag } => {
+                let _ = tag;
+                let secrets = shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .injections();
+                write_control(&mut stream, &Msg::Injections { secrets })?;
+            }
+            Msg::FolderEdit {
+                id,
+                action,
+                value,
+                rw,
+            } => match super::folders::edit(shared, id, &action, &value, rw) {
+                Ok(warning) => {
+                    if let Some(message) = warning {
+                        write_control(&mut stream, &Msg::Warning { message })?;
+                    }
+                    write_control(&mut stream, &Msg::Ok)?;
+                }
+                Err(message) => write_control(&mut stream, &Msg::Error { message })?,
+            },
+            Msg::DbAdd { conn } => {
+                let r = shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .add_db(conn);
+                reply_unit(&mut stream, r)?;
+            }
+            Msg::DbList => {
+                let r = shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .db_list();
+                let reply = match r {
+                    Ok(list) => Msg::DbEntries { list },
+                    Err(message) => Msg::Error { message },
+                };
+                write_control(&mut stream, &reply)?;
+            }
+            Msg::McpList { id } => {
+                let opts = shared.lock().sessions.get(&id).map(|s| s.opts.clone());
+                let reply = match opts {
+                    None => Msg::Error {
+                        message: format!("não existe a sessão {id}"),
+                    },
+                    Some(o) => {
+                        let mut host = shared.base.clone();
+                        host.cwd = o.workdir.clone();
+                        match crate::launch::mcp_entries(&host, &o) {
+                            Ok(list) => Msg::Mcps { list },
+                            Err(e) => Msg::Error {
+                                message: format!("{e:#}"),
+                            },
+                        }
+                    }
+                };
+                write_control(&mut stream, &reply)?;
+            }
+            Msg::FolderList { id } => {
+                let reply = match super::folders::list(shared, id) {
+                    Ok(list) => Msg::Folders { list },
+                    Err(message) => Msg::Error { message },
+                };
+                write_control(&mut stream, &reply)?;
+            }
+            Msg::VaultList => {
+                let r = shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .list();
+                let reply = match r {
+                    Ok(entries) => Msg::VaultEntries { entries },
+                    Err(message) => Msg::Error { message },
+                };
+                write_control(&mut stream, &reply)?;
+            }
+            Msg::NetEdit { id, action, value } => {
+                let reply = match super::net::edit(shared, id, &action, &value) {
+                    Ok(warning) => {
+                        if let Some(message) = warning {
+                            write_control(&mut stream, &Msg::Warning { message })?;
+                        }
+                        Msg::Ok
+                    }
+                    Err(message) => Msg::Error { message },
+                };
+                write_control(&mut stream, &reply)?;
+            }
+            Msg::Net { id, since, limit } => {
+                let reply = match super::net::lines(shared, id, since.as_deref(), limit) {
+                    Ok(lines) => Msg::NetLog { lines },
+                    Err(message) => Msg::Error { message },
+                };
+                write_control(&mut stream, &reply)?;
+            }
             Msg::Kill { id } => match kill(shared, id) {
                 Ok(()) => write_control(&mut stream, &Msg::Ok)?,
                 Err(e) => error(&mut stream, e)?,
@@ -134,24 +406,62 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     }
                 }
             }
+            Msg::ChatCheck { host } => {
+                let reply = {
+                    let v = shared.vault.lock().unwrap_or_else(|e| e.into_inner());
+                    Msg::ChatStatus {
+                        exists: v.exists(),
+                        unlocked: v.unlocked(),
+                        key: v.fake_for(&host).is_some(),
+                    }
+                };
+                write_control(&mut stream, &reply)?;
+            }
+            Msg::Ask {
+                model,
+                text,
+                vars,
+                system,
+            } => match session::ask(shared, &model, &text, system.as_deref(), &vars) {
+                Ok(text) => write_control(&mut stream, &Msg::Answer { text })?,
+                Err(e) => error(&mut stream, format!("{e:#}"))?,
+            },
             Msg::Create {
                 opts,
                 vars,
                 size,
                 attach,
-            } => match session::spawn(shared, &opts, &vars, size) {
-                Err(e) => error(&mut stream, format!("{e:#}"))?,
-                Ok(spawned) => {
-                    for w in &spawned.warnings {
-                        write_control(&mut stream, &Msg::Warning { message: w.clone() })?;
-                    }
-                    let (id, name) = session::register(shared, opts, spawned, size);
-                    write_control(&mut stream, &Msg::Created { id, name })?;
-                    if attach {
-                        return attached(shared, stream, id, size);
+            } => {
+                if opts.gateway
+                    && let Some(g) = session::gateway_session(shared)
+                {
+                    error(
+                        &mut stream,
+                        format!(
+                            "já existe a sessão {g} do gateway do hermes; encerre-a com `sandmux kill {g}` antes"
+                        ),
+                    )?;
+                    continue;
+                }
+                let id = session::reserve(shared);
+                match session::spawn(shared, id, 1, &opts, &vars, size) {
+                    Err(e) => error(&mut stream, format!("{e:#}"))?,
+                    Ok(spawned) => {
+                        for w in &spawned.warnings {
+                            write_control(&mut stream, &Msg::Warning { message: w.clone() })?;
+                        }
+                        let names = spawned.pass_env.clone();
+                        let name = session::register(shared, id, *opts, spawned, size);
+                        if let Some(w) = session::store_pass_env(shared, id, &names, &vars) {
+                            write_control(&mut stream, &Msg::Warning { message: w })?;
+                        }
+                        write_control(&mut stream, &Msg::Created { id, name })?;
+                        if attach {
+                            return attached(shared, stream, id, size);
+                        }
                     }
                 }
-            },
+            }
             Msg::Restart {
                 id,
                 vars,
@@ -161,6 +471,15 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 Err(e) => error(&mut stream, format!("{e:#}"))?,
                 Ok(warnings) => {
                     for w in warnings {
+                        write_control(&mut stream, &Msg::Warning { message: w })?;
+                    }
+                    let names = shared
+                        .lock()
+                        .sessions
+                        .get(&id)
+                        .map(|s| s.pass_env.clone())
+                        .unwrap_or_default();
+                    if let Some(w) = session::store_pass_env(shared, id, &names, &vars) {
                         write_control(&mut stream, &Msg::Warning { message: w })?;
                     }
                     let name = shared
@@ -189,6 +508,12 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
 
 /// Encerra a sessão: SIGTERM, espera, SIGKILL. Volta quando ela saiu da lista.
 fn kill(shared: &Arc<Shared>, id: u32) -> Result<(), String> {
+    // Os valores de `pass-env` da sessão saem do cofre.
+    shared
+        .vault
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .forget_session(id);
     let pid = {
         let mut st = shared.lock();
         let Some(s) = st.sessions.get_mut(&id) else {
@@ -203,7 +528,9 @@ fn kill(shared: &Arc<Shared>, id: u32) -> Result<(), String> {
                 s.drop_clients(Msg::Detached {
                     reason: format!("a sessão {id} foi encerrada por `sandmux kill`"),
                 });
-                st.sessions.remove(&id);
+                if let Some(s) = st.sessions.remove(&id) {
+                    session::remove_chat_dir(&s.opts);
+                }
                 shared.persist(&st);
                 drop(st);
                 shared.changed.notify_all();
@@ -322,4 +649,13 @@ fn attached(shared: &Arc<Shared>, mut stream: UnixStream, id: u32, size: Size) -
     }
     let _ = writer.join();
     Ok(())
+}
+
+/// `Ok` ou `Error` com a mensagem.
+fn reply_unit(stream: &mut UnixStream, r: Result<(), String>) -> std::io::Result<()> {
+    let m = match r {
+        Ok(()) => Msg::Ok,
+        Err(message) => Msg::Error { message },
+    };
+    write_control(stream, &m).map_err(std::io::Error::other)
 }

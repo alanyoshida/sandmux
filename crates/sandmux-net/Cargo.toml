@@ -1,0 +1,33 @@
+[package]
+name = "sandmux-net"
+description = "Gateway de rede do sandmux: pilha TCP/IP em espaço de usuário sobre o TUN do sandbox, DNS, bloqueios e registro"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+sandmux-proto.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-native-certs.workspace = true
+rustls-pemfile.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+sandmux-spec.workspace = true
+ipstack.workspace = true
+tokio.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -60,6 +60,10 @@ impl Host {
             Some(p) if p.is_absolute() => p.join("sandmux"),
             _ => home.join(".local/share/sandmux"),
         };
+        // Canônico quando existe, para comparar com caminhos canônicos.
+        let data_dir = data_dir
+            .canonicalize()
+            .unwrap_or_else(|_| crate::config::normalize(&data_dir));
         let config_dir = config_dir_from(&env, &home);
         let cwd = std::env::current_dir()
             .and_then(|p| p.canonicalize())

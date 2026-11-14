@@ -53,7 +53,7 @@ Quando o systemd de usuário não está disponível, o cliente MUST iniciar o da
 - **THEN** o cliente inicia o daemon, a sessão é criada, e fechar o terminal não encerra o daemon
 
 ### Requirement: Ambiente do lançamento vem do cliente
-O daemon MUST lançar cada sessão com a pasta de trabalho, as variáveis da lista segura e os valores de `--pass-env` enviados pelo cliente que pediu a sessão, e não com os do ambiente do próprio daemon. Os valores de `--pass-env` MUST ficar só na memória do daemon.
+O daemon MUST lançar cada sessão com a pasta de trabalho, as variáveis da lista segura e os valores de `--pass-env` enviados pelo cliente que pediu a sessão, e não com os do ambiente do próprio daemon. Os valores de `--pass-env` MUST ficar só na memória do daemon e, quando o cofre está desbloqueado, cifrados no cofre; MUST NOT ir em claro para nenhum arquivo.
 
 #### Scenario: Pasta e terminal do cliente
 - **WHEN** o usuário roda `sandmux run shell` na pasta `~/proj` com `TERM=xterm-kitty`
@@ -61,7 +61,7 @@ O daemon MUST lançar cada sessão com a pasta de trabalho, as variáveis da lis
 
 #### Scenario: Valor de variável passada
 - **WHEN** a sessão foi criada com `--pass-env OPENROUTER_API_KEY`
-- **THEN** o valor está no ambiente do harness e não aparece em nenhum arquivo gravado pelo daemon
+- **THEN** o valor está no ambiente do harness e não aparece em claro em nenhum arquivo gravado pelo daemon
 
 ### Requirement: Verificação de versão do protocolo
 Cliente e daemon MUST trocar a versão do protocolo antes de qualquer outro pedido. Com versões diferentes, o cliente MUST terminar com erro mostrando as duas versões e indicando `sandmux daemon restart`, e o daemon MUST continuar rodando com as sessões intactas.
@@ -114,14 +114,18 @@ O daemon MUST manter no diretório de dados do sandmux um arquivo com a lista de
 - **THEN** as sessões são lidas com as opções que tinham, sem perfil nomeado, e a lista é regravada no formato novo
 
 ### Requirement: Restauração depois de reboot
-Ao subir, o daemon MUST ler a lista de sessões e relançar cada sessão que estava viva, na mesma pasta, com o mesmo harness, as mesmas opções e o mesmo perfil, resolvendo as camadas com a configuração do momento. MUST ficar parada, com o motivo em `sandmux ls`, até o usuário reiniciá-la, uma sessão cuja política efetiva tem `pass-env`, cujo perfil nomeado não existe mais ou cuja configuração é inválida. Uma sessão encerrada MUST voltar encerrada, com o código de saída.
+Ao subir, o daemon MUST relançar cada sessão que estava viva, com as mesmas opções, resolvendo as camadas com a configuração do momento. Uma sessão com `pass-env` cujos valores estão no cofre MUST ficar "aguardando cofre" e subir sozinha, com eles, no desbloqueio. A sessão do gateway do hermes e as sessões de chat MUST ficar "aguardando cofre" enquanto o cofre existe e está trancado, e subir sozinhas no desbloqueio. MUST ficar parada, com o motivo em `sandmux ls`, uma sessão com `pass-env` sem os valores no cofre, com perfil que não existe mais ou com configuração inválida. Uma sessão encerrada MUST voltar encerrada.
 
 #### Scenario: Sessão sem variáveis passadas
 - **WHEN** a máquina reinicia com uma sessão viva do `opencode` em `~/proj`, criada sem `--pass-env`
 - **THEN** depois do login o daemon relança o `opencode` em `~/proj` sem nenhum comando do usuário
 
+#### Scenario: Sessão com variável no cofre
+- **WHEN** a máquina reinicia com uma sessão viva criada com `--pass-env OPENROUTER_API_KEY` enquanto o cofre estava desbloqueado
+- **THEN** a sessão aparece "aguardando cofre" em `sandmux ls` e sobe sozinha, com o valor, quando o usuário desbloqueia o cofre
+
 #### Scenario: Sessão com variável passada
-- **WHEN** a máquina reinicia com uma sessão viva criada com `--pass-env OPENROUTER_API_KEY`
+- **WHEN** a máquina reinicia com uma sessão viva criada com `--pass-env OPENROUTER_API_KEY` sem cofre
 - **THEN** a sessão aparece parada em `sandmux ls`, com o motivo, e só sobe quando o usuário roda `sandmux restart` de um terminal que tem a variável
 
 #### Scenario: Pasta de trabalho apagada
@@ -139,3 +143,11 @@ Ao subir, o daemon MUST ler a lista de sessões e relançar cada sessão que est
 #### Scenario: Configuração inválida
 - **WHEN** o arquivo de configuração está inválido quando o daemon sobe
 - **THEN** todas as sessões que estavam vivas aparecem paradas, com o motivo citando o arquivo e a linha, e o daemon continua rodando
+
+#### Scenario: Gateway do hermes com o cofre trancado
+- **WHEN** a máquina reinicia com a sessão do gateway do hermes viva e o cofre existe
+- **THEN** a sessão aparece "aguardando cofre" em `sandmux ls` e sobe sozinha quando o usuário desbloqueia o cofre
+
+#### Scenario: Aba de chat depois do reboot
+- **WHEN** a máquina reinicia com uma aba de chat viva e o cofre existe
+- **THEN** a aba de chat aparece "aguardando cofre" e volta, com a conversa, quando o usuário desbloqueia o cofre

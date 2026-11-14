@@ -15,12 +15,14 @@ sandmux-launcher = { path = "crates/sandmux-launcher" }
 sandmux-policy = { path = "crates/sandmux-policy" }
 sandmux-import = { path = "crates/sandmux-import" }
 sandmux-proto = { path = "crates/sandmux-proto" }
+sandmux-net = { path = "crates/sandmux-net" }
+sandmux-vault = { path = "crates/sandmux-vault" }
 
 anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
 landlock = "0.4.7"
 libc = "0.2.174"
-nix = { version = "0.30", features = ["fs", "ioctl", "mount", "poll", "process", "sched", "signal", "socket", "term", "user"] }
+nix = { version = "0.30", features = ["fs", "inotify", "ioctl", "mount", "poll", "process", "sched", "signal", "socket", "term", "user"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -28,6 +30,34 @@ tempfile = "3"
 vt100 = "0.18"
 thiserror = "2"
 toml_edit = "0.25"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
+arboard = { version = "3", default-features = false, features = ["wayland-data-control", "image-data"] }
+png = "0.18"
+ipstack = "1.0"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+zeroize = { version = "1", features = ["derive"] }
+base64 = "0.22"
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem", "x509-parser"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls-native-certs = "0.8"
+rustls-pemfile = "2"
+hyper = { version = "1", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+unicode-width = "0.2"
+ssh-key = { version = "0.6", features = ["ed25519", "p256", "p384", "rsa", "encryption", "std"] }
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+rsa = { version = "0.9", features = ["sha2"] }
+signature = "2"
+tokio-postgres = "0.7"
+mysql_async = { version = "0.37", default-features = false, features = ["minimal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -35,3 +65,10 @@ unsafe_op_in_unsafe_fn = "deny"
 [profile.release]
 lto = true
 codegen-units = 1
+
+# O Argon2id do cofre sem otimização leva segundos por desbloqueio.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

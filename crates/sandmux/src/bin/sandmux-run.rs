@@ -1,6 +1,12 @@
 //! Lançador do sandbox do sandmux.
 //!
-//! Uso: `sandmux-run --spec-fd <N>` ou `sandmux-run --check`
+//! Uso: `sandmux-run --spec-fd <N>`, `sandmux-run --view-file <arquivo>` ou
+//! `sandmux-run --check`
+//!
+//! Com `--view-file`, só monta a raiz da especificação no namespace atual e
+//! executa o comando, sem namespaces novos, Landlock nem seccomp: é a visão de
+//! arquivos do Docker privado, montada dentro do user namespace do
+//! `rootlesskit`.
 //!
 //! Com `--check`, verifica o suporte da máquina neste processo (que é o que
 //! recebe o perfil AppArmor) e escreve o resultado em linhas `chave:valor`.
@@ -28,11 +34,23 @@ fn main() {
         print!("{}", sandmux_launcher::support::check().to_wire());
         exit(0);
     }
+    if let [flag, path] = args.as_slice()
+        && flag == "--view-file"
+    {
+        let bytes = std::fs::read(path)
+            .unwrap_or_else(|e| fail(format!("ler a visão {path}: {e}"), EXIT_SETUP));
+        let spec = LaunchSpec::from_json(&bytes).unwrap_or_else(|e| fail(e, EXIT_SETUP));
+        let e = sandmux_launcher::exec_view(&spec);
+        fail(&e, e.exit_code());
+    }
     let fd: i32 = match args.as_slice() {
         [flag, n] if flag == "--spec-fd" => n
             .parse()
             .unwrap_or_else(|_| fail(format!("descritor inválido: {n}"), EXIT_SETUP)),
-        _ => fail("uso: sandmux-run --spec-fd <N> | --check", EXIT_SETUP),
+        _ => fail(
+            "uso: sandmux-run --spec-fd <N> | --view-file <arquivo> | --check",
+            EXIT_SETUP,
+        ),
     };
     // SAFETY: fcntl só consulta o descritor.
     if fd < 3 || unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {

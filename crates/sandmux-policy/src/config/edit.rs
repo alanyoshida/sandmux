@@ -7,8 +7,10 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{Array, DocumentMut, Item, Table, value};
 
+use crate::limits::{MemoryLimit, ProcessLimit};
+
 use super::{
-    BOOL_KEYS, Config, ConfigError, LIST_KEYS, expand, valid_path, valid_profile_name,
+    BOOL_KEYS, Config, ConfigError, LIMIT_KEYS, LIST_KEYS, expand, valid_path, valid_profile_name,
     valid_var_name,
 };
 use crate::host::Host;
@@ -36,6 +38,8 @@ impl std::fmt::Display for Target {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
     Set(String, bool),
+    /// Teto (`memory`, `processes`), com o valor como foi dado.
+    SetLimit(String, String),
     Unset(String),
     Add(String, String),
     Remove(String, String),
@@ -87,6 +91,19 @@ fn refused(m: impl Into<String>) -> EditError {
 /// Confere a chave e o item antes de tocar no arquivo.
 fn check_op(op: &Op, host: &Host) -> Result<(), EditError> {
     match op {
+        Op::SetLimit(k, v) => match k.as_str() {
+            "memory" => {
+                MemoryLimit::parse(v).map_err(refused)?;
+            }
+            "processes" => {
+                ProcessLimit::parse(v).map_err(refused)?;
+            }
+            "network" => {
+                super::NetworkMode::parse(v).map_err(refused)?;
+            }
+            _ => return Err(refused(format!("`{k}` não é um teto nem o modo de rede"))),
+        },
+        Op::Unset(k) if LIMIT_KEYS.contains(&k.as_str()) || k == "network" => {}
         Op::Set(k, _) | Op::Unset(k) => {
             if !BOOL_KEYS.contains(&k.as_str()) {
                 let hint = if LIST_KEYS.contains(&k.as_str()) {
@@ -96,8 +113,47 @@ fn check_op(op: &Op, host: &Host) -> Result<(), EditError> {
                 };
                 return Err(refused(format!(
                     "chave desconhecida para `set` e `unset`: `{k}`. Chaves aceitas: {}{hint}",
-                    BOOL_KEYS.join(", ")
+                    BOOL_KEYS
+                        .iter()
+                        .chain(LIMIT_KEYS)
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )));
+            }
+        }
+        Op::Add(k, item) | Op::Remove(k, item) if super::MCP_LIST_KEYS.contains(&k.as_str()) => {
+            if !super::valid_ssh_key_name(item) || item == "*" {
+                return Err(refused(format!(
+                    "`{k}` aceita nomes de servidores MCP: {item:?}"
+                )));
+            }
+        }
+        Op::Add(k, item) | Op::Remove(k, item) if super::FILE_LIST_KEYS.contains(&k.as_str()) => {
+            super::valid_file_pattern(item).map_err(|e| refused(format!("`{k}`: {e}")))?;
+        }
+        Op::Add(k, item) | Op::Remove(k, item) if k == super::PORTS_KEY => {
+            item.parse::<sandmux_spec::net::PortRule>()
+                .map_err(|e| refused(format!("`ports`: {e}")))?;
+        }
+        Op::Add(k, item) | Op::Remove(k, item) if k == super::SSH_KEYS || k == super::DB_KEY => {
+            if !super::valid_ssh_key_name(item) {
+                return Err(refused(format!(
+                    "`ssh-keys` aceita nomes de chaves do cofre, ou \"*\": {item:?}"
+                )));
+            }
+        }
+        Op::Add(k, item) | Op::Remove(k, item) if super::NET_LIST_KEYS.contains(&k.as_str()) => {
+            if k == "catalog" {
+                if !crate::netcatalog::is_group(item) {
+                    return Err(refused(format!(
+                        "`catalog`: grupo desconhecido {item:?}. Grupos: {}",
+                        crate::netcatalog::group_names()
+                    )));
+                }
+            } else {
+                item.parse::<sandmux_spec::net::Pattern>()
+                    .map_err(|e| refused(format!("`{k}`: {e}")))?;
             }
         }
         Op::Add(k, item) | Op::Remove(k, item) => {
@@ -109,7 +165,15 @@ fn check_op(op: &Op, host: &Host) -> Result<(), EditError> {
                 };
                 return Err(refused(format!(
                     "chave desconhecida para `add` e `remove`: `{k}`. Chaves aceitas: {}{hint}",
-                    LIST_KEYS.join(", ")
+                    LIST_KEYS
+                        .iter()
+                        .chain(super::NET_LIST_KEYS)
+                        .chain([&super::SSH_KEYS, &super::DB_KEY, &super::PORTS_KEY])
+                        .chain(super::FILE_LIST_KEYS)
+                        .chain(super::MCP_LIST_KEYS)
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )));
             }
             if k == "pass-env" {
@@ -222,6 +286,16 @@ pub fn apply(path: &Path, host: &Host, target: &Target, op: &Op) -> Result<Outco
         .parse()
         .map_err(|e: toml_edit::TomlError| EditError::Io(e.to_string()))?;
 
+    // Padrões de destino gravados na forma canônica (minúsculas).
+    let canon = |k: &str, item: &str| -> String {
+        if super::NET_LIST_KEYS.contains(&k) && k != "catalog" {
+            item.parse::<sandmux_spec::net::Pattern>()
+                .map(|p| p.to_string())
+                .unwrap_or_else(|_| item.to_string())
+        } else {
+            item.to_string()
+        }
+    };
     let mut notice = None;
     {
         let t = target_table(&mut doc, target)?;
@@ -238,12 +312,32 @@ pub fn apply(path: &Path, host: &Host, target: &Target, op: &Op) -> Result<Outco
                     t.insert(k, value(*v));
                 }
             }
+            Op::SetLimit(k, v) => {
+                let new: toml_edit::Value = match (k.as_str(), ProcessLimit::parse(v)) {
+                    ("processes", Ok(ProcessLimit::Count(n))) => (n as i64).into(),
+                    _ => v.trim().into(),
+                };
+                if t.get(k)
+                    .and_then(Item::as_value)
+                    .map(|x| x.to_string().trim().to_string())
+                    == Some(new.to_string().trim().to_string())
+                {
+                    notice = Some(format!("`{k}` já é {v} em {target}"));
+                } else if let Some(Item::Value(old)) = t.get_mut(k) {
+                    let decor = old.decor().clone();
+                    *old = new;
+                    *old.decor_mut() = decor;
+                } else {
+                    t.insert(k, value(new));
+                }
+            }
             Op::Unset(k) => {
                 if t.remove(k).is_none() {
                     notice = Some(format!("`{k}` não estava definida em {target}"));
                 }
             }
             Op::Add(k, item) => {
+                let item = &canon(k, item);
                 let arr = t
                     .entry(k)
                     .or_insert(value(Array::new()))
@@ -256,6 +350,7 @@ pub fn apply(path: &Path, host: &Host, target: &Target, op: &Op) -> Result<Outco
                 }
             }
             Op::Remove(k, item) => {
+                let item = &canon(k, item);
                 let arr = t.get_mut(k).and_then(Item::as_array_mut);
                 let Some(arr) = arr else {
                     return Err(refused(format!("{item} não está em `{k}` de {target}")));
@@ -398,6 +493,25 @@ mod tests {
     }
 
     #[test]
+    fn chaves_ssh_pela_linha_de_comando() {
+        let t = setup();
+        run(
+            &t,
+            Target::Global,
+            Op::Add("ssh-keys".into(), "github".into()),
+        )
+        .unwrap();
+        assert_eq!(read(&t), "[global]\nssh-keys = [\"github\"]\n");
+        assert!(run(&t, Target::Global, Op::Add("ssh-keys".into(), "a b".into())).is_err());
+        run(
+            &t,
+            Target::Global,
+            Op::Remove("ssh-keys".into(), "github".into()),
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn projeto_com_aspas() {
         let t = setup();
         run(
@@ -502,6 +616,55 @@ mod tests {
         let e = run(&t, Target::Global, Op::Set("kvm".into(), true)).unwrap_err();
         assert!(matches!(e, EditError::Invalid(_)), "{e}");
         assert_eq!(read(&t), "[global]\nrede = 1\n");
+    }
+
+    #[test]
+    fn tetos_pelo_comando() {
+        let t = setup();
+        run(
+            &t,
+            Target::Global,
+            Op::SetLimit("memory".into(), "16G".into()),
+        )
+        .unwrap();
+        run(
+            &t,
+            Target::Global,
+            Op::SetLimit("processes".into(), "512".into()),
+        )
+        .unwrap();
+        run(
+            &t,
+            Target::Profile("x".into()),
+            Op::SetLimit("processes".into(), "max".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            read(&t),
+            "[global]\nmemory = \"16G\"\nprocesses = 512\n\n[profile.x]\nprocesses = \"max\"\n"
+        );
+        let c = Config::load(&t.f).unwrap();
+        assert_eq!(c.global.processes, Some(ProcessLimit::Count(512)));
+        let o = run(
+            &t,
+            Target::Global,
+            Op::SetLimit("processes".into(), "512".into()),
+        )
+        .unwrap();
+        assert!(!o.changed);
+        for (k, v) in [
+            ("memory", "64M"),
+            ("memory", "muito"),
+            ("processes", "0"),
+            ("kvm", "1"),
+        ] {
+            assert!(
+                run(&t, Target::Global, Op::SetLimit(k.into(), v.into())).is_err(),
+                "{k}={v}"
+            );
+        }
+        run(&t, Target::Global, Op::Unset("memory".into())).unwrap();
+        assert!(!read(&t).contains("memory"));
     }
 
     #[test]

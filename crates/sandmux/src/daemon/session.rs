@@ -11,7 +11,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
+use sandmux_policy::limits::{self, Counters, Limits};
+use sandmux_proto::msg::{Stats, Usage};
 use sandmux_proto::term::{ModeTracker, OscFilter};
 use sandmux_proto::{LaunchOptions, Msg, SessionInfo, SessionState, Size};
 
@@ -55,8 +57,39 @@ pub struct Session {
     pub clipboard: bool,
     /// Nomes de `pass-env` do último lançamento.
     pub pass_env: Vec<String>,
+    /// Tetos do último lançamento; `None` sem suporte.
+    pub limits: Option<Limits>,
+    /// cgroup do escopo do lançamento atual, quando já conhecido.
+    pub cgroup: Option<std::path::PathBuf>,
+    /// Mortes por falta de memória e recusas de processo do último lançamento.
+    pub oom_kills: u64,
+    pub fork_refusals: u64,
+    /// Socket do Docker privado do lançamento atual.
+    pub docker: Option<super::docker::SessionSocket>,
+    /// Socket do agente SSH do lançamento atual.
+    pub ssh_agent: Option<super::sshagent::AgentSocket>,
+    /// Socket do MCP de banco do lançamento atual.
+    pub db: Option<super::db::DbSocket>,
+    /// Proteção aplicada no último lançamento.
+    pub policy: Option<sandmux_proto::msg::PolicySummary>,
+    /// Lançamentos feitos, para numerar as etiquetas de rede.
+    pub launches: u32,
+    /// Etiquetas de rede dos últimos lançamentos (`s<id>-<n>`).
+    pub tags: Vec<String>,
+    /// Arquivo de política de rede do lançamento atual e a política gravada
+    /// nele (`None` sem rede).
+    pub policy_file: Option<std::path::PathBuf>,
+    pub net_policy: Option<sandmux_spec::net::NetPolicy>,
+    /// Os valores de `pass-env` do último lançamento estão no cofre.
+    pub vault_env: bool,
     history: usize,
+    /// Início do lançamento atual e a última espera de reinício (gateway).
+    pub started: Option<std::time::Instant>,
+    pub restart_delay: u64,
 }
+
+/// Etiquetas guardadas por sessão.
+pub const MAX_TAGS: usize = 50;
 
 const DEFAULT_SIZE: Size = Size { cols: 80, rows: 24 };
 
@@ -91,7 +124,22 @@ impl Session {
             killing: false,
             clipboard,
             pass_env,
+            limits: None,
+            cgroup: None,
+            oom_kills: 0,
+            fork_refusals: 0,
+            docker: None,
+            ssh_agent: None,
+            db: None,
+            policy: None,
+            launches: 0,
+            tags: Vec::new(),
+            policy_file: None,
+            net_policy: None,
+            vault_env: false,
             history,
+            started: None,
+            restart_delay: 0,
         }
     }
 
@@ -109,6 +157,36 @@ impl Session {
             clients: self.clients.len(),
             pass_env: self.pass_env.clone(),
             opts: self.opts.clone(),
+            usage: self.counters().map(|c| usage(&c)),
+            oom_kills: self.oom_kills,
+        }
+    }
+
+    /// Contadores atuais do cgroup, quando a sessão está viva.
+    pub fn counters(&self) -> Option<Counters> {
+        if self.state != SessionState::Viva {
+            return None;
+        }
+        limits::read_counters(self.cgroup.as_deref()?)
+    }
+
+    /// Detalhe do consumo, para `sandmux stats`.
+    pub fn stats(&self) -> Msg {
+        let c = self.counters();
+        Msg::StatsOf {
+            id: self.id,
+            state: self.state.clone(),
+            stats: c.map(|c| Stats {
+                usage: usage(&c),
+                memory_peak: c.memory_peak,
+                processes_peak: c.processes_peak,
+                cpu_usec: c.cpu_usec,
+            }),
+            oom_kills: self.oom_kills.max(c.map_or(0, |c| c.oom_kills)),
+            fork_refusals: self.fork_refusals.max(c.map_or(0, |c| c.fork_refusals)),
+            docker: None,
+            policy: self.policy.clone().map(Box::new),
+            ports: Vec::new(),
         }
     }
 
@@ -250,7 +328,11 @@ fn child_setup(parent: libc::pid_t, inherit: &[RawFd]) -> std::io::Result<()> {
     // SAFETY: chamadas de sistema sobre o próprio processo e seus descritores.
     unsafe {
         check(libc::setsid())?;
-        check(libc::ioctl(0, libc::TIOCSCTTY, 0))?;
+        // Com PTY, ele vira o terminal de controle; a pergunta sem aba
+        // (`sandmux chat` sem terminal) roda com pipes.
+        if libc::isatty(0) == 1 {
+            check(libc::ioctl(0, libc::TIOCSCTTY, 0))?;
+        }
         check(libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0))?;
         if libc::getppid() != parent {
             libc::_exit(1);
@@ -307,6 +389,15 @@ fn host_for(
     host
 }
 
+fn usage(c: &Counters) -> Usage {
+    Usage {
+        memory: c.memory,
+        memory_max: c.memory_max,
+        processes: c.processes,
+        processes_max: c.processes_max,
+    }
+}
+
 /// Processo lançado, ainda sem sessão registrada.
 pub struct Spawned {
     pub child: Child,
@@ -315,17 +406,150 @@ pub struct Spawned {
     /// Política efetiva do lançamento que importa ao daemon.
     pub clipboard: bool,
     pub pass_env: Vec<String>,
+    pub limits: Option<Limits>,
+    pub docker: Option<super::docker::SessionSocket>,
+    pub ssh_agent: Option<super::sshagent::AgentSocket>,
+    pub db: Option<super::db::DbSocket>,
+    pub policy: sandmux_proto::msg::PolicySummary,
+    /// Número deste lançamento na sessão e a etiqueta de rede dele.
+    pub launch: u32,
+    pub tag: String,
+    pub policy_file: std::path::PathBuf,
+    pub net_policy: Option<sandmux_spec::net::NetPolicy>,
 }
 
-/// Compõe e lança um sandbox num PTY novo.
+/// Compõe e lança um sandbox num PTY novo, como o lançamento `launch` da
+/// sessão `id`.
 pub fn spawn(
-    shared: &Shared,
+    shared: &Arc<Shared>,
+    id: u32,
+    launch: u32,
     opts: &LaunchOptions,
     vars: &BTreeMap<String, String>,
     size: Size,
 ) -> Result<Spawned> {
     let host = host_for(shared, opts, vars);
-    let prepared = launch::prepare(&host, opts)?;
+    let chat = opts.harness == sandmux_policy::assistant::HARNESS;
+    // A aba de chat não tem Docker privado.
+    let docker = if chat {
+        None
+    } else {
+        Some(
+            super::docker::session_socket(shared, &opts.workdir)
+                .context("socket do Docker privado da sessão")?,
+        )
+    };
+    let tag = format!("s{id}-{launch}");
+    let policy_file = super::net::policy_path(&tag);
+    // As chaves falsas dos provedores com segredo no cofre, nos presets que as
+    // usam, e os falsos nas ferramentas.
+    let (fake_env, tool_secrets) = {
+        let v = shared.vault.lock().unwrap_or_else(|e| e.into_inner());
+        let fake = if sandmux_policy::presets::FAKE_KEY_HARNESSES.contains(&opts.harness.as_str()) {
+            v.fake_env()
+        } else {
+            Vec::new()
+        };
+        (fake, v.tool_secrets())
+    };
+    // Agente SSH: as chaves escolhidas pela configuração e pelo `run`.
+    let ssh_names = {
+        let mut h = host.clone();
+        h.cwd = opts.workdir.clone();
+        launch::effective(&h, opts)
+            .map(|e| e.ssh_keys)
+            .unwrap_or_default()
+    };
+    let mut ssh_warnings = Vec::new();
+    let (ssh_agent, ssh_servers) = if ssh_names.is_empty() {
+        (None, Vec::new())
+    } else {
+        let v = shared.vault.lock().unwrap_or_else(|e| e.into_inner());
+        match v.unknown_ssh(&ssh_names) {
+            Some(u) if !u.is_empty() => {
+                ssh_warnings.push(format!("chave SSH que não está no cofre: {}", u.join(", ")))
+            }
+            None => ssh_warnings
+                .push("o cofre está trancado: o agente SSH assina depois do desbloqueio".into()),
+            _ => {}
+        }
+        let servers = v.ssh_servers(&ssh_names);
+        drop(v);
+        let sock = super::sshagent::agent_socket(shared, &tag, &opts.workdir, ssh_names.clone())
+            .context("socket do agente SSH")?;
+        (Some(sock), servers)
+    };
+    // MCP de banco: as conexões escolhidas pela configuração e pelo `run`.
+    let db_names = {
+        let mut h = host.clone();
+        h.cwd = opts.workdir.clone();
+        launch::effective(&h, opts)
+            .map(|e| e.db)
+            .unwrap_or_default()
+    };
+    let db = if db_names.is_empty() {
+        None
+    } else {
+        if let Ok(list) = shared
+            .vault
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .db_list()
+        {
+            let unknown: Vec<&String> = db_names
+                .iter()
+                .filter(|n| *n != "*" && !list.iter().any(|c| &c.name == *n))
+                .collect();
+            if !unknown.is_empty() {
+                ssh_warnings.push(format!(
+                    "conexão de banco que não está no cofre: {}",
+                    unknown
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+        Some(
+            super::db::db_socket(shared, &tag, &opts.workdir, db_names)
+                .context("socket do MCP de banco")?,
+        )
+    };
+    let access = sandmux_spec::VaultAccess {
+        socket: shared.socket.clone(),
+        data_dir: shared.base.data_dir.clone(),
+        config_dir: shared.base.config_dir.clone(),
+    };
+    let prepared = launch::prepare_with(
+        &host,
+        opts,
+        docker.as_ref().map(|d| d.path.as_path()),
+        &tag,
+        Some(&policy_file),
+        launch::VaultLaunch {
+            access: Some(access),
+            fake_env,
+            tool_secrets,
+            ssh_agent_socket: ssh_agent.as_ref().map(|a| a.path.clone()),
+            ssh_servers,
+            db_socket: db.as_ref().map(|d| d.path.clone()),
+            chat_keys: if chat {
+                let v = shared.vault.lock().unwrap_or_else(|e| e.into_inner());
+                launch::chat_keys(&host, |h| v.fake_for(h))
+            } else {
+                Vec::new()
+            },
+        },
+    )?;
+    let net_policy = prepared
+        .net_policy
+        .clone()
+        .map(|p| super::net::with_vault(shared, p))
+        .map(|p| super::net::with_ssh(shared, p, &ssh_names));
+    if let Some(p) = &net_policy {
+        super::net::write_policy(&policy_file, p).context("gravar a política de rede")?;
+    }
     let ws = nix::pty::Winsize {
         ws_row: size.rows.max(1),
         ws_col: size.cols.max(1),
@@ -358,10 +582,139 @@ pub fn spawn(
     Ok(Spawned {
         child,
         master: Arc::new(File::from(pty.master)),
-        warnings: prepared.warnings,
+        warnings: prepared.warnings.into_iter().chain(ssh_warnings).collect(),
         clipboard: prepared.clipboard,
         pass_env: prepared.pass_env,
+        limits: prepared.limits,
+        docker,
+        ssh_agent,
+        db,
+        policy: prepared.summary,
+        launch,
+        tag,
+        policy_file,
+        net_policy,
     })
+}
+
+/// Responde uma pergunta numa execução confinada como a da aba de chat, sem
+/// aba: `sandmux-chat --once` numa pasta temporária, com a saída em pipe.
+pub fn ask(
+    shared: &Arc<Shared>,
+    model: &str,
+    text: &str,
+    system: Option<&str>,
+    vars: &BTreeMap<String, String>,
+) -> Result<String> {
+    let state = crate::paths::state_dir();
+    let mut conv = crate::chat::Conversa::new(model, Some(text));
+    conv.sistema = system.map(str::to_string);
+    let dir = crate::chat::new_dir(&state, &conv)?;
+    let r = ask_in(shared, &dir, vars);
+    crate::chat::remove_dir(&state, &dir);
+    r
+}
+
+fn ask_in(
+    shared: &Arc<Shared>,
+    dir: &std::path::Path,
+    vars: &BTreeMap<String, String>,
+) -> Result<String> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(1);
+    let mut opts = LaunchOptions::new(sandmux_policy::assistant::HARNESS);
+    opts.workdir = dir.to_path_buf();
+    opts.args = vec!["--once".into()];
+    let host = host_for(shared, &opts, vars);
+    let tag = format!("ask{}", N.fetch_add(1, Ordering::Relaxed));
+    let policy_file = super::net::policy_path(&tag);
+    let (fake_env, chat_keys) = {
+        let v = shared.vault.lock().unwrap_or_else(|e| e.into_inner());
+        (v.fake_env(), launch::chat_keys(&host, |h| v.fake_for(h)))
+    };
+    let access = sandmux_spec::VaultAccess {
+        socket: shared.socket.clone(),
+        data_dir: shared.base.data_dir.clone(),
+        config_dir: shared.base.config_dir.clone(),
+    };
+    let prepared = launch::prepare_with(
+        &host,
+        &opts,
+        None,
+        &tag,
+        Some(&policy_file),
+        launch::VaultLaunch {
+            access: Some(access),
+            fake_env,
+            chat_keys,
+            ..Default::default()
+        },
+    )?;
+    let cleanup = || {
+        let _ = std::fs::remove_file(&policy_file);
+        let _ = std::fs::remove_file(crate::launch::file_policy_path(&tag));
+    };
+    if let Some(p) = prepared
+        .net_policy
+        .clone()
+        .map(|p| super::net::with_vault(shared, p))
+    {
+        super::net::write_policy(&policy_file, &p).context("gravar a política de rede")?;
+    }
+    let mut cmd = prepared.command();
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (tx, rx) = mpsc::channel();
+    shared
+        .launcher
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .send(LaunchJob {
+            cmd,
+            inherit: prepared.inherited_fds(),
+            reply: tx,
+        })
+        .map_err(|_| anyhow!("a thread de lançamento parou"))?;
+    let child = rx
+        .recv()
+        .map_err(|_| anyhow!("a thread de lançamento parou"))?
+        .with_context(|| format!("executar {}", prepared.runner.display()));
+    let child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            cleanup();
+            return Err(e);
+        }
+    };
+    let pid = child.id() as i32;
+    let (otx, orx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = otx.send(child.wait_with_output());
+    });
+    let out = match orx.recv_timeout(std::time::Duration::from_secs(300)) {
+        Ok(o) => o,
+        Err(_) => {
+            terminate(pid);
+            cleanup();
+            bail!("o modelo não respondeu em 5 minutos");
+        }
+    };
+    drop(prepared);
+    cleanup();
+    let out = out.context("esperar a resposta")?;
+    if out.status.success() {
+        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    let msg: Vec<&str> = err
+        .lines()
+        .filter_map(|l| l.strip_prefix("sandmux-chat: "))
+        .collect();
+    if msg.is_empty() {
+        bail!("{}", err.trim());
+    }
+    bail!("{}", msg.join("\n"))
 }
 
 /// Liga um processo lançado à sessão `id` e começa a ler a saída.
@@ -371,6 +724,15 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
         master,
         clipboard,
         pass_env,
+        limits: lim,
+        docker,
+        ssh_agent,
+        db,
+        policy,
+        launch,
+        tag,
+        policy_file,
+        net_policy,
         ..
     } = spawned;
     let pid = child.id() as i32;
@@ -379,15 +741,51 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
         if let Some(s) = st.sessions.get_mut(&id) {
             s.clipboard = clipboard;
             s.pass_env = pass_env;
+            s.limits = lim;
+            s.docker = docker;
+            s.ssh_agent = ssh_agent;
+            s.db = db;
+            s.policy = Some(policy);
+            s.launches = s.launches.max(launch);
+            if let Some(old) = s.policy_file.take() {
+                let _ = std::fs::remove_file(old);
+            }
+            s.policy_file = Some(policy_file);
+            s.net_policy = net_policy;
+            s.tags.push(tag);
+            if s.tags.len() > MAX_TAGS {
+                let extra = s.tags.len() - MAX_TAGS;
+                s.tags.drain(..extra);
+            }
+            s.cgroup = None;
+            s.oom_kills = 0;
+            s.fork_refusals = 0;
             s.reset_terminal(size);
             s.state = SessionState::Viva;
             s.killing = false;
+            s.started = Some(std::time::Instant::now());
             s.live = Some(Live {
                 pid,
                 master: master.clone(),
             });
         }
         shared.persist(&st);
+    }
+    // O Docker da pasta passa a considerar a política desta sessão.
+    let wd = shared
+        .lock()
+        .sessions
+        .get(&id)
+        .map(|s| s.opts.workdir.clone());
+    if let Some(w) = wd {
+        super::net::refresh_engine(shared, &w);
+    }
+    if lim.is_some() {
+        let shared = shared.clone();
+        std::thread::Builder::new()
+            .name(format!("cgroup-{id}"))
+            .spawn(move || monitor(shared, id, pid))
+            .expect("thread do cgroup");
     }
     let shared = shared.clone();
     std::thread::Builder::new()
@@ -403,7 +801,7 @@ pub fn relaunch(
     vars: &BTreeMap<String, String>,
     size: Option<Size>,
 ) -> Result<Vec<String>> {
-    let (opts, cur) = {
+    let (opts, cur, launch) = {
         let st = shared.lock();
         let s = st
             .sessions
@@ -414,13 +812,77 @@ pub fn relaunch(
                 "a sessão {id} está viva; para relançá-la, encerre-a antes com `sandmux kill {id}`"
             ));
         }
-        (s.opts.clone(), s.size)
+        (s.opts.clone(), s.size, s.launches + 1)
     };
     let size = size.unwrap_or(cur);
-    let spawned = spawn(shared, &opts, vars, size)?;
+    let spawned = spawn(shared, id, launch, &opts, vars, size)?;
     let warnings = spawned.warnings.clone();
     attach_process(shared, id, spawned, size);
     Ok(warnings)
+}
+
+/// Vigia os contadores do escopo de um lançamento: acha o cgroup e, por
+/// inotify em `memory.events` e `pids.events`, guarda as mortes por falta de
+/// memória e as recusas de processo enquanto o escopo existe. Assim a
+/// contagem sobrevive ao fim do escopo, que some com o último processo.
+fn monitor(shared: Arc<Shared>, id: u32, pid: i32) {
+    use nix::sys::inotify::{AddWatchFlags, InitFlags, Inotify};
+    let own = limits::cgroup_of(std::process::id());
+    let same = |st: &super::State| st.sessions.get(&id).and_then(|s| s.pid()) == Some(pid);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let cg = loop {
+        match limits::cgroup_of(pid as u32) {
+            Some(p) if Some(&p) != own.as_ref() && p.extension().is_some_and(|e| e == "scope") => {
+                break p;
+            }
+            _ if std::time::Instant::now() > deadline => return,
+            None => return,
+            _ => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    };
+    let update = |cg: &std::path::Path| {
+        let Some(c) = limits::read_counters(cg) else {
+            return;
+        };
+        let mut st = shared.lock();
+        if same(&st)
+            && let Some(s) = st.sessions.get_mut(&id)
+        {
+            s.oom_kills = s.oom_kills.max(c.oom_kills);
+            s.fork_refusals = s.fork_refusals.max(c.fork_refusals);
+        }
+    };
+    {
+        let mut st = shared.lock();
+        if !same(&st) {
+            return;
+        }
+        if let Some(s) = st.sessions.get_mut(&id) {
+            s.cgroup = Some(cg.clone());
+        }
+    }
+    let Ok(ino) = Inotify::init(InitFlags::IN_CLOEXEC) else {
+        return;
+    };
+    for f in ["memory.events", "pids.events"] {
+        let _ = ino.add_watch(&cg.join(f), AddWatchFlags::IN_MODIFY);
+    }
+    update(&cg);
+    loop {
+        match ino.read_events() {
+            Ok(evs) => {
+                update(&cg);
+                if evs
+                    .iter()
+                    .any(|e| e.mask.contains(AddWatchFlags::IN_IGNORED))
+                {
+                    break;
+                }
+            }
+            Err(nix::errno::Errno::EINTR) => {}
+            Err(_) => break,
+        }
+    }
 }
 
 fn reader(shared: Arc<Shared>, id: u32, pid: i32, master: Arc<File>, mut child: Child) {
@@ -466,43 +928,188 @@ fn reader(shared: Arc<Shared>, id: u32, pid: i32, master: Arc<File>, mut child: 
                 reason: format!("a sessão {id} foi encerrada por `sandmux kill`"),
             });
             remove = true;
+        } else if s.opts.gateway {
+            // O gateway volta sozinho, com espera crescente.
+            let ran = s.started.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+            let delay = gateway_delay(s.restart_delay, ran);
+            s.restart_delay = delay;
+            s.state = SessionState::Reiniciando { segundos: delay };
+            s.drop_clients(Msg::Exited { id, code });
+            let shared = shared.clone();
+            std::thread::spawn(move || restart_gateway(shared, id, delay));
         } else {
             s.state = SessionState::Encerrada { codigo: code };
             s.drop_clients(Msg::Exited { id, code });
         }
     }
-    if remove {
-        st.sessions.remove(&id);
+    // O socket do Docker some com o lançamento; o Docker da pasta para
+    // quando nenhuma sessão viva da pasta resta.
+    let mut workdir = None;
+    if let Some(s) = st.sessions.get_mut(&id)
+        && s.live.is_none()
+    {
+        s.docker = None;
+        s.ssh_agent = None;
+        s.db = None;
+        if let Some(f) = s.policy_file.take() {
+            let _ = std::fs::remove_file(f);
+        }
+        if let Some(t) = s.tags.last() {
+            let _ = std::fs::remove_file(crate::launch::file_policy_path(t));
+        }
+        workdir = Some(s.opts.workdir.clone());
+    }
+    if remove && let Some(s) = st.sessions.remove(&id) {
+        remove_chat_dir(&s.opts);
+        workdir = Some(s.opts.workdir.clone());
     }
     if !stopping {
         shared.persist(&st);
     }
+    let unused = workdir.clone().filter(|w| {
+        !stopping
+            && !st
+                .sessions
+                .values()
+                .any(|s| s.live.is_some() && same_dir(&s.opts.workdir, w))
+    });
+    let still = workdir.clone().filter(|_| unused.is_none() && !stopping);
     drop(st);
+    if let Some(w) = unused {
+        shared.docker.stop(&w);
+    }
+    // Outras sessões da pasta seguem: o Docker volta à política delas.
+    if let Some(w) = still {
+        super::net::refresh_engine(&shared, &w);
+    }
     shared.changed.notify_all();
 }
 
-/// Nome da sessão, `<harness>:<pasta>`. Pode repetir; o identificador não.
+pub fn same_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
+    a.canonicalize()
+        .ok()
+        .zip(b.canonicalize().ok())
+        .is_some_and(|(x, y)| x == y)
+        || a == b
+}
+
+/// A sessão é uma aba de chat?
+pub fn is_chat(opts: &LaunchOptions) -> bool {
+    opts.harness == sandmux_policy::assistant::HARNESS
+}
+
+/// Apaga a pasta de uma aba de chat que deixou de existir.
+pub fn remove_chat_dir(opts: &LaunchOptions) {
+    if is_chat(opts) {
+        crate::chat::remove_dir(&crate::paths::state_dir(), &opts.workdir);
+    }
+}
+
+/// Nome da sessão, `<harness>:<pasta>` (`hermes-gateway:<pasta>` no
+/// gateway, `chat:<modelo>` na aba de chat). Pode repetir; o identificador
+/// não.
 pub fn session_name(opts: &LaunchOptions) -> String {
+    if is_chat(opts) {
+        let model = crate::chat::Conversa::load(&opts.workdir)
+            .ok()
+            .flatten()
+            .map(|c| c.modelo)
+            .unwrap_or_default();
+        return format!("chat:{model}");
+    }
     let folder = opts
         .workdir
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "/".into());
+    if opts.gateway {
+        return format!("{}-gateway:{folder}", opts.harness);
+    }
     format!("{}:{folder}", opts.harness)
 }
 
-/// Alocação do identificador e registro da sessão nova.
+/// Espera antes de relançar o gateway: 5 s, dobrando a cada saída seguida até
+/// 5 min; um gateway que viveu 10 min volta aos 5 s.
+pub fn gateway_delay(prev: u64, ran_secs: u64) -> u64 {
+    if prev == 0 || ran_secs >= 600 {
+        5
+    } else {
+        (prev * 2).min(300)
+    }
+}
+
+/// A sessão de gateway viva, reiniciando ou aguardando o cofre, se houver.
+pub fn gateway_session(shared: &Shared) -> Option<u32> {
+    shared
+        .lock()
+        .sessions
+        .values()
+        .find(|s| {
+            s.opts.gateway
+                && (s.live.is_some()
+                    || matches!(
+                        s.state,
+                        SessionState::AguardandoCofre | SessionState::Reiniciando { .. }
+                    ))
+        })
+        .map(|s| s.id)
+}
+
+/// Relança o gateway depois da espera, se a sessão continua esperando.
+fn restart_gateway(shared: Arc<Shared>, id: u32, delay: u64) {
+    std::thread::sleep(std::time::Duration::from_secs(delay));
+    let waiting = {
+        let st = shared.lock();
+        !st.stopping
+            && st.sessions.get(&id).is_some_and(|s| {
+                s.live.is_none() && matches!(s.state, SessionState::Reiniciando { .. })
+            })
+    };
+    if !waiting {
+        return;
+    }
+    let mut vars = shared.default_vars();
+    if let Some(saved) = shared
+        .vault
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .pass_env(id)
+    {
+        vars.extend(saved);
+    }
+    if let Err(e) = relaunch(&shared, id, &vars, None) {
+        let mut st = shared.lock();
+        if let Some(s) = st.sessions.get_mut(&id) {
+            s.state = SessionState::Parada {
+                motivo: format!("o gateway não voltou: {e:#}"),
+            };
+        }
+        shared.persist(&st);
+        shared.changed.notify_all();
+    }
+}
+
+/// Reserva o identificador de uma sessão nova, antes do lançamento: a
+/// etiqueta de rede dela leva o identificador.
+pub fn reserve(shared: &Arc<Shared>) -> u32 {
+    let mut st = shared.lock();
+    let id = st.next_id;
+    st.next_id += 1;
+    shared.persist(&st);
+    id
+}
+
+/// Registro da sessão nova, com o identificador reservado.
 pub fn register(
     shared: &Arc<Shared>,
+    id: u32,
     opts: LaunchOptions,
     spawned: Spawned,
     size: Size,
-) -> (u32, String) {
+) -> String {
     let name = session_name(&opts);
-    let id = {
+    {
         let mut st = shared.lock();
-        let id = st.next_id;
-        st.next_id += 1;
         let s = Session::new(
             id,
             name.clone(),
@@ -512,8 +1119,103 @@ pub fn register(
             Some(size),
         );
         st.sessions.insert(id, s);
-        id
-    };
+    }
     attach_process(shared, id, spawned, size);
-    (id, name)
+    name
+}
+
+/// Guarda no cofre os valores de `pass-env` da sessão `id` (os nomes vêm da
+/// política efetiva). Devolve um aviso quando há valores e o cofre não pôde
+/// guardá-los.
+pub fn store_pass_env(
+    shared: &Shared,
+    id: u32,
+    names: &[String],
+    vars: &BTreeMap<String, String>,
+) -> Option<String> {
+    let values: BTreeMap<String, String> = names
+        .iter()
+        .filter_map(|n| vars.get(n).map(|v| (n.clone(), v.clone())))
+        .collect();
+    let stored = !values.is_empty()
+        && shared
+            .vault
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .put_pass_env(id, values.clone());
+    {
+        let mut st = shared.lock();
+        if let Some(s) = st.sessions.get_mut(&id) {
+            s.vault_env = stored;
+        }
+        shared.persist(&st);
+    }
+    (!values.is_empty() && !stored).then(|| {
+        "o cofre não existe ou está trancado: os valores de --pass-env não foram guardados, e num reboot esta sessão fica parada até um `sandmux restart` (veja `sandmux vault`)".to_string()
+    })
+}
+
+/// Depois do desbloqueio: limpa do cofre os valores de sessões que não
+/// existem mais e relança as sessões que aguardavam o cofre, com os valores
+/// guardados.
+pub fn vault_unlocked(shared: &Arc<Shared>) {
+    let (alive, waiting): (Vec<u32>, Vec<u32>) = {
+        let st = shared.lock();
+        (
+            st.sessions.keys().copied().collect(),
+            st.sessions
+                .values()
+                .filter(|s| s.state == SessionState::AguardandoCofre)
+                .map(|s| s.id)
+                .collect(),
+        )
+    };
+    shared
+        .vault
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .prune(&alive);
+    for id in waiting {
+        let mut saved = shared
+            .vault
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pass_env(id);
+        // O gateway sem `pass-env` esperava só o cofre (os tokens dos canais).
+        let bare = shared
+            .lock()
+            .sessions
+            .get(&id)
+            .is_some_and(|s| (s.opts.gateway || is_chat(&s.opts)) && s.pass_env.is_empty());
+        if saved.is_none() && bare {
+            saved = Some(BTreeMap::new());
+        }
+        let shared = shared.clone();
+        // O relançamento leva tempo; a resposta do desbloqueio não espera.
+        std::thread::spawn(move || {
+            let Some(values) = saved else {
+                let mut st = shared.lock();
+                if let Some(s) = st.sessions.get_mut(&id) {
+                    s.state = SessionState::Parada {
+                        motivo: format!(
+                            "os valores de --pass-env não estão no cofre; rode `sandmux restart {id}` num terminal com as variáveis"
+                        ),
+                    };
+                }
+                shared.persist(&st);
+                return;
+            };
+            let mut vars = shared.default_vars();
+            vars.extend(values);
+            if let Err(e) = relaunch(&shared, id, &vars, None) {
+                let mut st = shared.lock();
+                if let Some(s) = st.sessions.get_mut(&id) {
+                    s.state = SessionState::Parada {
+                        motivo: format!("falhou ao restaurar: {e:#}"),
+                    };
+                }
+                shared.persist(&st);
+            }
+        });
+    }
 }

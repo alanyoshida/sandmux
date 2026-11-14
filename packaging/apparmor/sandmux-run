@@ -7,7 +7,8 @@
 # lançador. O confinamento do agente continua a cargo do próprio lançador
 # (namespaces, Landlock e seccomp).
 #
-# @SANDMUX_RUN@ é o caminho absoluto do binário sandmux-run. O `sandmux doctor`
+# O marcador SANDMUX_RUN entre arrobas, na linha do perfil, é o caminho absoluto
+# do binário sandmux-run. O `sandmux doctor`
 # mostra este perfil já com o caminho preenchido e o comando que o instala.
 
 abi <abi/4.0>,
