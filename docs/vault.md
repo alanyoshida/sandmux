@@ -16,8 +16,26 @@ O daemon sobe no login com o cofre trancado. Para desbloquear:
 
 - **Na TUI:** ao abrir, ela mostra um modal pedindo a senha, sem mostrar o que é digitado. Enter desbloqueia; Esc deixa trancado.
 - **Fora dela:** `sandmux vault unlock` pede a senha no terminal, sem eco.
+- **Pelo keyring do sistema:** opcional; veja [Keyring](#keyring).
 
 Sem terminal (num script), os comandos leem a senha e os valores da entrada padrão, uma linha por pergunta.
+
+### Keyring
+
+O keyring do sistema pode guardar a senha do cofre, para o daemon abrir o cofre sozinho. Funciona com qualquer keyring do Secret Service (`org.freedesktop.secrets`): gnome-keyring, KWallet, KeePassXC. Vem desligado.
+
+```bash
+sandmux vault keyring on    # pede a senha, confere com o cofre e a guarda no keyring
+sandmux vault keyring       # ligado ou desligado, e, ligado, se o keyring responde
+sandmux vault keyring off   # apaga a senha do keyring
+```
+
+- **Só a senha** vai para o keyring. O cofre continua no arquivo cifrado, e os segredos nunca passam pelo keyring.
+- **Quando o daemon usa:** ao subir, antes de atender o primeiro cliente, e quando um cliente pergunta o estado do cofre trancado (a TUI faz isso ao abrir), no máximo a cada 5 segundos. Abrir pelo keyring tem o efeito do `vault unlock`: as abas que esperavam o cofre sobem. Se o keyring não responde em 3 segundos, não tem a senha ou tem uma senha que não abre mais o cofre, o cofre fica trancado e a senha é pedida como antes. O registro do daemon diz o motivo, sem a senha.
+- **Desligado,** o sandmux não consulta o keyring. O marcador de ligado é o arquivo `vault.keyring` na pasta de dados, sem nada secreto dentro. No keyring, o item tem o serviço `sandmux` e o usuário igual à pasta de dados.
+- **Troca de senha:** `sandmux vault passwd` regrava a senha no keyring ligado.
+- **O custo:** com o keyring ligado, qualquer programa seu fora do sandbox pode ler a senha enquanto o keyring da sessão está aberto. Sem ele, a senha só existe na sua cabeça e na memória do daemon. O sandbox não alcança o D-Bus, então o agente não chega ao keyring.
+- **Antes do login,** o keyring do usuário está fechado, e o cofre não abre sozinho.
 
 ## Segredos
 
@@ -38,6 +56,7 @@ A seção Cofre da página de configurações (Ctrl+b `e`) mostra o estado do co
 | `n` | Cria o cofre (senha e confirmação) |
 | `u` / `l` | Desbloqueia / tranca |
 | `p` | Troca a senha |
+| `k` | Liga o [keyring](#keyring), pedindo a senha, ou desliga |
 | `a` | Acrescenta um segredo: nome, valor e domínios separados por vírgula (`localhost` vira `host.sandmux.internal`) |
 | `s` | Acrescenta uma chave SSH: nome, arquivo, passphrase (vazia se não tem) e servidores |
 | `d` | Troca os domínios do segredo escolhido, sem pedir o valor de novo |

@@ -123,6 +123,16 @@ impl VaultState {
         Ok(())
     }
 
+    /// Confere a senha com o arquivo, sem mexer no cofre aberto.
+    pub fn check(&self, password: &str) -> Result<(), String> {
+        let bytes = self
+            .store
+            .load()
+            .map_err(|e| trf!("ler o cofre: {e}", "read the vault: {e}"))?
+            .ok_or(missing())?;
+        Unlocked::open(&bytes, password).map(|_| ()).map_err(err)
+    }
+
     /// Tranca e apaga da memória (o `Drop` do conteúdo zera os valores).
     pub fn lock(&mut self) {
         self.open = None;

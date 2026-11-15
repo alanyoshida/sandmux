@@ -53,6 +53,80 @@ pub enum VaultCmd {
     Passwd,
     /// Pede os valores reais das chaves que a importação trocou por valores falsos.
     Import,
+    /// Senha do cofre no keyring do sistema, para o daemon abrir o cofre
+    /// sozinho. Sem subcomando, mostra o estado.
+    Keyring {
+        #[command(subcommand)]
+        acao: Option<KeyringCmd>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum KeyringCmd {
+    /// Guarda a senha do cofre no keyring, depois de conferi-la.
+    On,
+    /// Apaga a senha do cofre do keyring.
+    Off,
+}
+
+fn keyring(acao: Option<KeyringCmd>, input: &mut Input) -> Result<()> {
+    match acao {
+        None => {
+            let Msg::KeyringInfo {
+                enabled,
+                available,
+                error,
+            } = call(&Msg::KeyringStatus)?
+            else {
+                bail!(tr!(
+                    "resposta inesperada do daemon",
+                    "unexpected answer from the daemon"
+                ));
+            };
+            let text = match (enabled, available, error) {
+                (false, _, _) => tr!(
+                    "Keyring: desligado (ligue com `sandmux vault keyring on`)",
+                    "Keyring: off (turn it on with `sandmux vault keyring on`)"
+                )
+                .to_string(),
+                (true, true, None) => tr!(
+                    "Keyring: ligado; o daemon abre o cofre sozinho",
+                    "Keyring: on; the daemon opens the vault by itself"
+                )
+                .to_string(),
+                (true, _, e) => trf!(
+                    "Keyring: ligado, com problema: {}",
+                    "Keyring: on, with a problem: {}",
+                    e.unwrap_or_default()
+                ),
+            };
+            println!("{text}");
+        }
+        Some(KeyringCmd::On) => {
+            let p = input.secret(tr!("Senha do cofre: ", "Vault password: "))?;
+            call(&Msg::KeyringOn {
+                password: p.to_string(),
+            })?;
+            eprintln!(
+                "{}",
+                tr!(
+                    "sandmux: senha do cofre guardada no keyring; o daemon abre o cofre sozinho.\nQualquer programa seu fora do sandbox pode lê-la enquanto o keyring da sessão está aberto;\n`sandmux vault keyring off` a apaga.",
+                    "sandmux: vault password stored in the keyring; the daemon opens the vault by itself.\nAny program of yours outside the sandbox can read it while the session keyring is open;\n`sandmux vault keyring off` deletes it."
+                )
+            );
+        }
+        Some(KeyringCmd::Off) => {
+            call(&Msg::KeyringOff)?;
+            eprintln!(
+                "{}",
+                tr!(
+                    "sandmux: senha do cofre apagada do keyring",
+                    "sandmux: vault password deleted from the keyring"
+                )
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Linhas lidas da entrada padrão quando ela não é um terminal (para scripts).
@@ -404,6 +478,7 @@ pub fn run(c: VaultCmd) -> Result<i32> {
                 tr!("sandmux: cofre desbloqueado", "sandmux: vault unlocked")
             );
         }
+        VaultCmd::Keyring { acao } => keyring(acao, &mut input)?,
         VaultCmd::Lock => {
             call(&Msg::VaultLock)?;
             eprintln!(

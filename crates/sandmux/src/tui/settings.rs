@@ -780,6 +780,8 @@ pub struct VaultView {
     pub form: Option<VaultForm>,
     /// Nome do segredo esperando a confirmação para apagar.
     pub confirm: Option<String>,
+    /// Keyring ligado e o problema dele, quando há (protocolo 28).
+    pub keyring: Option<(bool, Option<String>)>,
 }
 
 /// O que o formulário do cofre faz.
@@ -792,6 +794,8 @@ pub enum FormKind {
     AddSsh,
     /// Trocar os domínios do segredo com este nome.
     Domains(String),
+    /// Guardar a senha do cofre no keyring.
+    Keyring,
 }
 
 impl FormKind {
@@ -802,7 +806,7 @@ impl FormKind {
                 (["Senha", "Password"], true),
                 (["Repita a senha", "Repeat the password"], true),
             ],
-            FormKind::Unlock => &[(["Senha", "Password"], true)],
+            FormKind::Unlock | FormKind::Keyring => &[(["Senha", "Password"], true)],
             FormKind::Passwd => &[
                 (["Senha atual", "Current password"], true),
                 (["Senha nova", "New password"], true),
@@ -837,6 +841,11 @@ impl FormKind {
             FormKind::Add => sandmux_spec::tr!("Novo segredo", "New secret").into(),
             FormKind::AddSsh => sandmux_spec::tr!("Nova chave SSH", "New SSH key").into(),
             FormKind::Domains(n) => sandmux_spec::trf!("Domínios de {n}", "Domains of {n}"),
+            FormKind::Keyring => sandmux_spec::tr!(
+                "Guardar a senha no keyring",
+                "Store the password in the keyring"
+            )
+            .into(),
         }
     }
 }
@@ -1200,6 +1209,13 @@ impl App {
             Ok(_) => {}
             Err(e) => s.note = Some((format!("{e:#}"), true)),
         }
+        s.vault.keyring = match s.vault.info {
+            Some((true, _, _)) => match self.call(&Msg::KeyringStatus) {
+                Ok(Msg::KeyringInfo { enabled, error, .. }) => Some((enabled, error)),
+                _ => None,
+            },
+            _ => None,
+        };
         self.refresh_vault();
     }
 
@@ -1302,6 +1318,33 @@ impl App {
                     self.vault_refresh(s);
                 }
             }
+            Key::Char('k') => {
+                if !need(
+                    s,
+                    exists,
+                    "não há cofre: n cria",
+                    "there is no vault: n creates one",
+                ) {
+                    return true;
+                }
+                if s.vault.keyring.as_ref().is_some_and(|(on, _)| *on) {
+                    let r = self.call(&Msg::KeyringOff);
+                    s.note = Some(match r {
+                        Ok(_) => (
+                            sandmux_spec::tr!(
+                                "senha do cofre apagada do keyring",
+                                "vault password deleted from the keyring"
+                            )
+                            .into(),
+                            false,
+                        ),
+                        Err(e) => (format!("{e:#}"), true),
+                    });
+                    self.vault_refresh(s);
+                } else {
+                    s.vault.form = Some(VaultForm::new(FormKind::Keyring, String::new()));
+                }
+            }
             Key::Char('p') => {
                 if need(
                     s,
@@ -1381,6 +1424,9 @@ impl App {
             FormKind::Unlock => Msg::VaultUnlock {
                 password: v(0).to_string(),
             },
+            FormKind::Keyring => Msg::KeyringOn {
+                password: v(0).to_string(),
+            },
             FormKind::Passwd => {
                 if v(1) != v(2) {
                     return Err(tr!("as senhas não conferem", "the passwords do not match").into());
@@ -1436,9 +1482,9 @@ impl App {
         let r = self.call(&msg).map_err(|e| format!("{e:#}"));
         // Apaga as senhas e os valores da mensagem.
         match &mut msg {
-            Msg::VaultInit { password } | Msg::VaultUnlock { password } => {
-                zeroize::Zeroize::zeroize(password)
-            }
+            Msg::VaultInit { password }
+            | Msg::VaultUnlock { password }
+            | Msg::KeyringOn { password } => zeroize::Zeroize::zeroize(password),
             Msg::VaultPasswd { old, new } => {
                 zeroize::Zeroize::zeroize(old);
                 zeroize::Zeroize::zeroize(new);
@@ -1460,6 +1506,11 @@ impl App {
                 )
             }
             FormKind::Domains(n) => trf!("domínios de {n} trocados", "domains of {n} changed"),
+            FormKind::Keyring => tr!(
+                "senha guardada no keyring: o daemon abre o cofre sozinho",
+                "password stored in the keyring: the daemon opens the vault by itself"
+            )
+            .into(),
         })
     }
 }

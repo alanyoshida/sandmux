@@ -770,6 +770,18 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
                 ),
             ]),
         };
+        let mut status = status;
+        match &v.keyring {
+            Some((true, None)) => status.spans.push(Span::styled(
+                tr!(" · keyring ligado", " · keyring on"),
+                base.fg(muted),
+            )),
+            Some((true, Some(e))) => status.spans.push(Span::styled(
+                trf!(" · keyring: {e}", " · keyring: {e}"),
+                base.fg(c("status-fg")),
+            )),
+            _ => {}
+        }
         put(f, x0, y, w, status, base);
         y += 2;
         let nw = 20usize;
@@ -913,13 +925,13 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
                 Some((false, _, _)) => tr!("n cria o cofre", "n creates the vault"),
                 Some((true, false, _)) => {
                     tr!(
-                        "u desbloqueia · p troca a senha · r relê",
-                        "u unlocks · p changes the password · r reloads"
+                        "u desbloqueia · p troca a senha · k keyring · r relê",
+                        "u unlocks · p changes the password · k keyring · r reloads"
                     )
                 }
                 _ => tr!(
-                    "a segredo · s chave SSH · d domínios · x apaga · l tranca · p senha · r relê",
-                    "a secret · s SSH key · d domains · x removes · l locks · p password · r reloads"
+                    "a segredo · s chave SSH · d domínios · x apaga · l tranca · p senha · k keyring · r relê",
+                    "a secret · s SSH key · d domains · x removes · l locks · p password · k keyring · r reloads"
                 ),
             };
             put(f, x0, y, w, Line::styled(keys, base.fg(muted)), base);

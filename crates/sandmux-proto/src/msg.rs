@@ -511,6 +511,14 @@ pub enum Msg {
         password: String,
     },
     VaultLock,
+    /// Estado do keyring do sistema (protocolo 28).
+    KeyringStatus,
+    /// Guarda a senha do cofre no keyring, depois de conferir com o arquivo.
+    KeyringOn {
+        password: String,
+    },
+    /// Apaga a senha do cofre do keyring.
+    KeyringOff,
     VaultPasswd {
         old: String,
         new: String,
@@ -645,6 +653,13 @@ pub enum Msg {
         exists: bool,
         unlocked: bool,
         secrets: usize,
+    },
+    /// Resposta ao `KeyringStatus`: ligado pelo usuário, e se o keyring
+    /// responde (com o erro, quando não).
+    KeyringInfo {
+        enabled: bool,
+        available: bool,
+        error: Option<String>,
     },
     /// Resposta ao `ChatCheck`: o cofre existe, está desbloqueado e tem
     /// segredo para o host.
