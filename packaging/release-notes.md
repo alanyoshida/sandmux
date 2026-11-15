@@ -1,19 +1,24 @@
-sandmux 0.1.4, antes da v1: chaves reais levadas ao cofre sozinhas e atualização dos harnesses pelo sandmux.
+sandmux 0.1.5, antes da v1: senha do cofre no keyring do sistema.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Chaves reais movidas sozinhas:** quando você conecta um provedor pelo próprio harness (o "Connect provider" do opencode, o assistente do hermes), a chave real ia para um arquivo do HOME sintético, ao alcance do agente, até alguém rodar `sandmux doctor --fix`. Agora o daemon faz isso sozinho:
-  - observa os arquivos de credencial e, segundos depois da gravação, leva a chave ao cofre e deixa um falso no lugar;
-  - também varre ao subir, a cada 60 segundos e logo depois de o cofre ser aberto;
-  - com o cofre trancado, ou com uma chave de domínio desconhecido, o arquivo fica como está e a aba avisa. As que esperam o cofre vão quando ele abre; as sem domínio ficam para o `sandmux doctor --fix`;
-  - a aba avisa para reiniciar, porque o harness ainda tem a chave real na memória. O aviso aparece no `sandmux ls`, na marca `✱` da aba e no painel da TUI.
+- **Keyring:** `sandmux vault keyring on` guarda a senha do cofre no keyring do sistema, pelo Secret Service (gnome-keyring, KWallet, KeePassXC), e o daemon passa a abrir o cofre sozinho:
+  - ao subir, antes de atender o primeiro cliente, então a TUI já abre com o cofre aberto;
+  - quando um cliente pergunta o estado do cofre trancado, no máximo a cada 5 segundos.
 
-  Detalhes em [docs/vault.md](https://github.com/alanyoshida/sandmux/blob/main/docs/vault.md#movimento-automático).
-- **`sandmux update <harness>`:** roda no host, fora do sandbox, o atualizador oficial do harness (`opencode upgrade`, `hermes update`, `claude update`, `omp update`). Com abas vivas do harness, pergunta antes (`--yes` pula) e depois diz quais reiniciar. Detalhes em [docs/sessions.md](https://github.com/alanyoshida/sandmux/blob/main/docs/sessions.md#atualizar-o-harness).
+  Mais detalhes:
+  - O efeito é o do `sandmux vault unlock`: depois de um reboot, as abas que esperavam o cofre sobem sozinhas.
+  - Só a senha vai para o keyring; o cofre continua no arquivo cifrado.
+  - Vem desligado, e, desligado, o sandmux nunca consulta o keyring.
+  - `sandmux vault keyring off` apaga a senha, e `sandmux vault passwd` a atualiza.
+  - Na TUI, a tecla `k` na seção Cofre das configurações liga e desliga.
+  - **O custo:** com o keyring ligado, qualquer programa seu fora do sandbox pode ler a senha enquanto o keyring da sessão está aberto. O agente, dentro do sandbox, não alcança o D-Bus.
 
-Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 27).
+  Detalhes em [docs/vault.md](https://github.com/alanyoshida/sandmux/blob/main/docs/vault.md#keyring).
+
+Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 28).
 
 ## Instalar
 
