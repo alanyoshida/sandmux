@@ -42,7 +42,7 @@ pub const NET_LIST_KEYS: &[&str] = &[
     "catalog-off",
     "decrypt",
 ];
-pub const GLOBAL_ONLY_KEYS: &[&str] = &["net-log-days", "net-log-max", "language"];
+pub const GLOBAL_ONLY_KEYS: &[&str] = &["net-log-days", "net-log-max", "language", "notify"];
 /// Chaves SSH do cofre que a sessão pode usar (`"*"` é todas).
 pub const SSH_KEYS: &str = "ssh-keys";
 /// Conexões de banco do cofre que a sessão pode usar (`"*"` é todas).
@@ -780,6 +780,9 @@ pub struct Config {
     /// Idioma da interface (`language`, só em `[global]`); sem ele, o do
     /// sistema.
     pub language: Option<sandmux_spec::lang::Lang>,
+    /// Notificações do desktop (`notify`, só em `[global]`); sem a chave,
+    /// ligadas.
+    pub notify: Option<bool>,
     pub global: Layer,
     pub profiles: BTreeMap<String, Layer>,
     pub projects: BTreeMap<PathBuf, Layer>,
@@ -865,6 +868,19 @@ impl Config {
                                         )
                                     })?;
                                 cfg.language = Some(l);
+                            }
+                            "notify" => {
+                                let b = item.as_bool().ok_or_else(|| {
+                                    err(
+                                        span,
+                                        tr!(
+                                            "`notify` precisa ser true ou false",
+                                            "`notify` must be true or false"
+                                        )
+                                        .into(),
+                                    )
+                                })?;
+                                cfg.notify = Some(b);
                             }
                             _ => {
                                 let b = item
@@ -2049,6 +2065,15 @@ pub fn rule_origin(o: &Origin) -> String {
 
 /// O nome de exibição de um valor do arquivo (o modo de rede, o estilo da
 /// barra, o tema): em inglês, a tradução; o arquivo continua com o valor.
+/// As notificações do desktop estão ligadas no arquivo (`[global] notify`,
+/// ligadas sem a chave ou com o arquivo ilegível).
+pub fn notify_enabled(path: &Path) -> bool {
+    Config::load(path)
+        .ok()
+        .and_then(|c| c.notify)
+        .unwrap_or(true)
+}
+
 pub fn value_label(key: &str, v: &str) -> String {
     if !sandmux_spec::lang::is_en() {
         return v.to_string();

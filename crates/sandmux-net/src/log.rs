@@ -357,6 +357,61 @@ impl Tail {
     }
 }
 
+/// Segue o registro do dia: devolve só as linhas completas gravadas depois
+/// da leitura anterior (a primeira começa no fim do arquivo). No dia
+/// seguinte, ou com o arquivo apagado, recomeça do começo do arquivo novo.
+pub struct Follow {
+    dir: PathBuf,
+    day: String,
+    offset: u64,
+}
+
+impl Follow {
+    /// Começa no fim do arquivo de hoje: o que já estava lá não volta.
+    pub fn from_end(dir: &Path) -> Follow {
+        let day = day_ago(0);
+        let offset = std::fs::metadata(dir.join(format!("{day}.jsonl")))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        Follow {
+            dir: dir.into(),
+            day,
+            offset,
+        }
+    }
+
+    /// As linhas novas, das mais velhas às mais novas.
+    pub fn read_new(&mut self) -> Vec<Entry> {
+        use std::io::{Read, Seek, SeekFrom};
+        let today = day_ago(0);
+        let path = self.dir.join(format!("{today}.jsonl"));
+        let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        if self.day != today || len < self.offset {
+            self.day = today;
+            self.offset = 0;
+        }
+        if len <= self.offset {
+            return Vec::new();
+        }
+        let Ok(mut f) = std::fs::File::open(&path) else {
+            return Vec::new();
+        };
+        if f.seek(SeekFrom::Start(self.offset)).is_err() {
+            return Vec::new();
+        }
+        let mut buf = Vec::new();
+        let _ = f.read_to_end(&mut buf);
+        let Some(end) = buf.iter().rposition(|b| *b == b'\n') else {
+            return Vec::new();
+        };
+        self.offset += end as u64 + 1;
+        String::from_utf8_lossy(&buf[..end])
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()
+    }
+}
+
 /// Arquivos do registro (`AAAA-MM-DD.jsonl`), dos mais velhos aos mais novos,
 /// com o tamanho.
 fn day_files(dir: &Path) -> Vec<(String, PathBuf, u64)> {
@@ -450,6 +505,35 @@ mod tests {
         assert_eq!(all[3].blocked.as_deref(), Some("QUIC"));
         assert_eq!(all[0].up, 10);
         assert_eq!(read_recent(d.path(), 2).len(), 5);
+    }
+
+    #[test]
+    fn follow_devolve_so_as_linhas_novas() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Log::new(d.path(), "b", Path::new("/w"));
+        log.write("tcp", "antes.test", "1.1.1.1", 1, 0, 0, 0, None);
+        let mut f = Follow::from_end(d.path());
+        assert!(f.read_new().is_empty());
+        log.write("tcp", "a.test", "1.1.1.1", 1, 0, 0, 0, None);
+        log.write("tcp", "b.test", "1.1.1.1", 1, 0, 0, 0, Some("denylist"));
+        let v: Vec<(String, Option<String>)> = f
+            .read_new()
+            .into_iter()
+            .map(|e| (e.domain, e.blocked))
+            .collect();
+        assert_eq!(
+            v,
+            [
+                ("a.test".to_string(), None),
+                ("b.test".to_string(), Some("denylist".to_string()))
+            ]
+        );
+        assert!(f.read_new().is_empty());
+        // Arquivo apagado: recomeça do começo do novo.
+        std::fs::remove_file(d.path().join(format!("{}.jsonl", day_ago(0)))).unwrap();
+        log.write("tcp", "c.test", "1.1.1.1", 1, 0, 0, 0, None);
+        let v: Vec<String> = f.read_new().into_iter().map(|e| e.domain).collect();
+        assert_eq!(v, ["c.test"]);
     }
 
     #[test]

@@ -63,6 +63,7 @@ http-body-util.workspace = true
 bytes.workspace = true
 unicode-width.workspace = true
 keyring.workspace = true
+zbus.workspace = true
 
 [dev-dependencies]
 base64.workspace = true

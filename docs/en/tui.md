@@ -175,7 +175,7 @@ Ctrl+b `e`, or "settings" in the menu, opens a full-screen page with the options
 
 | Section | Options |
 |---|---|
-| General | language (`auto`, which follows the system, `pt` or `en`; [config.md](config.md#language)) |
+| General | language (`auto`, which follows the system, `pt` or `en`; [config.md](config.md#language)); desktop notifications ([see below](#desktop-notifications)) |
 | Appearance | theme (with color samples), bar style and position, side panel |
 | Shortcuts | prefix key |
 | Sandbox | repo, KVM, GPU, clipboard, memory, processes, extra folders, `pass-env`, SSH keys, databases |
@@ -315,6 +315,26 @@ Input goes raw to the active tab: the harness gets the keys as in a direct termi
 - application cursor and keypad.
 
 With a modal open, the TUI turns those modes off to understand the keys.
+
+Focus events are the exception: the TUI always turns them on, for the [desktop notifications](#desktop-notifications). The tab only gets them when its harness asked for them.
+
+## Desktop notifications
+
+The daemon notifies on the desktop, through the system notification service (`org.freedesktop.Notifications`):
+
+- **network block:** the tab, the domain and the reason;
+- **real key** in the synthetic HOME: moved to the vault (restart the tab), waiting for the vault or waiting for a domain ([vault.md](vault.md#automatic-move));
+- **ended tab:** the harness ended by itself, with the code. A `sandmux kill` or a close you asked for does not notify;
+- **tabs waiting for the vault** after a reboot, if it is still locked a few seconds after the sessions come back.
+
+Events of the same kind in the same tab, less than 60 seconds apart, update the same notification, with the count: "3 blocks: a.com, b.com, c.com".
+
+Only without focus: the TUI turns on the terminal's focus reporting and tells the daemon when it gains and loses focus, and which tab it shows. The daemon does not notify about the tab that a focused TUI is showing, because the notice is already on screen. With the TUI closed, in a background window or on another tab, it notifies.
+
+- **Terminal without focus reporting:** the TUI stays "focused", and the active tab is not notified. Konsole, GNOME Terminal, kitty, Alacritty and WezTerm send it.
+- **Attached mode:** a tab attached outside the TUI (`sandmux run` or `attach` in a terminal) is notified as if nobody were looking.
+
+They come on. To turn them off: `notify = false` in `[global]` ([config.md](config.md)), or the Desktop notifications item in the General section of the [settings](#settings).
 
 ## Limits
 

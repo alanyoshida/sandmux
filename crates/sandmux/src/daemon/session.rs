@@ -1194,6 +1194,9 @@ fn reader(shared: Arc<Shared>, id: u32, pid: i32, master: Arc<File>, mut child: 
         } else {
             s.state = SessionState::Encerrada { codigo: code };
             s.drop_clients(Msg::Exited { id, code });
+            shared
+                .notify
+                .send(super::notify::Event::Ended { session: id, code });
         }
     }
     // O socket do Docker some com o lançamento; o Docker da pasta para

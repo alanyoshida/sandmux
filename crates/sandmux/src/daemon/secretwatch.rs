@@ -289,6 +289,16 @@ fn scan(shared: &Arc<Shared>, layout: &Layout, h: &str) {
         .unwrap_or_else(|e| e.into_inner())
         .insert(h.to_string(), waiting)
         .unwrap_or_default();
+    if moved > 0 || (before != waiting && waiting != Waiting::default()) {
+        shared.notify.send(super::notify::Event::Keys {
+            harness: h.to_string(),
+            note: sandmux_proto::msg::KeyNote {
+                moved,
+                waiting_vault: waiting.vault,
+                no_domain: waiting.domain,
+            },
+        });
+    }
     if before != waiting && waiting != Waiting::default() {
         eprintln!(
             "{}",

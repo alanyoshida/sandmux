@@ -13,6 +13,7 @@ mod docker;
 mod folders;
 mod keyring;
 mod net;
+pub mod notify;
 mod secretwatch;
 mod session;
 mod sshagent;
@@ -61,6 +62,8 @@ pub struct Shared {
     pub keyring_last: Mutex<Option<std::time::Instant>>,
     /// Última nota do keyring no registro.
     pub keyring_note: Mutex<Option<String>>,
+    /// Notificações do desktop.
+    pub notify: notify::Notifier,
 }
 
 pub struct State {
@@ -229,6 +232,27 @@ fn peer_uid(s: &UnixStream) -> Option<u32> {
     (r == 0).then_some(cred.uid)
 }
 
+/// PID do processo do outro lado do socket.
+pub fn peer_pid(s: &UnixStream) -> Option<i32> {
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: buffer do tamanho certo para SO_PEERCRED.
+    let r = unsafe {
+        libc::getsockopt(
+            s.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    (r == 0 && cred.pid > 0).then_some(cred.pid)
+}
+
 /// Toma a trava de instância única. `None` quando outro daemon a tem.
 fn take_instance_lock(path: &std::path::Path) -> Result<Option<File>> {
     let mut f = std::fs::OpenOptions::new()
@@ -353,6 +377,7 @@ fn run(history: usize) -> Result<()> {
         secrets: secretwatch::Watch::default(),
         keyring_last: Mutex::new(None),
         keyring_note: Mutex::new(None),
+        notify: notify::Notifier::default(),
     });
     eprintln!(
         "{}",
@@ -385,10 +410,20 @@ fn run(history: usize) -> Result<()> {
         .spawn(docker::stop_empty_slices);
     net::start_policy_watch(shared.clone());
     secretwatch::start(shared.clone());
+    notify::start(shared.clone());
     // Antes de atender: o primeiro cliente já encontra o cofre aberto. Com
     // o keyring desligado, não consulta nada; ligado, espera no máximo o
     // limite do keyring.
     keyring::try_unlock(&shared, true);
+    // Abas que voltaram esperando o cofre: avisa se ele continua trancado
+    // depois de alguns segundos.
+    {
+        let shared = shared.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            shared.notify.send(notify::Event::WaitingVault);
+        });
+    }
 
     // SAFETY: getuid não falha.
     let me = unsafe { libc::getuid() };

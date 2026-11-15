@@ -108,6 +108,17 @@ pub const ITEMS: &[Item] = &[
         ]
     ),
     item!(
+        0,
+        "notify",
+        ["Notificações do desktop", "Desktop notifications"],
+        Kind::Toggle,
+        At::GlobalOnly,
+        [
+            "Avisa no desktop bloqueios de rede, chaves reais e abas encerradas, quando a TUI não está em foco naquela aba.",
+            "Notifies on the desktop of network blocks, real keys and ended tabs, when the TUI is not focused on that tab."
+        ]
+    ),
+    item!(
         1,
         "theme",
         ["Tema", "Theme"],
@@ -519,7 +530,7 @@ pub fn is_model_item(key: &str) -> bool {
 
 /// Valor padrão de uma chave de liga e desliga.
 pub fn default_bool(key: &str) -> bool {
-    matches!(key, "gpu" | "panel")
+    matches!(key, "gpu" | "panel" | "notify")
 }
 
 /// De onde vem o valor mostrado.

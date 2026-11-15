@@ -15,6 +15,8 @@ pub enum Input {
     Goto(usize),
     Mouse(Mouse),
     Key(Key),
+    /// O terminal ganhou (`true`) ou perdeu o foco (`CSI I` / `CSI O`).
+    Focus(bool),
 }
 
 /// Teclas que os modais entendem.
@@ -235,6 +237,11 @@ impl Parser {
                 out.push(Input::Mouse(m));
                 continue;
             }
+            if t.bytes == b"\x1b[I" || t.bytes == b"\x1b[O" {
+                flush(&mut send, &mut out);
+                out.push(Input::Focus(t.bytes == b"\x1b[I"));
+                continue;
+            }
             if self.pending {
                 if t.release() {
                     continue;
@@ -287,6 +294,27 @@ mod tests {
                 ('d', "detach".into()),
             ],
         )
+    }
+
+    #[test]
+    fn aviso_de_foco_nao_vai_para_a_aba() {
+        let mut p = parser();
+        assert_eq!(
+            all(&mut p, &[b"ab\x1b[Icd\x1b[O"]),
+            vec![
+                Input::Send(b"ab".to_vec()),
+                Input::Focus(true),
+                Input::Send(b"cd".to_vec()),
+                Input::Focus(false),
+            ]
+        );
+        // Cortado no meio da leitura: espera o resto.
+        assert_eq!(all(&mut p, &[b"\x1b[", b"O"]), vec![Input::Focus(false)]);
+        // Entre o prefixo e a tecla da ação, não atrapalha a ação.
+        assert_eq!(
+            all(&mut p, &[b"\x02\x1b[Ic"]),
+            vec![Input::Focus(true), Input::Action("new".into())]
+        );
     }
 
     fn all(p: &mut Parser, chunks: &[&[u8]]) -> Vec<Input> {
