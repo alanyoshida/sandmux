@@ -1,18 +1,16 @@
-sandmux 0.1.8, antes da v1: daemon no boot.
+sandmux 0.1.9, antes da v1: modais do assistente com as cores do tema.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Daemon no boot:** `sandmux daemon boot on` liga o linger do systemd para o seu usuário (`loginctl enable-linger`, sem sudo), e o daemon passa a subir no boot, sem login.
-  - `sandmux daemon boot off` desliga, e `sandmux daemon boot`, `daemon status` e `doctor` mostram o estado.
-  - No boot, sem ninguém logado, nenhuma aba volta: elas ficam **aguardando o login**, e o daemon não consulta o keyring, que está trancado.
-  - No primeiro login, as abas voltam sozinhas, o daemon tenta abrir o cofre pelo keyring e avisa no desktop as que continuam esperando o cofre.
-  - Com o linger já ligado, isso vale também para quem não roda o comando.
+- **Modais de comando e de chat com o tema:** o modal de comando (Ctrl+b `g`) e o de chat (Ctrl+b `i`) passam a seguir as cores do tema ativo:
+  - o fundo e o texto da página;
+  - o título num bloco da cor de destaque, como os blocos da barra;
+  - os rótulos na cor secundária, e o campo ativo sublinhado no destaque.
+- **Botão novo:** `⏎ Enviar` ao perguntar e `⏎ Inserir` com o comando pronto, em dois tons e alinhado à direita. O Tab chega ao botão, e o clique tem o mesmo efeito do Enter.
 
-  Detalhes em [docs/sessions.md](https://github.com/alanyoshida/sandmux/blob/main/docs/sessions.md#início-no-boot).
-
-Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 31).
+Detalhes em [docs/chat.md](https://github.com/alanyoshida/sandmux/blob/main/docs/chat.md).
 
 ## Instalar
 
