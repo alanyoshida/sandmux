@@ -51,8 +51,9 @@ pub fn apply(rules: &LandlockRules) -> Result<(), String> {
     }
     let status = ruleset.restrict_self().map_err(|e| e.to_string())?;
     if status.ruleset != RulesetStatus::FullyEnforced {
-        return Err(format!(
+        return Err(sandmux_spec::trf!(
             "Landlock não foi aplicado por completo: {:?}",
+            "Landlock was not fully enforced: {:?}",
             status.ruleset
         ));
     }

@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use sandmux_spec::FileEntry;
+use sandmux_spec::{tr, trf};
 
 /// Pasta do registro de arquivos.
 pub fn log_dir() -> std::path::PathBuf {
@@ -44,12 +45,18 @@ pub fn table(lines: &[FileEntry]) -> Vec<String> {
                 l.path.display().to_string(),
                 l.blocked
                     .as_deref()
-                    .map(|b| format!("bloqueado: {b}"))
+                    .map(|b| trf!("bloqueado: {b}", "blocked: {b}"))
                     .unwrap_or_default(),
             ]
         })
         .collect();
-    let head = ["HORA", "SESSÃO", "ACESSO", "CAMINHO", ""];
+    let head = [
+        tr!("HORA", "TIME"),
+        tr!("SESSÃO", "SESSION"),
+        tr!("ACESSO", "ACCESS"),
+        tr!("CAMINHO", "PATH"),
+        "",
+    ];
     let mut w = head.map(|h| h.chars().count());
     for r in &rows {
         for (i, c) in r.iter().enumerate() {
@@ -100,7 +107,13 @@ pub fn run(id: Option<u32>, days: u32) -> Result<i32> {
         .filter(|l| id.is_none() || session_of(&l.tag) == id)
         .collect();
     if lines.is_empty() {
-        println!("Nenhum acesso a arquivo registrado.");
+        println!(
+            "{}",
+            tr!(
+                "Nenhum acesso a arquivo registrado.",
+                "No file accesses logged."
+            )
+        );
         return Ok(0);
     }
     // As últimas 200 linhas.

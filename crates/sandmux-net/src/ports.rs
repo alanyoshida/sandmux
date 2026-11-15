@@ -82,22 +82,49 @@ impl Connector {
         Connector(Mutex::new(sock))
     }
 
-    /// Conecta em `127.0.0.1:port` dentro do sandbox (bloqueante).
-    pub fn connect(&self, port: u16) -> io::Result<std::net::TcpStream> {
+    fn ask(&self, op: u8, port: u16) -> io::Result<Option<OwnedFd>> {
         let g = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        let req = port.to_be_bytes();
-        // SAFETY: escrita de 2 bytes de um buffer válido.
-        let n = unsafe { libc::write(g.as_raw_fd(), req.as_ptr().cast(), 2) };
-        if n != 2 {
+        let p = port.to_be_bytes();
+        let req = [op, p[0], p[1]];
+        // SAFETY: escrita de 3 bytes de um buffer válido.
+        let n = unsafe { libc::write(g.as_raw_fd(), req.as_ptr().cast(), 3) };
+        if n != 3 {
             return Err(io::Error::last_os_error());
         }
-        match recv_fd(&*g)? {
-            Some((b'C', fd)) => Ok(std::net::TcpStream::from(fd)),
-            _ => Err(io::Error::new(
-                io::ErrorKind::ConnectionRefused,
-                format!("o sandbox recusou a conexão na porta {port}"),
-            )),
-        }
+        Ok(match recv_fd(&*g)? {
+            Some((t, fd)) if t == op => Some(fd),
+            _ => None,
+        })
+    }
+
+    /// Conecta em `127.0.0.1:port` dentro do sandbox (bloqueante).
+    pub fn connect(&self, port: u16) -> io::Result<std::net::TcpStream> {
+        self.ask(b'C', port)?
+            .map(std::net::TcpStream::from)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::ConnectionRefused,
+                    sandmux_spec::trf!(
+                        "o sandbox recusou a conexão na porta {port}",
+                        "the sandbox refused the connection on port {port}"
+                    ),
+                )
+            })
+    }
+
+    /// Escuta em `127.0.0.1:port` dentro do sandbox (bloqueante).
+    pub fn listen(&self, port: u16) -> io::Result<std::net::TcpListener> {
+        self.ask(b'L', port)?
+            .map(std::net::TcpListener::from)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    sandmux_spec::trf!(
+                        "a porta {port} já está em uso dentro do sandbox",
+                        "port {port} is already in use inside the sandbox"
+                    ),
+                )
+            })
     }
 }
 
@@ -125,7 +152,10 @@ pub fn recv_fd(sock: &impl AsRawFd) -> io::Result<Option<(u8, OwnedFd)>> {
         if n == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
-                "o auxiliar de conexão terminou",
+                sandmux_spec::tr!(
+                    "o auxiliar de conexão terminou",
+                    "the connection helper exited"
+                ),
             ));
         }
         let c = libc::CMSG_FIRSTHDR(&msg);
@@ -172,12 +202,14 @@ fn bind_host(port: u16) -> Option<(std::net::TcpListener, u16)> {
 pub struct Ports {
     pub pid: i32,
     pub file: Option<PathBuf>,
-    pub connector: Connector,
+    pub connector: Arc<Connector>,
 }
 
 /// As regras de porta atuais (a política relida) e o registro.
 pub struct Live {
     pub rules: Box<dyn Fn() -> Vec<sandmux_spec::net::PortRule> + Send + Sync>,
+    /// Portas do host: os ouvintes delas no sandbox não são publicados.
+    pub host_ports: Box<dyn Fn() -> Vec<u16> + Send + Sync>,
     pub log: Option<Arc<crate::log::Log>>,
 }
 
@@ -247,7 +279,7 @@ fn serve(
 
 /// Vigia as portas do sandbox e publica cada uma, até `stop`.
 pub async fn run(ports: Ports, live: Live, mut stop: tokio::sync::watch::Receiver<bool>) {
-    let conn = Arc::new(ports.connector);
+    let conn = ports.connector.clone();
     let mut open: BTreeMap<u16, Open> = BTreeMap::new();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     loop {
@@ -256,7 +288,11 @@ pub async fn run(ports: Ports, live: Live, mut stop: tokio::sync::watch::Receive
             _ = stop.wait_for(|v| *v) => break,
         }
         let rules = (live.rules)();
-        let want = desired(&rules, &listening_of(ports.pid));
+        let mut listening = listening_of(ports.pid);
+        for p in (live.host_ports)() {
+            listening.remove(&p);
+        }
+        let want = desired(&rules, &listening);
         // Com regras, as conexões de entrada vão para o registro.
         let log = if rules.is_empty() {
             None

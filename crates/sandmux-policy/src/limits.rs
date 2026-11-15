@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use sandmux_spec::{tr, trf};
+
 /// Teto de memória padrão: 75% da RAM.
 pub const DEFAULT_MEMORY: MemoryLimit = MemoryLimit::Percent(75);
 /// Teto de processos e threads padrão.
@@ -31,9 +33,18 @@ pub enum ProcessLimit {
 }
 
 /// Formatos aceitos, para mensagens.
-pub const MEMORY_FORMATS: &str =
-    "uma porcentagem da RAM (\"50%\"), um tamanho com K, M, G ou T (\"16G\") ou \"max\"";
-pub const PROCESS_FORMATS: &str = "um número de processos (512) ou \"max\"";
+pub fn memory_formats() -> &'static str {
+    tr!(
+        "uma porcentagem da RAM (\"50%\"), um tamanho com K, M, G ou T (\"16G\") ou \"max\"",
+        "a percentage of RAM (\"50%\"), a size with K, M, G or T (\"16G\") or \"max\""
+    )
+}
+pub fn process_formats() -> &'static str {
+    tr!(
+        "um número de processos (512) ou \"max\"",
+        "a number of processes (512) or \"max\""
+    )
+}
 
 impl MemoryLimit {
     pub fn parse(s: &str) -> Result<MemoryLimit, String> {
@@ -44,8 +55,9 @@ impl MemoryLimit {
         if let Some(p) = t.strip_suffix('%') {
             return match p.trim().parse::<u8>() {
                 Ok(n) if (1..=100).contains(&n) => Ok(MemoryLimit::Percent(n)),
-                _ => Err(format!(
-                    "teto de memória inválido: {s:?}; a porcentagem vai de 1% a 100%"
+                _ => Err(trf!(
+                    "teto de memória inválido: {s:?}; a porcentagem vai de 1% a 100%",
+                    "invalid memory cap: {s:?}; the percentage goes from 1% to 100%"
                 )),
             };
         }
@@ -55,21 +67,30 @@ impl MemoryLimit {
             Some('G') => (&t[..t.len() - 1], 1 << 30),
             Some('T') => (&t[..t.len() - 1], 1 << 40),
             _ => {
-                return Err(format!(
-                    "teto de memória inválido: {s:?}; use {MEMORY_FORMATS}"
+                return Err(trf!(
+                    "teto de memória inválido: {s:?}; use {}",
+                    "invalid memory cap: {s:?}; use {}",
+                    memory_formats()
                 ));
             }
         };
-        let n: u64 = num
-            .trim()
-            .parse()
-            .map_err(|_| format!("teto de memória inválido: {s:?}; use {MEMORY_FORMATS}"))?;
-        let bytes = n
-            .checked_mul(mult)
-            .ok_or_else(|| format!("teto de memória grande demais: {s:?}"))?;
+        let n: u64 = num.trim().parse().map_err(|_| {
+            trf!(
+                "teto de memória inválido: {s:?}; use {}",
+                "invalid memory cap: {s:?}; use {}",
+                memory_formats()
+            )
+        })?;
+        let bytes = n.checked_mul(mult).ok_or_else(|| {
+            trf!(
+                "teto de memória grande demais: {s:?}",
+                "memory cap too large: {s:?}"
+            )
+        })?;
         if bytes < MIN_MEMORY {
-            return Err(format!(
-                "teto de memória pequeno demais: {s:?}; o mínimo é 128M"
+            return Err(trf!(
+                "teto de memória pequeno demais: {s:?}; o mínimo é 128M",
+                "memory cap too small: {s:?}; the minimum is 128M"
             ));
         }
         Ok(MemoryLimit::Bytes(bytes))
@@ -116,16 +137,21 @@ impl ProcessLimit {
         if t.eq_ignore_ascii_case("max") {
             return Ok(ProcessLimit::Max);
         }
-        let n: u32 = t
-            .parse()
-            .map_err(|_| format!("teto de processos inválido: {s:?}; use {PROCESS_FORMATS}"))?;
+        let n: u32 = t.parse().map_err(|_| {
+            trf!(
+                "teto de processos inválido: {s:?}; use {}",
+                "invalid process cap: {s:?}; use {}",
+                process_formats()
+            )
+        })?;
         ProcessLimit::count(n)
     }
 
     pub fn count(n: u32) -> Result<ProcessLimit, String> {
         if n < MIN_PROCESSES {
-            return Err(format!(
-                "teto de processos pequeno demais: {n}; o mínimo é {MIN_PROCESSES}"
+            return Err(trf!(
+                "teto de processos pequeno demais: {n}; o mínimo é {MIN_PROCESSES}",
+                "process cap too small: {n}; the minimum is {MIN_PROCESSES}"
             ));
         }
         Ok(ProcessLimit::Count(n))
@@ -228,9 +254,10 @@ pub fn delegated(subtree_control: &str) -> Result<(), String> {
     if missing.is_empty() {
         Ok(())
     } else {
-        Err(format!(
+        Err(trf!(
             "o systemd de usuário não delega os controladores {} do cgroup",
-            missing.join(" e ")
+            "the user systemd does not delegate the cgroup controllers {}",
+            missing.join(tr!(" e ", " and "))
         ))
     }
 }
@@ -271,7 +298,11 @@ fn detect() -> Result<(), String> {
         .map(|p| std::env::split_paths(&p).any(|d| d.join("systemd-run").is_file()))
         .unwrap_or(false);
     if !in_path {
-        return Err("o systemd-run não está no PATH".into());
+        return Err(tr!(
+            "o systemd-run não está no PATH",
+            "systemd-run is not in PATH"
+        )
+        .into());
     }
     // O mesmo caminho do lançamento: um escopo transitório pelo barramento
     // do usuário (DBUS_SESSION_BUS_ADDRESS ou $XDG_RUNTIME_DIR/bus).
@@ -291,18 +322,29 @@ fn detect() -> Result<(), String> {
         .status()
         .is_ok_and(|s| s.success());
     if !ok {
-        return Err(
-            "o systemd de usuário não respondeu (`systemd-run --user --scope` falhou)".into(),
-        );
+        return Err(tr!(
+            "o systemd de usuário não respondeu (`systemd-run --user --scope` falhou)",
+            "the user systemd did not respond (`systemd-run --user --scope` failed)"
+        )
+        .into());
     }
     // SAFETY: getuid não falha.
     let uid = unsafe { getuid() };
     let own = std::fs::read_to_string("/proc/self/cgroup")
-        .map_err(|e| format!("ler /proc/self/cgroup: {e}"))?;
-    let svc = user_service_cgroup(&own, uid)
-        .ok_or_else(|| format!("este processo não está sob o user@{uid}.service do systemd"))?;
-    let ctl = std::fs::read_to_string(svc.join("cgroup.subtree_control"))
-        .map_err(|e| format!("ler {}: {e}", svc.join("cgroup.subtree_control").display()))?;
+        .map_err(|e| trf!("ler /proc/self/cgroup: {e}", "read /proc/self/cgroup: {e}"))?;
+    let svc = user_service_cgroup(&own, uid).ok_or_else(|| {
+        trf!(
+            "este processo não está sob o user@{uid}.service do systemd",
+            "this process is not under the systemd user@{uid}.service"
+        )
+    })?;
+    let ctl = std::fs::read_to_string(svc.join("cgroup.subtree_control")).map_err(|e| {
+        trf!(
+            "ler {}: {e}",
+            "read {}: {e}",
+            svc.join("cgroup.subtree_control").display()
+        )
+    })?;
     delegated(&ctl)
 }
 
@@ -396,6 +438,8 @@ pub fn human(b: u64) -> String {
             let v = b as f64 / m as f64;
             let txt = if v >= 100.0 || (v - v.round()).abs() < 0.05 {
                 format!("{:.0}", v.round())
+            } else if sandmux_spec::lang::is_en() {
+                format!("{v:.1}")
             } else {
                 format!("{v:.1}").replace('.', ",")
             };

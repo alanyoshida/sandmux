@@ -40,7 +40,9 @@ impl Host {
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
             .or_else(|| pw.as_ref().map(|p| p.home.clone()))
-            .ok_or_else(|| PolicyError::Io("HOME não definido".into()))?;
+            .ok_or_else(|| {
+                PolicyError::Io(sandmux_spec::tr!("HOME não definido", "HOME is not set").into())
+            })?;
         let home = home_raw
             .canonicalize()
             .map_err(|e| PolicyError::Io(format!("HOME {}: {e}", home_raw.display())))?;
@@ -67,7 +69,12 @@ impl Host {
         let config_dir = config_dir_from(&env, &home);
         let cwd = std::env::current_dir()
             .and_then(|p| p.canonicalize())
-            .map_err(|e| PolicyError::Io(format!("pasta atual: {e}")))?;
+            .map_err(|e| {
+                PolicyError::Io(sandmux_spec::trf!(
+                    "pasta atual: {e}",
+                    "current folder: {e}"
+                ))
+            })?;
         Ok(Host {
             home,
             uid,

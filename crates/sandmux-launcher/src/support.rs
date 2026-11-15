@@ -94,8 +94,12 @@ pub fn check_via(runner: &std::path::Path) -> SupportReport {
         Ok(out) => SupportReport::from_wire(&String::from_utf8_lossy(&out.stdout)),
         Err(e) => SupportReport {
             landlock_abi: sys::landlock_abi(),
-            userns: Err(format!("executar o lançador {}: {e}", runner.display())),
-            overlay: Err("não verificado".into()),
+            userns: Err(sandmux_spec::trf!(
+                "executar o lançador {}: {e}",
+                "run the launcher {}: {e}",
+                runner.display()
+            )),
+            overlay: Err(sandmux_spec::tr!("não verificado", "not checked").into()),
             apparmor_restrict_userns: apparmor_restricts_userns(),
         },
     }
@@ -122,7 +126,12 @@ pub fn check() -> SupportReport {
 fn probe_namespaces() -> (Result<(), String>, Result<(), String>) {
     let (r, w) = match pipe() {
         Ok(p) => p,
-        Err(e) => return (Err(e.to_string()), Err("não verificado".into())),
+        Err(e) => {
+            return (
+                Err(e.to_string()),
+                Err(sandmux_spec::tr!("não verificado", "not checked").into()),
+            );
+        }
     };
     let (uid, gid) = (getuid().as_raw(), getgid().as_raw());
     // SAFETY: chamado num processo de uma thread; o filho só faz chamadas de
@@ -144,14 +153,21 @@ fn probe_namespaces() -> (Result<(), String>, Result<(), String>) {
             let _ = waitpid(child, None).map(|s| matches!(s, WaitStatus::Exited(..)));
             parse_probe(&out)
         }
-        Err(e) => (Err(e.to_string()), Err("não verificado".into())),
+        Err(e) => (
+            Err(e.to_string()),
+            Err(sandmux_spec::tr!("não verificado", "not checked").into()),
+        ),
     }
 }
 
 /// Saída do filho: duas linhas, `userns:<ok|erro>` e `overlay:<ok|erro>`.
 fn parse_probe(out: &str) -> (Result<(), String>, Result<(), String>) {
-    let mut userns = Err("a verificação não respondeu".to_string());
-    let mut overlay = Err("não verificado".to_string());
+    let mut userns = Err(sandmux_spec::tr!(
+        "a verificação não respondeu",
+        "the check did not respond"
+    )
+    .to_string());
+    let mut overlay = Err(sandmux_spec::tr!("não verificado", "not checked").to_string());
     for line in out.lines() {
         let (k, v) = line.split_once(':').unwrap_or((line, ""));
         let r = if v == "ok" {
@@ -180,8 +196,11 @@ fn child_probe(uid: u32, gid: u32) -> String {
         nix::sched::CloneFlags::CLONE_NEWUSER | nix::sched::CloneFlags::CLONE_NEWNS,
     ) {
         return fmt(
-            Err(format!("criar user namespace: {e}")),
-            Err("não verificado".into()),
+            Err(sandmux_spec::trf!(
+                "criar user namespace: {e}",
+                "create user namespace: {e}"
+            )),
+            Err(sandmux_spec::tr!("não verificado", "not checked").into()),
         );
     }
     let maps = std::fs::write("/proc/self/setgroups", "deny")
@@ -189,8 +208,11 @@ fn child_probe(uid: u32, gid: u32) -> String {
         .and_then(|_| std::fs::write("/proc/self/gid_map", format!("{gid} {gid} 1\n")));
     if let Err(e) = maps {
         return fmt(
-            Err(format!("mapear o usuário: {e}")),
-            Err("não verificado".into()),
+            Err(sandmux_spec::trf!(
+                "mapear o usuário: {e}",
+                "map the user: {e}"
+            )),
+            Err(sandmux_spec::tr!("não verificado", "not checked").into()),
         );
     }
     let tmp = (|| {
@@ -202,8 +224,11 @@ fn child_probe(uid: u32, gid: u32) -> String {
         Ok(fd) => fd,
         Err(e) => {
             return fmt(
-                Err(format!("montar dentro do user namespace: {e}")),
-                Err("não verificado".into()),
+                Err(sandmux_spec::trf!(
+                    "montar dentro do user namespace: {e}",
+                    "mount inside the user namespace: {e}"
+                )),
+                Err(sandmux_spec::tr!("não verificado", "not checked").into()),
             );
         }
     };

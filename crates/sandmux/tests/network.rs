@@ -987,3 +987,106 @@ fn decifra_so_a_lista_e_registra_metodo_e_caminho() {
         "{log:?}"
     );
 }
+
+/// Tenta `get` por até 4 segundos (o encaminhamento abre em até 1 s).
+const RETRY: &str = r#"
+import time
+def getr(addr, port, host):
+    import io, contextlib
+    for _ in range(40):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            get(addr, port, host)
+        if "ERRO" not in out.getvalue():
+            break
+        time.sleep(0.1)
+    print(out.getvalue().strip())
+"#;
+
+#[test]
+fn porta_do_host_no_localhost_do_sandbox() {
+    let env = Env::new();
+    let port = http_server();
+    let p = port.to_string();
+    // Sem a chave, o 127.0.0.1 do sandbox é só dele.
+    let out = py(&env, &[], &format!("get(\"127.0.0.1\", {port}, \"local\")"));
+    assert!(out.contains("local ERRO ConnectionRefusedError"), "{out}");
+    // Com `--host-port`, a porta do host aparece no 127.0.0.1 de dentro.
+    let out = py(
+        &env,
+        &["--host-port", &p],
+        &format!("{RETRY}\ngetr(\"127.0.0.1\", {port}, \"local\")"),
+    );
+    assert!(out.contains("local ok"), "{out}");
+    let log = log_lines(&env);
+    assert!(
+        log.iter().any(|l| l["proto"] == "tcp"
+            && l["domain"] == "host.sandmux.internal"
+            && l["ip"] == "127.0.0.1"
+            && l["port"] == port
+            && l["blocked"].is_null()),
+        "{log:?}"
+    );
+    // A denylist vence.
+    let out = py(
+        &env,
+        &["--host-port", &p, "--deny", "host.sandmux.internal"],
+        &format!("import time\ntime.sleep(1.5)\nget(\"127.0.0.1\", {port}, \"negado\")"),
+    );
+    // Recusada: fechada sem resposta ou reiniciada.
+    assert!(
+        out.contains("negado BLOQ") || out.contains("negado ERRO ConnectionResetError"),
+        "{out}"
+    );
+    let log = log_lines(&env);
+    assert!(
+        log.iter().any(|l| l["domain"] == "host.sandmux.internal"
+            && l["port"] == port
+            && l["blocked"]
+                .as_str()
+                .is_some_and(|b| b.contains("denylist"))),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn porta_do_host_acrescentada_ao_vivo_sem_eco() {
+    let env = Env::new();
+    let port = http_server();
+    let p = port.to_string();
+    let mut cmd = env.cmd(&env.work, &["run", "shell"]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut t = common::pty::Term::spawn_answering(cmd, 120, 30);
+    t.write(b"echo pronto-$((1+1))\r");
+    t.wait_text("pronto-2");
+    let o = env.run(&env.work, &["config", "add", "host-ports", &p, "--global"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let script =
+        format!("{PY}\n{RETRY}\ngetr(\"127.0.0.1\", {port}, \"vivo\")").replace('\'', "\\'");
+    t.write(format!("python3 -c '{script}'\r").as_bytes());
+    t.wait_text("vivo ok");
+    // O ouvinte da porta do host no sandbox não é publicado de volta.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let st = stdout(&env.run(&env.work, &["stats", "1"]));
+    assert!(
+        !st.contains(&format!("{port} →")),
+        "publicada de volta: {st}"
+    );
+    // Tirada da configuração, a porta fecha no sandbox.
+    let o = env.run(
+        &env.work,
+        &["config", "remove", "host-ports", &p, "--global"],
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    t.write(
+        format!(
+            "python3 -c '{}'\r",
+            format!("{PY}\nget(\"127.0.0.1\", {port}, \"fechada\")").replace('\'', "\\'")
+        )
+        .as_bytes(),
+    );
+    t.wait_text("fechada ERRO");
+    t.write(b"\x02d");
+    t.wait_exit();
+}

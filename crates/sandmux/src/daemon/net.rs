@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sandmux_proto::msg::NetLine;
+use sandmux_spec::trf;
 
 use super::Shared;
 use crate::paths;
@@ -111,7 +112,13 @@ pub fn recompile_all(shared: &Arc<Shared>) {
         .collect();
     for id in ids {
         if let Err(e) = recompile(shared, id) {
-            eprintln!("sandmuxd: sessão {id}: política de rede mantida: {e:#}");
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmuxd: sessão {id}: política de rede mantida: {e:#}",
+                    "sandmuxd: session {id}: network policy kept: {e:#}"
+                )
+            );
         }
     }
 }
@@ -195,7 +202,7 @@ pub fn edit(shared: &Shared, id: u32, action: &str, value: &str) -> Result<Optio
         let s = st
             .sessions
             .get_mut(&id)
-            .ok_or_else(|| format!("não existe a sessão {id}"))?;
+            .ok_or_else(|| trf!("não existe a sessão {id}", "session {id} does not exist"))?;
         match action {
             "deny" | "allow" => {
                 let p = canon(value)?;
@@ -214,7 +221,10 @@ pub fn edit(shared: &Shared, id: u32, action: &str, value: &str) -> Result<Optio
                 s.opts.deny.retain(|x| *x != p);
                 s.opts.allow.retain(|x| *x != p);
                 if s.opts.deny.len() + s.opts.allow.len() == before {
-                    return Err(format!("{p} não está nas regras da aba da sessão {id}"));
+                    return Err(trf!(
+                        "{p} não está nas regras da aba da sessão {id}",
+                        "{p} is not in the tab rules of session {id}"
+                    ));
                 }
             }
             "mode" => {
@@ -236,7 +246,10 @@ pub fn edit(shared: &Shared, id: u32, action: &str, value: &str) -> Result<Optio
             // MCPs da aba (protocolo 16): valem no próximo lançamento.
             "mcp-deny" | "mcp-allow" | "mcp-forget" => {
                 if value.is_empty() || value.contains(char::is_whitespace) {
-                    return Err(format!("nome de servidor MCP inválido: {value:?}"));
+                    return Err(trf!(
+                        "nome de servidor MCP inválido: {value:?}",
+                        "invalid MCP server name: {value:?}"
+                    ));
                 }
                 match action {
                     "mcp-deny" => {
@@ -256,13 +269,17 @@ pub fn edit(shared: &Shared, id: u32, action: &str, value: &str) -> Result<Optio
                         s.opts.mcp_deny.retain(|x| x != value);
                         s.opts.mcp_allow.retain(|x| x != value);
                         if s.opts.mcp_deny.len() + s.opts.mcp_allow.len() == before {
-                            return Err(format!("{value} não está nos MCPs da aba da sessão {id}"));
+                            return Err(trf!(
+                                "{value} não está nos MCPs da aba da sessão {id}",
+                                "{value} is not in the tab MCPs of session {id}"
+                            ));
                         }
                     }
                 }
                 shared.persist(&st);
-                return Ok(Some(format!(
-                    "os MCPs valem no próximo lançamento da sessão {id} (`sandmux restart {id}` ou Ctrl+b r)"
+                return Ok(Some(trf!(
+                    "os MCPs valem no próximo lançamento da sessão {id} (`sandmux restart {id}` ou Ctrl+b r)",
+                    "the MCPs take effect on the next launch of session {id} (`sandmux restart {id}` or Ctrl+b r)"
                 )));
             }
             "file-forget" => {
@@ -270,25 +287,33 @@ pub fn edit(shared: &Shared, id: u32, action: &str, value: &str) -> Result<Optio
                 s.opts.file_deny.retain(|x| x != value);
                 s.opts.file_allow.retain(|x| x != value);
                 if s.opts.file_deny.len() + s.opts.file_allow.len() == before {
-                    return Err(format!(
-                        "{value} não está nas regras de arquivos da aba da sessão {id}"
+                    return Err(trf!(
+                        "{value} não está nas regras de arquivos da aba da sessão {id}",
+                        "{value} is not in the tab file rules of session {id}"
                     ));
                 }
             }
-            other => return Err(format!("ação de rede desconhecida: {other}")),
+            other => {
+                return Err(trf!(
+                    "ação de rede desconhecida: {other}",
+                    "unknown network action: {other}"
+                ));
+            }
         }
         let live = s.live.is_some();
         shared.persist(&st);
         live
     };
     if !live {
-        return Ok(Some(format!(
-            "a sessão {id} não está viva; a regra vale no próximo lançamento"
+        return Ok(Some(trf!(
+            "a sessão {id} não está viva; a regra vale no próximo lançamento",
+            "session {id} is not alive; the rule takes effect on the next launch"
         )));
     }
     match recompile(shared, id) {
-        Ok(Recompiled::NextLaunch) => Ok(Some(format!(
-            "entrar ou sair de sem-rede só vale no próximo lançamento: `sandmux kill {id}` e `sandmux restart {id}`"
+        Ok(Recompiled::NextLaunch) => Ok(Some(trf!(
+            "entrar ou sair de sem-rede só vale no próximo lançamento: `sandmux kill {id}` e `sandmux restart {id}`",
+            "entering or leaving sem-rede only takes effect on the next launch: `sandmux kill {id}` and `sandmux restart {id}`"
         ))),
         Ok(_) => Ok(None),
         Err(e) => Err(format!("{e:#}")),
@@ -344,7 +369,14 @@ pub fn refresh_engine(shared: &Shared, workdir: &std::path::Path) {
     if let Some(f) = shared.docker.policy_file(workdir) {
         let p = engine_policy(shared, workdir);
         if let Err(e) = write_policy(&f, &p) {
-            eprintln!("sandmuxd: política do Docker de {}: {e}", workdir.display());
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmuxd: política do Docker de {}: {e}",
+                    "sandmuxd: Docker policy of {}: {e}",
+                    workdir.display()
+                )
+            );
         }
     }
 }
@@ -384,11 +416,19 @@ pub fn start_policy_watch(shared: Arc<Shared>) {
                 for id in ids {
                     match recompile(&shared, id) {
                         Ok(Recompiled::NextLaunch) => eprintln!(
-                            "sandmuxd: sessão {id}: a mudança de modo de rede vale no próximo lançamento"
+                            "{}",
+                            trf!(
+                                "sandmuxd: sessão {id}: a mudança de modo de rede vale no próximo lançamento",
+                                "sandmuxd: session {id}: the network mode change takes effect on the next launch"
+                            )
                         ),
                         Ok(_) => {}
                         Err(e) => eprintln!(
-                            "sandmuxd: sessão {id}: política de rede mantida: {e:#}"
+                            "{}",
+                            trf!(
+                                "sandmuxd: sessão {id}: política de rede mantida: {e:#}",
+                                "sandmuxd: session {id}: network policy kept: {e:#}"
+                            )
                         ),
                     }
                 }
@@ -404,7 +444,13 @@ fn retention(shared: &Shared) -> (u32, u64) {
             c.net_log_max.unwrap_or(MAX_BYTES),
         ),
         Err(e) => {
-            eprintln!("sandmuxd: aviso: {e}; retenção do registro de rede com os padrões");
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmuxd: aviso: {e}; retenção do registro de rede com os padrões",
+                    "sandmuxd: warning: {e}; network log retention with the defaults"
+                )
+            );
             (DAYS, MAX_BYTES)
         }
     }
@@ -418,12 +464,26 @@ pub fn start_retention(shared: Arc<Shared>) {
             loop {
                 let (days, max) = retention(&shared);
                 for p in sandmux_net::log::prune(&log_dir(), days, max) {
-                    eprintln!("sandmuxd: registro de rede apagado: {}", p.display());
+                    eprintln!(
+                        "{}",
+                        trf!(
+                            "sandmuxd: registro de rede apagado: {}",
+                            "sandmuxd: network log deleted: {}",
+                            p.display()
+                        )
+                    );
                 }
                 // Os registros de arquivos e de queries seguem a mesma retenção.
                 for sub in ["files", "db"] {
                     for p in sandmux_net::log::prune(&paths::state_dir().join(sub), days, max) {
-                        eprintln!("sandmuxd: registro apagado: {}", p.display());
+                        eprintln!(
+                            "{}",
+                            trf!(
+                                "sandmuxd: registro apagado: {}",
+                                "sandmuxd: log deleted: {}",
+                                p.display()
+                            )
+                        );
                     }
                 }
                 std::thread::sleep(Duration::from_secs(3600));
@@ -444,7 +504,10 @@ pub fn lines(
         if let Some(id) = id
             && !st.sessions.contains_key(&id)
         {
-            return Err(format!("não existe a sessão {id}"));
+            return Err(trf!(
+                "não existe a sessão {id}",
+                "session {id} does not exist"
+            ));
         }
         st.sessions
             .values()

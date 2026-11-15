@@ -88,8 +88,8 @@ fn tui_abre_com_as_abas_e_repassa_a_entrada() {
     std::fs::create_dir_all(&outra).unwrap();
     sessao(&e, &outra);
     let mut t = tui(&e);
-    t.wait_text("1:shell:app");
-    t.wait_text("2:shell:outra");
+    t.wait_text(&tab(1, "shell:app"));
+    t.wait_text(&tab(2, "shell:outra"));
     t.write(b"echo ola-$((2+3))\r");
     t.wait_text("ola-5");
     // Ctrl+b n vai para a aba 2; o texto da aba 1 some da tela.
@@ -131,7 +131,7 @@ fn modos_da_aba_vao_e_voltam_do_terminal() {
     let e = Env::new();
     sessao(&e, &e.work);
     let mut t = tui(&e);
-    t.wait_text("1:shell:app");
+    t.wait_text(&tab(1, "shell:app"));
     t.write(b"printf '\\033[>1u\\033[?2004h'; echo modos-$((3+4))\r");
     t.wait_text("modos-7");
     t.wait_raw("\x1b[>1u");
@@ -155,7 +155,7 @@ fn atalhos_prefixo_e_tecla_desconhecida() {
     let e = Env::new();
     sessao(&e, &e.work);
     let mut t = tui(&e);
-    t.wait_text("1:shell:app");
+    t.wait_text(&tab(1, "shell:app"));
     // Ctrl+b Ctrl+b manda um Ctrl+b; `cat -v` mostra ^B. Ctrl+b z some.
     t.write(b"cat -v\r");
     t.write(b"\x02\x02\x02zX\r");
@@ -186,7 +186,7 @@ fn nova_aba_por_modal_e_pasta_perigosa() {
     t.write(&[0x7f; 200]);
     t.write(outra.to_str().unwrap().as_bytes());
     t.write(b"\r");
-    t.wait_text("1:shell:nova");
+    t.wait_text(&tab(1, "shell:nova"));
     t.write(b"pwd\r");
     t.wait_text(&format!("{}", outra.display()));
     t.write(b"\x02d");
@@ -199,7 +199,7 @@ fn lista_renomear_fechar() {
     sessao(&e, &e.work);
     sessao(&e, &e.work);
     let mut t = tui(&e);
-    t.wait_text("2:shell:app");
+    t.wait_text(&tab(2, "shell:app"));
     t.write(b"\x02w");
     t.wait_text("Abas");
     t.write(b"\x1b[A\x1b[A\r");
@@ -207,7 +207,7 @@ fn lista_renomear_fechar() {
     t.wait_text("Renomear");
     t.write(&[0x7f; 30]);
     t.write(b"api\r");
-    t.wait_text("1:api");
+    t.wait_text(&tab(1, "api"));
     assert!(
         ls(&e)
             .lines()
@@ -218,7 +218,7 @@ fn lista_renomear_fechar() {
     t.write(b"\x02x");
     t.wait_text("Encerrar a sess");
     t.write(b"s");
-    t.wait_for("aba 1 fechada", |s| !s.contains("1:api"));
+    t.wait_for("aba 1 fechada", |s| !s.contains(&tab(1, "api")));
     assert!(!ls(&e).lines().any(|l| l.starts_with("1 ")), "{}", ls(&e));
     t.write(b"\x02d");
     assert_eq!(t.wait_exit(), 0);
@@ -229,7 +229,7 @@ fn aba_encerrada_continua_e_reinicia() {
     let e = Env::new();
     sessao(&e, &e.work);
     let mut t = tui(&e);
-    t.wait_text("1:shell:app");
+    t.wait_text(&tab(1, "shell:app"));
     t.write(b"echo antes-$((1+1)); exit 3\r");
     t.wait_text("encerrada (3)");
     t.wait_text("antes-2");
@@ -246,14 +246,14 @@ fn abas_seguem_o_daemon() {
     let e = Env::new();
     sessao(&e, &e.work);
     let mut t = tui(&e);
-    t.wait_text("1:shell:app");
+    t.wait_text(&tab(1, "shell:app"));
     sessao(&e, &e.work);
-    t.wait_text("2:shell:app");
+    t.wait_text(&tab(2, "shell:app"));
     let out = e.run(&e.work, &["kill", "1"]);
     assert!(out.status.success(), "{}", stderr(&out));
     // Sobra uma aba só, que passa a ser a posição 1.
     t.wait_for("aba 1 some", |s| {
-        !s.contains("2:shell:app") && s.contains("1:shell:app")
+        !s.contains(&tab(2, "shell:app")) && s.contains(&tab(1, "shell:app"))
     });
     t.write(b"\x02d");
     assert_eq!(t.wait_exit(), 0);
@@ -267,9 +267,10 @@ fn mouse_clique_repasse_e_selecao() {
     std::fs::create_dir_all(&outra).unwrap();
     sessao(&e, &outra);
     let mut t = tui(&e);
-    t.wait_text("2:shell:b");
-    // Clique na aba 2 (coluna depois de " 1:shell:app ").
-    t.write(b"\x1b[<0;17;1M\x1b[<0;17;1m");
+    t.wait_text(&tab(2, "shell:b"));
+    // Clique na aba 2, na barra da última linha (a aba 1 ocupa 16 colunas:
+    // separador, " 1 ", separador e " shell:app ").
+    t.write(b"\x1b[<0;18;30M\x1b[<0;18;30m");
     t.write(b"echo aqui-b-$((1+1))\r");
     t.wait_text("aqui-b-2");
     // Seleção sem mouse do harness: arrastar sobre "aqui-b-2" copia por OSC 52.
@@ -295,8 +296,9 @@ fn mouse_clique_repasse_e_selecao() {
     // Com o mouse ligado pelo harness, o clique vai para ele, com a linha da área.
     t.write(b"printf '\\033[?1000h\\033[?1006h'; cat -v\r");
     std::thread::sleep(std::time::Duration::from_millis(500));
+    // Com a barra embaixo, a área começa na linha 1: a linha não muda.
     t.write(b"\x1b[<0;5;4M");
-    t.wait_text("^[[<0;5;3M");
+    t.wait_text("^[[<0;5;4M");
     t.write(b"\x03");
     t.write(b"\x02d");
     assert_eq!(t.wait_exit(), 0);
@@ -307,7 +309,7 @@ fn colar_imagem_sem_clipboard_avisa() {
     let e = Env::new();
     sessao(&e, &e.work);
     let mut t = tui(&e);
-    t.wait_text("1:shell:app");
+    t.wait_text(&tab(1, "shell:app"));
     t.write(b"\x02v");
     t.wait_text("clipboard");
     assert!(
@@ -324,27 +326,237 @@ fn colar_imagem_sem_clipboard_avisa() {
 fn tema_muda_as_cores_da_barra() {
     let e = Env::new();
     sessao(&e, &e.work);
-    // Sem tema: a aba ativa em vídeo inverso.
+    // Padrão: barra em blocos na última linha, sem símbolos de Nerd Font, o
+    // `≡` do menu e o número da aba ativa no bloco lilás.
     let mut t = tui(&e);
-    t.wait_text("1:shell:app");
-    t.with_screen(|s| assert!(s.cell(0, 1).unwrap().inverse(), "{}", s.contents()));
+    t.wait_text(&tab(1, "shell:app"));
+    t.with_screen(|s| {
+        let last = s.size().0.get() - 1;
+        assert_eq!(s.cell(last, 1).unwrap().contents(), "≡");
+        let bar: String = (0..s.size().1.get())
+            .map(|c| s.cell(last, c).unwrap().contents().to_string())
+            .collect();
+        assert!(
+            !bar.chars().any(|c| ('\u{e000}'..='\u{f8ff}').contains(&c)),
+            "{bar}"
+        );
+        let c = s.cell(last, 5).unwrap();
+        assert_eq!(c.contents(), "1", "{}", s.contents());
+        assert_eq!(c.bgcolor(), vt100::Color::Rgb(0xcb, 0xa6, 0xf7));
+    });
     t.write(b"\x02d");
     t.wait_exit();
-    e.write_config("[tui]\ntheme = \"escuro\"\n[tui.colors]\ntab-active-bg = \"#aa0000\"\n");
+    // O tema e a cor trocada pela configuração valem no bloco.
+    e.write_config("[tui]\ntheme = \"escuro\"\n[tui.colors]\ntab-active-index-bg = \"#aa0000\"\n");
     let mut t = tui(&e);
-    t.wait_text("1:shell:app");
+    t.wait_text(&tab(1, "shell:app"));
     t.with_screen(|s| {
-        let c = s.cell(0, 1).unwrap();
+        let last = s.size().0.get() - 1;
+        let c = s.cell(last, 5).unwrap();
         assert_eq!(
             c.bgcolor(),
             vt100::Color::Rgb(0xaa, 0, 0),
             "{}",
             s.contents()
         );
-        assert!(!c.inverse());
     });
     t.write(b"\x02d");
     t.wait_exit();
+    // Estilo simples no topo: a barra de antes, a aba ativa em vídeo inverso.
+    e.write_config("[tui]\nstyle = \"simples\"\nbar = \"top\"\n");
+    let mut t = tui(&e);
+    t.wait_text(" 1:shell:app ");
+    t.with_screen(|s| {
+        assert!(s.cell(0, 1).unwrap().inverse(), "{}", s.contents());
+        assert!(!s.contents().contains('\u{e0bc}'));
+        assert!(!s.contents().contains('≡'));
+    });
+    t.write(b"\x02d");
+    t.wait_exit();
+    // Powerline, para quem tem a fonte.
+    e.write_config("[tui]\nstyle = \"powerline\"\n");
+    let mut t = tui(&e);
+    t.wait_text(" 1 \u{e0bc} shell:app");
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+#[test]
+fn secoes_do_painel_recolhem_e_mudam_de_ordem() {
+    let e = Env::new();
+    sessao(&e, &e.work);
+    // 120 colunas: o painel começa na coluna 87 (1-based), o texto na 89 e
+    // as setas da faixa nas colunas 117 (↑) e 119 (↓).
+    let mut t = tui_cols(&e, 120);
+    t.wait_text("▾ Proteção");
+    t.wait_text(" pico ");
+    // ↓ na faixa de Proteção (linha 1): Recursos sobe para o topo.
+    t.write(b"\x1b[<0;119;1M\x1b[<0;119;1m");
+    t.wait_for("Recursos no topo", |s| {
+        s.lines().next().is_some_and(|l| l.contains("▾ Recursos"))
+    });
+    t.wait_for("ordem gravada", |_| {
+        std::fs::read_to_string(e.config_file())
+            .unwrap_or_default()
+            .contains(r#"panel-order = ["recursos", "protecao", "portas", "rede", "mcp"]"#)
+    });
+    // Clique no título: Recursos recolhe, e a linha do pico some.
+    t.write(b"\x1b[<0;92;1M\x1b[<0;92;1m");
+    t.wait_text("▸ Recursos");
+    t.wait_for("pico some", |s| !s.contains(" pico "));
+    t.wait_for("recolhida gravada", |_| {
+        std::fs::read_to_string(e.config_file())
+            .unwrap_or_default()
+            .contains(r#"panel-collapsed = ["recursos"]"#)
+    });
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+    // Ao abrir de novo, a ordem e a seção recolhida continuam.
+    let mut t = tui_cols(&e, 120);
+    t.wait_text("▸ Recursos");
+    t.with_screen(|s| {
+        assert!(s.contents().lines().next().unwrap().contains("▸ Recursos"));
+        assert!(!s.contents().contains(" pico "));
+    });
+    // Expandir e voltar à ordem padrão apaga as chaves.
+    t.write(b"\x1b[<0;92;1M\x1b[<0;92;1m");
+    t.wait_text(" pico ");
+    t.write(b"\x1b[<0;119;1M\x1b[<0;119;1m");
+    t.wait_for("Proteção no topo", |s| {
+        s.lines().next().is_some_and(|l| l.contains("▾ Proteção"))
+    });
+    t.wait_for("chaves apagadas", |_| {
+        !std::fs::read_to_string(e.config_file())
+            .unwrap_or_default()
+            .contains("panel-")
+    });
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+// ---- menu e configurações ----
+
+const UP: &[u8] = b"\x1b[A";
+const DOWN: &[u8] = b"\x1b[B";
+const RIGHT: &[u8] = b"\x1b[C";
+const LEFT: &[u8] = b"\x1b[D";
+
+#[test]
+fn menu_abre_as_configuracoes_e_a_pagina_grava_o_toml() {
+    let e = Env::new();
+    e.write_config("# do usuário\n[global]\nrepo = false\n");
+    sessao(&e, &e.work);
+    let mut t = tui(&e);
+    t.wait_text(&tab(1, "shell:app"));
+    // O menu lista as ações; a última é configurações.
+    t.write(b"\x02:");
+    t.wait_text("Menu");
+    t.wait_text("configurações");
+    t.write(UP);
+    t.write(b"\r");
+    t.wait_text("sandmux · configurações");
+    t.wait_text("valendo em: global");
+    // Sandbox: liga o KVM.
+    t.write(DOWN);
+    t.write(DOWN);
+    t.write(DOWN);
+    t.write(b"\t");
+    t.write(DOWN);
+    t.write(b" ");
+    t.wait_text("kvm gravado em [global]");
+    let text = std::fs::read_to_string(e.config_file()).unwrap();
+    assert!(text.starts_with("# do usuário"), "{text}");
+    assert!(text.contains("kvm = true"), "{text}");
+    t.wait_text("● ligado");
+    // Memória recusada: nada muda.
+    for _ in 0..3 {
+        t.write(DOWN);
+    }
+    t.write(b"\r");
+    t.write(b"abc\r");
+    t.wait_text("\"abc\"");
+    assert_eq!(std::fs::read_to_string(e.config_file()).unwrap(), text);
+    // Rede: acrescenta uma porta do host.
+    t.write(b"\t");
+    t.write(DOWN);
+    t.write(b"\t");
+    for _ in 0..8 {
+        t.write(DOWN);
+    }
+    t.write(b"\r");
+    t.wait_text("a acrescenta");
+    t.write(b"a8888\r");
+    t.wait_text("host-ports gravado");
+    let text = std::fs::read_to_string(e.config_file()).unwrap();
+    assert!(text.contains("host-ports = [8888]"), "{text}");
+    t.write(LEFT);
+    // Aparência: o tema muda na hora, na página e na barra.
+    t.write(b"\t");
+    for _ in 0..3 {
+        t.write(UP);
+    }
+    t.write(b"\t");
+    for _ in 0..5 {
+        t.write(RIGHT);
+    }
+    t.wait_text("‹ tokyo-night ›");
+    t.wait_for("tema gravado", |_| {
+        std::fs::read_to_string(e.config_file())
+            .unwrap()
+            .contains("theme = \"tokyo-night\"")
+    });
+    t.with_screen(|s| {
+        let c = s.cell(0, 0).unwrap();
+        assert_eq!(c.contents(), "╭");
+        assert_eq!(c.fgcolor(), vt100::Color::Rgb(0x7a, 0xa2, 0xf7));
+    });
+    t.write(b"q");
+    t.wait_for("página fecha", |s| !s.contains("sandmux · configurações"));
+    t.with_screen(|s| {
+        let last = s.size().0.get() - 1;
+        let c = s.cell(last, 5).unwrap();
+        assert_eq!(
+            c.bgcolor(),
+            vt100::Color::Rgb(0x7a, 0xa2, 0xf7),
+            "{}",
+            s.contents()
+        );
+    });
+    // O arquivo continua válido.
+    let out = e.run(&e.work, &["config", "list"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
+fn clique_no_menu_da_barra_e_projeto_na_pagina() {
+    let e = Env::new();
+    sessao(&e, &e.work);
+    let mut t = tui(&e);
+    t.wait_text(&tab(1, "shell:app"));
+    // Clique no `≡` (coluna 2, última linha).
+    t.write(b"\x1b[<0;2;30M\x1b[<0;2;30m");
+    t.wait_text("Menu");
+    t.write(b"e");
+    t.wait_text("sandmux · configurações");
+    // `g` passa o alvo para o projeto da aba; o modo de rede vai para ele.
+    t.write(b"g");
+    t.wait_text("valendo em: projeto");
+    t.write(DOWN);
+    t.write(DOWN);
+    t.write(DOWN);
+    t.write(DOWN);
+    t.write(b"\t");
+    t.write(RIGHT);
+    t.wait_text("network gravado em [project.");
+    let text = std::fs::read_to_string(e.config_file()).unwrap();
+    let c = sandmux_policy::config::Config::parse(e.config_file().as_path(), &text).unwrap();
+    assert!(c.global.network.is_none(), "{text}");
+    assert_eq!(c.projects.len(), 1, "{text}");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
 }
 
 // ---- painel lateral ----
@@ -394,7 +606,7 @@ fn painel_lateral_mostra_protecao_e_some_com_atalho() {
 
     // Terminal estreito: sem painel.
     let mut t = tui_cols(&e, 80);
-    t.wait_text("1:shell:app");
+    t.wait_text(&tab(1, "shell:app"));
     std::thread::sleep(std::time::Duration::from_millis(500));
     t.with_screen(|s| assert!(!s.contents().contains("Proteção"), "{}", s.contents()));
     t.write(b"\x02d");
@@ -432,7 +644,7 @@ fn rede_no_painel_e_marca_de_dominio_novo_na_barra() {
     sessao(&e, &outra);
 
     let mut t = tui_cols(&e, 120);
-    t.wait_text("2:shell:outra");
+    t.wait_text(&tab(2, "shell:outra"));
     t.wait_text("Rede");
     t.wait_text("sem conexões registradas");
     // A aba 1 acessa um domínio novo depois que a aba 2 fica ativa.
@@ -441,20 +653,20 @@ fn rede_no_painel_e_marca_de_dominio_novo_na_barra() {
             .as_bytes(),
     );
     t.write(b"\x022");
-    t.wait_text("1:shell:app •");
+    t.wait_text(&tab(1, "shell:app •"));
     t.with_screen(|s| {
         assert!(
-            !s.contents().contains("2:shell:outra •"),
+            !s.contents().contains(&tab(2, "shell:outra •")),
             "{}",
             s.contents()
         )
     });
     // Ao voltar, a marca some e o painel mostra o domínio, marcado como novo.
     t.write(b"\x021");
-    t.wait_for("marca some", |s| !s.contains("1:shell:app •"));
+    t.wait_for("marca some", |s| !s.contains(&tab(1, "shell:app •")));
     t.wait_text("host.sandmux.internal");
     t.wait_text("novo");
-    t.wait_text("modo: aberta, registrada");
+    t.wait_text("aberta, registrada");
     t.write(b"\x02d");
     assert_eq!(t.wait_exit(), 0);
 }
@@ -509,15 +721,15 @@ fn marca_de_bloqueio_na_barra() {
     sessao(&e, &outra);
 
     let mut t = tui_cols(&e, 120);
-    t.wait_text("2:shell:outra");
+    t.wait_text(&tab(2, "shell:outra"));
     t.write(
         format!("(sleep 2; curl -s http://host.sandmux.internal:{port}/ >/dev/null) &\r")
             .as_bytes(),
     );
     t.write(b"\x022");
-    t.wait_text("1:shell:app !");
+    t.wait_text(&tab(1, "shell:app !"));
     t.write(b"\x021");
-    t.wait_for("marca some", |s| !s.contains("1:shell:app !"));
+    t.wait_for("marca some", |s| !s.contains(&tab(1, "shell:app !")));
     t.wait_text("bloqueado:");
     t.write(b"\x02d");
     assert_eq!(t.wait_exit(), 0);
@@ -529,7 +741,7 @@ fn tela_de_rede_troca_modo_libera_no_projeto_e_nega_na_aba() {
     let port = ok_server();
     sessao(&e, &e.work);
     let mut t = tui_cols(&e, 120);
-    t.wait_text("1:shell:app");
+    t.wait_text(&tab(1, "shell:app"));
     assert_eq!(curl_tab(&mut t, port, 11), "0");
 
     // Trocar o modo: aberta -> inferencia -> custom.
@@ -541,7 +753,7 @@ fn tela_de_rede_troca_modo_libera_no_projeto_e_nega_na_aba() {
     t.wait_text("modo da aba: custom");
     t.write(b"\x1b");
     t.wait_for("tela fecha", |s| !s.contains("Rede da aba"));
-    t.wait_text("modo: custom (allowlist)");
+    t.wait_text("custom (allowlist)");
     assert_eq!(curl_tab(&mut t, port, 12), "6");
 
     // Liberar no projeto o bloqueio mais recente (a consulta de DNS).
@@ -596,7 +808,7 @@ fn portas_no_stats_e_no_painel() {
         .port();
     sessao(&e, &e.work);
     let mut t = tui_cols(&e, 120);
-    t.wait_text("1:shell:app");
+    t.wait_text(&tab(1, "shell:app"));
     t.wait_text("Portas");
     t.write(format!("python3 -m http.server {p} --bind 0.0.0.0 >/dev/null 2>&1 &\r").as_bytes());
     t.wait_text(&format!("{p} → 127.0.0.1:{p}"));
@@ -674,7 +886,7 @@ fn tela_de_arquivos_bloqueia_o_caminho() {
     std::fs::write(e.work.join("dados.sql"), "conteudo-sql").unwrap();
     sessao(&e, &e.work);
     let mut t = tui_cols(&e, 120);
-    t.wait_text("1:shell:app");
+    t.wait_text(&tab(1, "shell:app"));
     t.write(b"cat dados.sql; echo; echo L$((1+1))=ok\r");
     t.wait_text("L2=ok");
 
@@ -722,7 +934,7 @@ fn tela_de_pastas_monta_ao_vivo() {
     std::fs::write(docs.join("leia.txt"), "x").unwrap();
     sessao(&e, &e.work);
     let mut t = tui_cols(&e, 160);
-    t.wait_text("1:shell:app");
+    t.wait_text(&tab(1, "shell:app"));
     t.write(b"\x02o");
     t.wait_text("Pastas da sess");
     t.write(b"a");
@@ -768,7 +980,7 @@ fn tela_de_mcp_desabilita_na_aba() {
     let mut cmd = e.cmd(&e.work, &[]);
     cmd.env("SHELL", "/bin/bash");
     let mut t = Term::spawn_answering(cmd, 140, 60);
-    t.wait_text("1:opencode:app");
+    t.wait_text(&tab(1, "opencode:app"));
     t.wait_text("✓ github");
     t.write(b"\x02m");
     t.wait_text("Servidores MCP da sess");
@@ -785,4 +997,274 @@ fn tela_de_mcp_desabilita_na_aba() {
     );
     t.write(b"\x02d");
     t.wait_exit();
+}
+
+#[test]
+fn copia_do_harness_liberada_chega_pela_tui() {
+    let e = Env::new();
+    let outra = e.home.join("projetos/outra");
+    std::fs::create_dir_all(&outra).unwrap();
+    // Duas sessões: uma com o clipboard liberado, outra com o padrão.
+    let mut t = term_in(&e, &e.work, &["run", "shell", "--allow-clipboard"]);
+    t.write(b"echo pronto-$((1+1))\r");
+    t.wait_text("pronto-2");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+    sessao(&e, &outra);
+
+    let mut t = tui(&e);
+    t.wait_text(&tab(1, "shell:app"));
+    // "liberado" e "bloqueado" em base64.
+    t.write(b"printf '\\033]52;c;bGliZXJhZG8=\\007'; echo enviou-$((1+1))\r");
+    t.wait_text("enviou-2");
+    t.wait_raw("\x1b]52;c;bGliZXJhZG8=");
+    t.write(b"\x02n");
+    t.wait_for("aba 2 ativa", |s| s.contains("outra"));
+    t.write(b"printf '\\033]52;c;YmxvcXVlYWRv\\007'; echo enviou-$((2+2))\r");
+    t.wait_text("enviou-4");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(
+        !t.raw_text().contains("\x1b]52;c;YmxvcXVlYWRv"),
+        "a cópia bloqueada passou"
+    );
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+#[test]
+fn clique_no_x_fecha_a_aba_encerrada() {
+    let e = Env::new();
+    sessao(&e, &e.work);
+    let outra = e.home.join("projetos/outra");
+    std::fs::create_dir_all(&outra).unwrap();
+    sessao(&e, &outra);
+    let mut t = tui(&e);
+    t.wait_text(&tab(2, "shell:outra"));
+    // A aba 2 termina: ganha o ✕.
+    t.write(b"\x02n");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    t.write(b"exit\r");
+    t.wait_text(&tab(2, "shell:outra ✕"));
+    // Um clique no nome só ativa; no ✕, fecha.
+    // A barra é a última linha.
+    let (row, col) = t.with_screen(|s| {
+        let last = s.size().0.get() - 1;
+        let line = s.contents_between(last, 0, last, s.size().1.get());
+        let i = line.find('✕').expect("sem ✕");
+        (last + 1, line[..i].chars().count() as u16)
+    });
+    t.write(format!("\x1b[<0;{};{row}M\x1b[<0;{};{row}m", col + 1, col + 1).as_bytes());
+    t.wait_for("aba fechada", |s| !s.contains(&tab(2, "shell:outra")));
+    assert!(!ls(&e).contains("outra"), "{}", ls(&e));
+    assert!(ls(&e).contains("shell:app"));
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+#[test]
+fn aba_encerrada_pergunta_se_reinicia() {
+    let e = Env::new();
+    sessao(&e, &e.work);
+    let outra = e.home.join("projetos/outra");
+    std::fs::create_dir_all(&outra).unwrap();
+    sessao(&e, &outra);
+    let mut t = tui(&e);
+    t.wait_text(&tab(2, "shell:outra"));
+    // A aba ativa termina: o modal aparece, e Enter reinicia.
+    t.write(b"exit 3\r");
+    t.wait_text("terminou com o código 3");
+    t.write(b"\r");
+    t.wait_text("aba 1 reiniciada");
+    t.write(b"echo voltou-$((1+1))\r");
+    t.wait_text("voltou-2");
+    // A aba 2 termina em segundo plano: a aba 1 não pergunta nada.
+    t.write(b"\x02n");
+    t.wait_for("aba 2 ativa", |s| s.contains("projetos/outra"));
+    t.write(b"sleep 1; exit 5\r");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    t.write(b"\x02p");
+    t.wait_text(&tab(2, "shell:outra ✕"));
+    assert!(!t.screen().contains("terminou com o código 5"));
+    // Ao ativar a aba 2, pergunta; Esc deixa encerrada e não pergunta de novo.
+    t.write(b"\x02n");
+    t.wait_text("terminou com o código 5");
+    t.write(b"\x1b");
+    t.wait_for("modal fechado", |s| !s.contains("terminou com o código"));
+    t.write(b"\x02p");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    t.write(b"\x02n");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(
+        !t.screen().contains("terminou com o código"),
+        "{}",
+        t.screen()
+    );
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+#[test]
+fn blocos_da_direita_na_barra() {
+    let e = Env::new();
+    sessao(&e, &e.work);
+    let mut t = tui(&e);
+    t.wait_text(&tab(1, "shell:app"));
+    // Harness e pasta da aba ativa, em blocos de cores diferentes, estado do
+    // cofre e tempo da aba.
+    t.wait_for("blocos da direita", |s| {
+        let last = s.lines().last().unwrap_or("");
+        last.contains(" shell   ~/projetos/app ")
+            && last.contains("sem cofre")
+            && last.contains("0m")
+    });
+    t.with_screen(|s| {
+        let row = s.size().0.get() - 1;
+        let cols = s.size().1.get();
+        let text: Vec<String> = (0..cols)
+            .map(|c| s.cell(row, c).unwrap().contents().to_string())
+            .collect();
+        let line: String = text.concat();
+        let at = |needle: &str| line.find(needle).map(|b| line[..b].chars().count() as u16);
+        let h = at(" shell   ~/projetos").unwrap() + 1;
+        let f = at("~/projetos/app").unwrap();
+        let bg = |c: u16| s.cell(row, c).unwrap().bgcolor();
+        assert_ne!(bg(h), bg(f), "{line}");
+    });
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+// ---- idioma ----
+
+#[test]
+fn tui_em_ingles_e_troca_pela_pagina() {
+    let e = Env::new();
+    sessao(&e, &e.work);
+    // SANDMUX_LANG=en: a TUI fala inglês.
+    let mut cmd = e.cmd(&e.work, &[]);
+    cmd.env("SHELL", "/bin/bash").env("SANDMUX_LANG", "en");
+    let mut t = Term::spawn_answering(cmd, 120, 30);
+    t.wait_text("Protection");
+    t.wait_text("Resources");
+    // O resumo gravado no lançamento (em português) aparece em inglês.
+    t.wait_text("open, logged");
+    t.write(b"\x02e");
+    t.wait_text("sandmux · settings");
+    for _ in 0..4 {
+        t.write(DOWN);
+    }
+    t.write(b"\t");
+    t.wait_text("‹ open ›");
+    t.write(b"\x1b");
+    t.wait_text("applies to: global");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+
+    // Em português, a página troca o idioma para inglês na hora e grava.
+    let mut t = tui_cols(&e, 120);
+    t.wait_text("Proteção");
+    t.write(b"\x02e");
+    t.wait_text("sandmux · configurações");
+    t.wait_text("‹ auto ›");
+    t.write(b"\t");
+    t.write(RIGHT);
+    t.wait_text("‹ pt ›");
+    t.write(RIGHT);
+    t.wait_text("‹ en ›");
+    t.wait_text("sandmux · settings");
+    t.wait_text("language saved in [global]");
+    let text = std::fs::read_to_string(e.config_file()).unwrap();
+    assert!(text.contains("language = \"en\""), "{text}");
+    t.write(b"q");
+    t.wait_text("Protection");
+    // `auto` apaga a chave.
+    t.write(b"\x02e");
+    t.wait_text("‹ en ›");
+    t.write(b"\t");
+    t.write(RIGHT);
+    t.wait_text("‹ auto ›");
+    t.wait_for("chave apagada", |_| {
+        !std::fs::read_to_string(e.config_file())
+            .unwrap_or_default()
+            .contains("language")
+    });
+    t.wait_text("sandmux · configurações");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+// ---- cofre na página ----
+
+#[test]
+fn cofre_gerenciado_pela_pagina() {
+    let e = Env::new();
+    sessao(&e, &e.work);
+    let mut t = tui_cols(&e, 120);
+    t.wait_text(&tab(1, "shell:app"));
+    t.write(b"\x02e");
+    t.wait_text("sandmux · configurações");
+    for _ in 0..9 {
+        t.write(DOWN);
+    }
+    t.wait_text("sem cofre");
+    t.write(b"\t");
+    // Cria o cofre.
+    t.write(b"n");
+    t.wait_text("Criar o cofre");
+    t.write(b"senha-um\r");
+    t.write(b"senha-um\r");
+    t.wait_text("cofre criado e aberto");
+    t.wait_text("aberto · 0 segredos");
+    // Acrescenta um segredo: o valor nunca aparece, localhost vira o host.
+    t.write(b"a");
+    t.wait_text("Novo segredo");
+    t.write(b"lmstudio\r");
+    t.write(b"valor-secreto-123");
+    t.wait_text("•••••••••••••••••");
+    t.with_screen(|s| assert!(!s.contents().contains("valor-secreto"), "{}", s.contents()));
+    t.write(b"\r");
+    t.write(b"localhost\r");
+    t.wait_text("lmstudio guardado no cofre");
+    t.wait_text("host.sandmux.internal");
+    let list = stdout(&e.run(&e.work, &["vault", "list"]));
+    assert!(
+        list.contains("lmstudio") && list.contains("host.sandmux.internal"),
+        "{list}"
+    );
+    // Edita os domínios.
+    t.write(b"d");
+    t.wait_text("Domínios de lmstudio");
+    t.write(b", api.exemplo.com\r");
+    t.wait_text("domínios de lmstudio trocados");
+    let list = stdout(&e.run(&e.work, &["vault", "list"]));
+    assert!(list.contains("api.exemplo.com"), "{list}");
+    // Domínio inválido é recusado, e nada muda.
+    t.write(b"d");
+    t.wait_text("Domínios de lmstudio");
+    t.write(b", nao valido!\r");
+    t.wait_text("domínio inválido");
+    let list = stdout(&e.run(&e.work, &["vault", "list"]));
+    assert!(!list.contains("valido"), "{list}");
+    // Tranca e desbloqueia.
+    t.write(b"l");
+    t.wait_text("● trancado");
+    t.write(b"u");
+    t.wait_text("Desbloquear");
+    t.write(b"senha-um\r");
+    t.wait_text("cofre desbloqueado");
+    t.wait_text("aberto · 1 segredo");
+    // Apaga com confirmação.
+    t.write(b"x");
+    t.wait_text("Apagar lmstudio do cofre?");
+    t.write(b"s");
+    t.wait_text("lmstudio apagado do cofre");
+    t.wait_text("aberto · 0 segredos");
+    let list = stdout(&e.run(&e.work, &["vault", "list"]));
+    assert!(!list.contains("lmstudio"), "{list}");
+    t.write(b"\x1b");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
 }

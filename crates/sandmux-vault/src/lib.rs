@@ -119,11 +119,14 @@ pub enum VaultError {
 impl std::fmt::Display for VaultError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VaultError::WrongPassword => write!(
-                f,
-                "a senha não confere (ou o arquivo do cofre foi alterado)"
-            ),
-            VaultError::Invalid(m) => write!(f, "o arquivo do cofre é inválido: {m}"),
+            VaultError::WrongPassword => f.write_str(sandmux_spec::tr!(
+                "a senha não confere (ou o arquivo do cofre foi alterado)",
+                "the password does not match (or the vault file was changed)"
+            )),
+            VaultError::Invalid(m) => f.write_str(&sandmux_spec::trf!(
+                "o arquivo do cofre é inválido: {m}",
+                "the vault file is invalid: {m}"
+            )),
             VaultError::Io(e) => write!(f, "{e}"),
         }
     }
@@ -206,8 +209,9 @@ const P: u32 = 1;
 
 fn derive(password: &str, kdf: &Kdf) -> Result<Zeroizing<[u8; 32]>, VaultError> {
     if kdf.alg != "argon2id" {
-        return Err(VaultError::Invalid(format!(
+        return Err(VaultError::Invalid(sandmux_spec::trf!(
             "KDF desconhecida: {}",
+            "unknown KDF: {}",
             kdf.alg
         )));
     }
@@ -262,7 +266,11 @@ impl Unlocked {
         let f: File =
             serde_json::from_slice(bytes).map_err(|e| VaultError::Invalid(e.to_string()))?;
         if f.version != VERSION {
-            return Err(VaultError::Invalid(format!("versão {}", f.version)));
+            return Err(VaultError::Invalid(sandmux_spec::trf!(
+                "versão {}",
+                "version {}",
+                f.version
+            )));
         }
         let key = derive(password, &f.kdf)?;
         let nonce = B64
@@ -311,7 +319,7 @@ impl Unlocked {
                     aad: &aad(&self.kdf, &nonce),
                 },
             )
-            .map_err(|_| VaultError::Invalid("cifra".into()))?;
+            .map_err(|_| VaultError::Invalid(sandmux_spec::tr!("cifra", "cipher").into()))?;
         let f = File {
             version: VERSION,
             kdf: self.kdf.clone(),

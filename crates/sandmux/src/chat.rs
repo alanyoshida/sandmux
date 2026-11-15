@@ -13,6 +13,7 @@ use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use sandmux_policy::assistant::{PROVIDERS_ENV, Provider};
+use sandmux_spec::{tr, trf};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -69,10 +70,11 @@ impl Conversa {
         let p = dir.join(FILE);
         match std::fs::read(&p) {
             Ok(b) => Ok(Some(
-                serde_json::from_slice(&b).with_context(|| format!("ler {}", p.display()))?,
+                serde_json::from_slice(&b)
+                    .with_context(|| trf!("ler {}", "read {}", p.display()))?,
             )),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e).with_context(|| format!("ler {}", p.display())),
+            Err(e) => Err(e).with_context(|| trf!("ler {}", "read {}", p.display())),
         }
     }
 
@@ -87,7 +89,7 @@ impl Conversa {
             .truncate(true)
             .mode(0o600)
             .open(&tmp)
-            .with_context(|| format!("gravar {}", tmp.display()))?;
+            .with_context(|| trf!("gravar {}", "write {}", tmp.display()))?;
         f.write_all(&serde_json::to_vec_pretty(self)?)?;
         f.sync_all()?;
         std::fs::rename(&tmp, dir.join(FILE))?;
@@ -132,13 +134,13 @@ pub fn new_dir(state_dir: &Path, conversa: &Conversa) -> Result<PathBuf> {
         .recursive(true)
         .mode(0o700)
         .create(&r)
-        .with_context(|| format!("criar {}", r.display()))?;
+        .with_context(|| trf!("criar {}", "create {}", r.display()))?;
     crate::paths::check_private_dir(&r, unsafe { libc::getuid() })?;
     let dir = r.join(random_hex(8));
     std::fs::DirBuilder::new()
         .mode(0o700)
         .create(&dir)
-        .with_context(|| format!("criar {}", dir.display()))?;
+        .with_context(|| trf!("criar {}", "create {}", dir.display()))?;
     conversa.save(&dir)?;
     Ok(dir)
 }
@@ -187,8 +189,9 @@ pub struct Target {
 pub fn target(model: &str, providers: &[Provider]) -> Result<Target, String> {
     let (p, m) = sandmux_policy::assistant::split_model(model)?;
     let prov = providers.iter().find(|x| x.name == p).ok_or_else(|| {
-        format!(
+        trf!(
             "provedor desconhecido: {p:?}. Provedores: {}",
+            "unknown provider: {p:?}. Providers: {}",
             providers
                 .iter()
                 .map(|x| x.name.as_str())
@@ -223,7 +226,10 @@ fn parse_url(url: &str) -> Result<Url, String> {
     } else if let Some(r) = url.strip_prefix("http://") {
         (false, r)
     } else {
-        return Err(format!("URL sem http:// ou https://: {url}"));
+        return Err(trf!(
+            "URL sem http:// ou https://: {url}",
+            "URL without http:// or https://: {url}"
+        ));
     };
     let (auth, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
@@ -231,7 +237,9 @@ fn parse_url(url: &str) -> Result<Url, String> {
     };
     let default = if tls { 443 } else { 80 };
     let (host, port) = if let Some(h) = auth.strip_prefix('[') {
-        let (h, after) = h.split_once(']').ok_or("URL com IPv6 malformado")?;
+        let (h, after) = h
+            .split_once(']')
+            .ok_or(tr!("URL com IPv6 malformado", "URL with malformed IPv6"))?;
         let port = after.strip_prefix(':').map(|p| p.parse::<u16>());
         (h.to_string(), port.transpose().map_err(|e| e.to_string())?)
     } else {
@@ -240,14 +248,14 @@ fn parse_url(url: &str) -> Result<Url, String> {
                 h.to_string(),
                 Some(
                     p.parse::<u16>()
-                        .map_err(|e| format!("porta inválida: {e}"))?,
+                        .map_err(|e| trf!("porta inválida: {e}", "invalid port: {e}"))?,
                 ),
             ),
             None => (auth.to_string(), None),
         }
     };
     if host.is_empty() {
-        return Err(format!("URL sem host: {url}"));
+        return Err(trf!("URL sem host: {url}", "URL without host: {url}"));
     }
     Ok(Url {
         tls,
@@ -350,7 +358,12 @@ async fn connect(u: &Url) -> io::Result<Box<dyn Io>> {
     let addr = tokio::net::lookup_host((u.host.as_str(), u.port))
         .await?
         .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "host sem endereço"))?;
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                tr!("host sem endereço", "host without address"),
+            )
+        })?;
     if u.tls {
         let tls = sandmux_net::mitm::connect_upstream(
             addr,
@@ -365,7 +378,9 @@ async fn connect(u: &Url) -> io::Result<Box<dyn Io>> {
             tokio::net::TcpStream::connect(addr),
         )
         .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "tempo esgotado"))??;
+        .map_err(|_| {
+            io::Error::new(io::ErrorKind::TimedOut, tr!("tempo esgotado", "timed out"))
+        })??;
         Ok(Box::new(tcp))
     }
 }
@@ -381,12 +396,22 @@ pub async fn complete(
     on: &mut (dyn FnMut(&str) + Send),
 ) -> Result<String, String> {
     let u = parse_url(&t.url)?;
-    let io = connect(&u)
-        .await
-        .map_err(|e| format!("sem conexão com {}: {e}", u.host))?;
+    let io = connect(&u).await.map_err(|e| {
+        trf!(
+            "sem conexão com {}: {e}",
+            "no connection to {}: {e}",
+            u.host
+        )
+    })?;
     let (mut send, conn) = hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(io))
         .await
-        .map_err(|e| format!("falha no HTTP com {}: {e}", u.host))?;
+        .map_err(|e| {
+            trf!(
+                "falha no HTTP com {}: {e}",
+                "HTTP failure with {}: {e}",
+                u.host
+            )
+        })?;
     tokio::spawn(async move {
         let _ = conn.await;
     });
@@ -420,10 +445,13 @@ pub async fn complete(
             stream,
         ))))
         .map_err(|e| e.to_string())?;
-    let resp = send
-        .send_request(req)
-        .await
-        .map_err(|e| format!("falha no pedido a {}: {e}", u.host))?;
+    let resp = send.send_request(req).await.map_err(|e| {
+        trf!(
+            "falha no pedido a {}: {e}",
+            "request to {} failed: {e}",
+            u.host
+        )
+    })?;
     let status = resp.status();
     let mut body = resp.into_body();
     if !status.is_success() {
@@ -439,10 +467,15 @@ pub async fn complete(
         let b = body
             .collect()
             .await
-            .map_err(|e| format!("resposta interrompida: {e}"))?
+            .map_err(|e| trf!("resposta interrompida: {e}", "response interrupted: {e}"))?
             .to_bytes();
-        let v: serde_json::Value = serde_json::from_slice(&b)
-            .map_err(|_| format!("resposta inválida: {}", error_message(&b)))?;
+        let v: serde_json::Value = serde_json::from_slice(&b).map_err(|_| {
+            trf!(
+                "resposta inválida: {}",
+                "invalid response: {}",
+                error_message(&b)
+            )
+        })?;
         if v.get("error").is_some() {
             return Err(error_message(&b));
         }
@@ -457,9 +490,10 @@ pub async fn complete(
     let mut sse = Sse::default();
     while let Some(frame) = body.frame().await {
         if cancel.load(Ordering::Relaxed) {
-            return Err("resposta cancelada".into());
+            return Err(tr!("resposta cancelada", "response cancelled").into());
         }
-        let frame = frame.map_err(|e| format!("resposta interrompida: {e}"))?;
+        let frame =
+            frame.map_err(|e| trf!("resposta interrompida: {e}", "response interrupted: {e}"))?;
         let Ok(data) = frame.into_data() else {
             continue;
         };
@@ -492,10 +526,146 @@ pub fn complete_blocking(
     rt.block_on(complete(t, msgs, stream, cancel, on))
 }
 
+/// Os ids de `data[].id` de uma resposta de `/models` (formato da OpenAI).
+pub fn model_ids(json: &[u8]) -> Vec<String> {
+    crate::discover::ids_of(json)
+}
+
+/// Pede `GET <url>/models` a um provedor: os ids dos modelos.
+pub async fn list_models(url: &str, key: Option<&str>) -> Result<Vec<String>, String> {
+    let u = parse_url(url)?;
+    let io = connect(&u).await.map_err(|e| {
+        trf!(
+            "sem conexão com {}: {e}",
+            "no connection to {}: {e}",
+            u.host
+        )
+    })?;
+    let (mut send, conn) = hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(io))
+        .await
+        .map_err(|e| {
+            trf!(
+                "falha no HTTP com {}: {e}",
+                "HTTP failure with {}: {e}",
+                u.host
+            )
+        })?;
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let default = if u.tls { 443 } else { 80 };
+    let host = if u.port == default {
+        u.host.clone()
+    } else {
+        format!("{}:{}", u.host, u.port)
+    };
+    let mut req = hyper::Request::get(format!("{}/models", u.path))
+        .header("host", host)
+        .header("accept", "application/json")
+        .header("user-agent", "sandmux-chat");
+    if let Some(k) = key {
+        req = req.header("authorization", format!("Bearer {k}"));
+    }
+    let req = req
+        .body(Full::new(Bytes::new()))
+        .map_err(|e| e.to_string())?;
+    let resp = send.send_request(req).await.map_err(|e| {
+        trf!(
+            "falha no pedido a {}: {e}",
+            "request to {} failed: {e}",
+            u.host
+        )
+    })?;
+    let status = resp.status();
+    let b = resp
+        .into_body()
+        .collect()
+        .await
+        .map(|c| c.to_bytes())
+        .map_err(|e| trf!("resposta interrompida: {e}", "response interrupted: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("{status}: {}", error_message(&b)));
+    }
+    let ids = model_ids(&b);
+    if ids.is_empty() {
+        return Err(tr!("nenhum modelo na resposta", "no models in the answer").into());
+    }
+    Ok(ids)
+}
+
+/// Os modelos com todas as palavras do filtro, sem caixa.
+pub fn filter_models<'a>(all: &'a [String], filter: &str) -> Vec<&'a String> {
+    let words: Vec<String> = filter
+        .to_lowercase()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    all.iter()
+        .filter(|m| {
+            let l = m.to_lowercase();
+            words.iter().all(|w| l.contains(w.as_str()))
+        })
+        .collect()
+}
+
+/// Os modelos de todos os provedores, como `provedor/modelo`, em ordem, e
+/// um aviso por provedor que falhou. Cada provedor tem 10 s.
+/// Os provedores conhecidos sem chave ficam de fora: sem ela, não dá para
+/// conversar com eles.
+pub fn all_models(providers: &[Provider]) -> (Vec<String>, Vec<String>) {
+    let has_key =
+        |p: &Provider| !p.env.is_empty() && std::env::var(&p.env).is_ok_and(|k| !k.is_empty());
+    let handles: Vec<_> = providers
+        .iter()
+        .filter(|p| !p.is_known() || has_key(p))
+        .cloned()
+        .map(|p| {
+            std::thread::spawn(move || {
+                let key = (!p.env.is_empty())
+                    .then(|| std::env::var(&p.env).ok())
+                    .flatten()
+                    .filter(|k| !k.is_empty());
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string());
+                let r = rt.and_then(|rt| {
+                    rt.block_on(async {
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(10),
+                            list_models(&p.url, key.as_deref()),
+                        )
+                        .await
+                        .unwrap_or_else(|_| {
+                            Err(tr!("sem resposta em 10 s", "no answer in 10 s").into())
+                        })
+                    })
+                });
+                (p.name, r)
+            })
+        })
+        .collect();
+    let mut ids = Vec::new();
+    let mut notes = Vec::new();
+    for h in handles {
+        let Ok((name, r)) = h.join() else { continue };
+        match r {
+            Ok(list) => ids.extend(list.into_iter().map(|m| format!("{name}/{m}"))),
+            Err(e) => notes.push(format!("{name}: {e}")),
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    (ids, notes)
+}
+
 /// Confere a conversa antes de mandar: precisa de uma pergunta pendente.
 pub fn ready(c: &Conversa) -> Result<()> {
     if !c.pending() {
-        bail!("a conversa não tem pergunta sem resposta");
+        bail!(tr!(
+            "a conversa não tem pergunta sem resposta",
+            "the conversation has no unanswered question"
+        ));
     }
     Ok(())
 }

@@ -1,5 +1,7 @@
 # sandmux
 
+> English: [README.en.md](README.en.md)
+
 Multiplexador de terminal para rodar agentes de código dentro de um sandbox de segurança.
 
 O sandmux sobe harnesses de agente (opencode, hermes) em abas, no estilo do tmux. Cada aba roda confinada: o agente enxerga a pasta de trabalho e mais nada do seu HOME, o tráfego de rede é registrado e pode ser bloqueado, e nenhuma credencial real entra no sandbox.
@@ -70,7 +72,7 @@ O `setup` instala o perfil do AppArmor do lançador quando a distro restringe us
 
 | Comando | O que faz |
 |---|---|
-| `sandmux` (ou `sandmux tui`) | Abre a interface com abas, uma por sessão: troca com Ctrl+b n/p/1–9, nova aba com Ctrl+b c, lista com Ctrl+b w, sair com Ctrl+b d ([docs/tui.md](docs/tui.md)) |
+| `sandmux` (ou `sandmux tui`) | Abre a interface com abas, uma por sessão, com a barra em blocos coloridos embaixo: troca com Ctrl+b n/p/1–9, nova aba com Ctrl+b c, lista com Ctrl+b w, menu com Ctrl+b `:`, configurações com Ctrl+b `e` (toggles e temas como Catppuccin, Rosé Pine, Tokyo Night, Kanagawa, Gruvbox e Dracula, gravados no `config.toml`), sair com Ctrl+b d ([docs/tui.md](docs/tui.md)) |
 | `sandmux run <harness>` | Sobe o harness confinado na pasta atual. Harnesses: `opencode`, `hermes` e `shell` (um shell confinado, sem agente). Na primeira execução, pergunta se deve importar a configuração que você já tem. Num terminal, cria uma sessão no daemon e anexa a ela; sem terminal (script, pipe, CI), roda direto, em primeiro plano, sem daemon |
 | `sandmux ls` | Lista as sessões: identificador, nome, estado (viva, encerrada com o código, parada com o motivo), terminais anexados e pasta |
 | `sandmux attach [id]` | Anexa este terminal a uma sessão. Sem identificador, à única sessão viva |
@@ -82,6 +84,7 @@ O `setup` instala o perfil do AppArmor do lançador quando a distro restringe us
 | `sandmux daemon status`, `stop`, `restart`, `disable` | Estado do daemon; parar (as sessões vivas voltam na próxima subida); reiniciar com o binário instalado; parar e remover a unidade systemd |
 | `sandmux config show`, `list`, `set`, `unset`, `add`, `remove` | Mostra a política efetiva com a origem de cada valor, lista os perfis e altera o arquivo de configuração (`~/.config/sandmux/config.toml`) |
 | `sandmux import <harness>` | Copia a configuração existente do harness para o HOME sintético, trocando os segredos por valores falsos. Rodado de novo, copia só o que é novo; `--overwrite` substitui |
+| `sandmux doctor --fix` | Leva para o cofre as chaves reais gravadas dentro do sandbox (o "Connect provider" do opencode, por exemplo), deixando valores falsos no lugar |
 | `sandmux doctor` | Mostra se a máquina tem o suporte necessário e o que falta |
 
 Opções de `run`:
@@ -129,7 +132,7 @@ Cada pasta de trabalho tem o próprio Docker sem root, que o agente usa de dentr
 
 ### Rede
 
-Cada sandbox tem rede própria, e todo o tráfego passa por um gateway que refaz cada conexão a partir do host e registra o destino: domínio, porta, bytes e duração, nunca o conteúdo. Os metadados de cloud, o QUIC e o ICMP são bloqueados. Os serviços da sua máquina ficam em `host.sandmux.internal`.
+Cada sandbox tem rede própria, e todo o tráfego passa por um gateway que refaz cada conexão a partir do host e registra o destino: domínio, porta, bytes e duração, nunca o conteúdo. Os metadados de cloud, o QUIC e o ICMP são bloqueados. Os serviços da sua máquina ficam em `host.sandmux.internal`. Para um harness configurado com um serviço local (o LM Studio em `127.0.0.1:8888`, um MCP local), `host-ports` leva a porta do host ao `127.0.0.1` do sandbox, sem editar a configuração; a chave desse servidor fica no cofre, e no opencode os modelos do servidor local aparecem sozinhos.
 
 | Modo (`--network`) | O que passa |
 |---|---|

@@ -195,3 +195,31 @@ fn doctor_mostra_o_daemon_sem_iniciar() {
         "{s}"
     );
 }
+
+#[test]
+fn restart_troca_daemon_de_outro_protocolo() {
+    let e = Env::new();
+    let mut d = e
+        .daemon_cmd()
+        .env("SANDMUX_PROTOCOL_OVERRIDE", "999")
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    e.wait_socket();
+    // O cliente atual não fala com ele, mas `daemon restart` o troca pelo
+    // SIGTERM, que ele trata como o `stop`.
+    let out = e.run(&e.work, &["daemon", "restart"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("é de outra versão"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(d.wait().unwrap().success());
+    let st = stdout(&e.run(&e.work, &["daemon", "status"]));
+    assert!(
+        st.contains(&format!("protocolo {}", sandmux_proto::PROTOCOL)),
+        "{st}"
+    );
+    assert!(e.run(&e.work, &["daemon", "stop"]).status.success());
+}

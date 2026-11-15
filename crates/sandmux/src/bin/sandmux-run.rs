@@ -29,6 +29,8 @@ fn fail(msg: impl std::fmt::Display, code: i32) -> ! {
 }
 
 fn main() {
+    // O idioma vem do daemon por SANDMUX_LANG.
+    sandmux_spec::lang::set(sandmux_spec::lang::resolve_env(None));
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.as_slice() == ["--check"] {
         print!("{}", sandmux_launcher::support::check().to_wire());
@@ -37,30 +39,49 @@ fn main() {
     if let [flag, path] = args.as_slice()
         && flag == "--view-file"
     {
-        let bytes = std::fs::read(path)
-            .unwrap_or_else(|e| fail(format!("ler a visão {path}: {e}"), EXIT_SETUP));
+        let bytes = std::fs::read(path).unwrap_or_else(|e| {
+            fail(
+                sandmux_spec::trf!("ler a visão {path}: {e}", "read the view {path}: {e}"),
+                EXIT_SETUP,
+            )
+        });
         let spec = LaunchSpec::from_json(&bytes).unwrap_or_else(|e| fail(e, EXIT_SETUP));
         let e = sandmux_launcher::exec_view(&spec);
         fail(&e, e.exit_code());
     }
     let fd: i32 = match args.as_slice() {
-        [flag, n] if flag == "--spec-fd" => n
-            .parse()
-            .unwrap_or_else(|_| fail(format!("descritor inválido: {n}"), EXIT_SETUP)),
+        [flag, n] if flag == "--spec-fd" => n.parse().unwrap_or_else(|_| {
+            fail(
+                sandmux_spec::trf!("descritor inválido: {n}", "invalid descriptor: {n}"),
+                EXIT_SETUP,
+            )
+        }),
         _ => fail(
-            "uso: sandmux-run --spec-fd <N> | --view-file <arquivo> | --check",
+            sandmux_spec::tr!(
+                "uso: sandmux-run --spec-fd <N> | --view-file <arquivo> | --check",
+                "usage: sandmux-run --spec-fd <N> | --view-file <file> | --check"
+            ),
             EXIT_SETUP,
         ),
     };
     // SAFETY: fcntl só consulta o descritor.
     if fd < 3 || unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
-        fail(format!("descritor {fd} não está aberto"), EXIT_SETUP);
+        fail(
+            sandmux_spec::trf!(
+                "descritor {fd} não está aberto",
+                "descriptor {fd} is not open"
+            ),
+            EXIT_SETUP,
+        );
     }
     // SAFETY: o descritor foi herdado para este fim e passa a ser deste processo.
     let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
     let mut bytes = Vec::new();
     if let Err(e) = file.read_to_end(&mut bytes) {
-        fail(format!("ler a especificação: {e}"), EXIT_SETUP);
+        fail(
+            sandmux_spec::trf!("ler a especificação: {e}", "read the spec: {e}"),
+            EXIT_SETUP,
+        );
     }
     drop(file);
     let spec = LaunchSpec::from_json(&bytes).unwrap_or_else(|e| fail(e, EXIT_SETUP));

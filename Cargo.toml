@@ -30,7 +30,7 @@ tempfile = "3"
 vt100 = "0.18"
 thiserror = "2"
 toml_edit = "0.25"
-ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 crossterm = "0.29"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control", "image-data"] }
 png = "0.18"

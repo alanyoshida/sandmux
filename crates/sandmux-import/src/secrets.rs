@@ -20,11 +20,37 @@ pub const FAKE_PREFIX: &str = "sandmux-fake-";
 
 /// Uma troca feita: em qual chave (ou `<token>` quando foi pelo formato) e
 /// qual valor falso entrou no lugar.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Replacement {
     pub key: String,
     pub fake: String,
     pub line: usize,
+    /// O valor real (sem o esquema, como `Bearer`). A importação o descarta;
+    /// o `doctor --fix` o leva ao cofre. Nunca aparece no `Debug`.
+    pub real: String,
+}
+
+impl std::fmt::Debug for Replacement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Replacement")
+            .field("key", &self.key)
+            .field("fake", &self.fake)
+            .field("line", &self.line)
+            .field("real", &"<oculto>")
+            .finish()
+    }
+}
+
+/// O segredo de um valor, sem o esquema de autorização.
+fn secret_part(v: &str) -> String {
+    for scheme in ["Bearer ", "bearer ", "Basic ", "Token ", "token "] {
+        if let Some(rest) = v.strip_prefix(scheme)
+            && !rest.trim().is_empty()
+        {
+            return rest.trim().to_string();
+        }
+    }
+    v.trim().to_string()
 }
 
 /// Formato do arquivo, pela extensão ou pelo nome.
@@ -60,7 +86,7 @@ static KEY_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 static KEY_EXCLUDED_SUFFIX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)(_|-)?(type|mode|method|provider|strategy|enabled|file|path|dir|limit|count|max|min|ttl|timeout|expires?|header|name|url_base|scheme)$",
+        r"(?i)(_|-)?(type|mode|method|provider|strategy|enabled|file|path|dir|limit|count|max|min|ttl|timeout|expires?|header|name|url_base|scheme|fingerprint|hash|digest)$",
     )
     .unwrap()
 });
@@ -186,12 +212,15 @@ pub fn scrub(text: &str, format: Format) -> (String, Vec<Replacement>) {
                 l = JSON_PAIR
                     .replace_all(&l, |c: &Captures| {
                         let (k, sep, v) = (&c[1], &c[2], &c[3]);
-                        if is_credential_key(k) && qualifies(v) {
+                        // O falso depois de um esquema (`Bearer sandmux-fake-…`)
+                        // já é falso.
+                        if is_credential_key(k) && qualifies(v) && qualifies(&secret_part(v)) {
                             let fake = fake_value();
                             reps.push(Replacement {
                                 key: k.into(),
                                 fake: fake.clone(),
                                 line: i + 1,
+                                real: secret_part(v),
                             });
                             format!("\"{k}\"{sep}\"{}\"", replace_value(v, &fake))
                         } else {
@@ -215,12 +244,13 @@ pub fn scrub(text: &str, format: Format) -> (String, Vec<Replacement>) {
                         _ => (rest, ""),
                     };
                     let (q1, inner, q2) = strip_quotes(value.trim_end());
-                    if is_credential_key(k) && qualifies(inner) {
+                    if is_credential_key(k) && qualifies(inner) && qualifies(&secret_part(inner)) {
                         let fake = fake_value();
                         reps.push(Replacement {
                             key: k.trim_matches(|c| c == '"' || c == '\'').into(),
                             fake: fake.clone(),
                             line: i + 1,
+                            real: secret_part(inner),
                         });
                         l = format!(
                             "{pre}{k}{sep}{q1}{}{q2}{comment}",
@@ -242,6 +272,7 @@ pub fn scrub(text: &str, format: Format) -> (String, Vec<Replacement>) {
                     key: "<token>".into(),
                     fake: fake.clone(),
                     line: i + 1,
+                    real: m.to_string(),
                 });
                 fake
             })
@@ -270,6 +301,22 @@ mod tests {
         for s in secrets {
             assert!(!out.contains(s), "segredo sobrou: {s}\n{out}");
         }
+    }
+
+    #[test]
+    fn falso_depois_do_esquema_nao_e_trocado() {
+        let t = "{\"headers\": {\"Authorization\": \"Bearer sandmux-fake-0123456789abcdef\"}}";
+        let (out, reps) = scrub(t, Format::Json);
+        assert!(reps.is_empty(), "{reps:?}");
+        assert_eq!(out, t);
+        let (_, reps) = scrub(
+            "{\"Authorization\": \"Bearer sk-real-123456\"}",
+            Format::Json,
+        );
+        assert_eq!(reps.len(), 1);
+        assert_eq!(reps[0].real, "sk-real-123456");
+        assert!(!is_credential_key("secret_fingerprint"));
+        assert!(!is_credential_key("token_hash"));
     }
 
     #[test]

@@ -23,6 +23,7 @@ pub fn fetch(access: &VaultAccess, tag: &str) -> Vec<Injection> {
         version: env!("CARGO_PKG_VERSION").into(),
         data_dir: access.data_dir.clone(),
         config_dir: access.config_dir.clone(),
+        lang: String::new(),
     };
     if write_control(&mut s, &hello).is_err() {
         return Vec::new();

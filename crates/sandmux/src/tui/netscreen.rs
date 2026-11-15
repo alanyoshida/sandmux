@@ -10,6 +10,7 @@ use sandmux_policy::netcatalog;
 use sandmux_proto::msg::NetLine;
 use sandmux_proto::{LaunchOptions, Msg};
 use sandmux_spec::net::{Rule, RuleKind};
+use sandmux_spec::{tr, trf};
 
 /// Acessos mostrados.
 pub const LINES: u32 = 50;
@@ -26,13 +27,22 @@ pub enum Pending {
 impl Pending {
     pub fn prompt(&self) -> String {
         match self {
-            Pending::Deny(p) => format!("negar {p} em: a aba · p projeto · g global · Esc cancela"),
-            Pending::Allow(p) => {
-                format!("liberar {p} em: a aba · p projeto · g global · Esc cancela")
-            }
-            Pending::Toggle(r) => format!(
+            Pending::Deny(p) => trf!(
+                "negar {p} em: a aba · p projeto · g global · Esc cancela",
+                "deny {p} in: a tab · p project · g global · Esc cancels"
+            ),
+            Pending::Allow(p) => trf!(
+                "liberar {p} em: a aba · p projeto · g global · Esc cancela",
+                "allow {p} in: a tab · p project · g global · Esc cancels"
+            ),
+            Pending::Toggle(r) => trf!(
                 "{} {} em: p projeto · g global · Esc cancela",
-                if r.enabled { "desligar" } else { "ligar" },
+                "{} {} in: p project · g global · Esc cancels",
+                if r.enabled {
+                    tr!("desligar", "turn off")
+                } else {
+                    tr!("ligar", "turn on")
+                },
                 r.pattern
             ),
         }
@@ -141,8 +151,14 @@ pub fn fetch(
             .into_iter()
             .find(|s| s.id == id)
             .map(|s| s.opts)
-            .ok_or_else(|| format!("não existe a sessão {id}"))?,
-        Ok(_) => return Err("resposta inesperada do daemon".into()),
+            .ok_or_else(|| trf!("não existe a sessão {id}", "session {id} does not exist"))?,
+        Ok(_) => {
+            return Err(tr!(
+                "resposta inesperada do daemon",
+                "unexpected reply from the daemon"
+            )
+            .into());
+        }
         Err(e) => return Err(format!("{e:#}")),
     };
     let lines = match call(&Msg::Net {
@@ -204,15 +220,25 @@ pub fn apply(host: &Host, ns: &NetScreen, p: &Pending, layer: Layer) -> Result<E
         }),
         (Pending::Deny(pat), l) => {
             edit(host, &target(ns, l), Op::Add("deny".into(), pat.clone()))?;
-            Ok(Effect::File(format!("{pat} negado em {}", target(ns, l))))
+            Ok(Effect::File(trf!(
+                "{pat} negado em {}",
+                "{pat} denied in {}",
+                target(ns, l)
+            )))
         }
         (Pending::Allow(pat), l) => {
             edit(host, &target(ns, l), Op::Add("allow".into(), pat.clone()))?;
-            Ok(Effect::File(format!("{pat} liberado em {}", target(ns, l))))
+            Ok(Effect::File(trf!(
+                "{pat} liberado em {}",
+                "{pat} allowed in {}",
+                target(ns, l)
+            )))
         }
-        (Pending::Toggle(_), Layer::Tab) => {
-            Err("itens de catálogo e da allowlist ficam no projeto ou no global".into())
-        }
+        (Pending::Toggle(_), Layer::Tab) => Err(tr!(
+            "itens de catálogo e da allowlist ficam no projeto ou no global",
+            "catalog and allowlist items go in the project or the global layer"
+        )
+        .into()),
         (Pending::Toggle(r), l) => toggle(host, ns, r, l),
     }
 }
@@ -230,22 +256,31 @@ fn toggle(host: &Host, ns: &NetScreen, r: &Rule, l: Layer) -> Result<Effect, Str
         (None, true, _) => ("catalog-off", pat.clone(), r.enabled),
         (None, false, RuleKind::Allow) => ("allow-off", pat.clone(), r.enabled),
         (None, false, RuleKind::Deny) => {
-            return Err("uma regra da denylist sai com x, não se desliga".into());
+            return Err(tr!(
+                "uma regra da denylist sai com x, não se desliga",
+                "a denylist rule is removed with x, not turned off"
+            )
+            .into());
         }
     };
     // `on` = acrescentar a chave na camada; senão, tirar de onde estiver.
     if on {
         edit(host, &target(ns, l), Op::Add(key.into(), item.clone()))?;
     } else if !remove_everywhere(host, ns, key, &item) {
-        return Err(format!(
-            "{item} está em `{key}` de uma camada que a TUI não edita; use `sandmux config`"
+        return Err(trf!(
+            "{item} está em `{key}` de uma camada que a TUI não edita; use `sandmux config`",
+            "{item} is in `{key}` of a layer the TUI does not edit; use `sandmux config`"
         ));
     }
     Ok(Effect::File(format!(
         "{} {}",
-        if r.enabled { "desligado:" } else { "ligado:" },
+        if r.enabled {
+            tr!("desligado:", "turned off:")
+        } else {
+            tr!("ligado:", "turned on:")
+        },
         if key == "catalog" {
-            format!("grupo {item}")
+            trf!("grupo {item}", "group {item}")
         } else {
             pat
         }
@@ -255,7 +290,11 @@ fn toggle(host: &Host, ns: &NetScreen, r: &Rule, l: Layer) -> Result<Effect, Str
 /// Tira a regra selecionada da camada de onde veio.
 pub fn forget(host: &Host, r: &Rule) -> Result<Effect, String> {
     if r.origin.starts_with("catálogo") {
-        return Err("item de catálogo: use espaço para ligar ou desligar".into());
+        return Err(tr!(
+            "item de catálogo: use espaço para ligar ou desligar",
+            "catalog item: use space to turn it on or off"
+        )
+        .into());
     }
     let pat = r.pattern.to_string();
     let key = if r.kind == RuleKind::Deny {
@@ -276,10 +315,17 @@ pub fn forget(host: &Host, r: &Rule) -> Result<Effect, String> {
     } else if let Some(n) = r.origin.strip_prefix("perfil ") {
         Target::Profile(n.to_string())
     } else {
-        return Err(format!("origem desconhecida: {}", r.origin));
+        return Err(trf!(
+            "origem desconhecida: {}",
+            "unknown origin: {}",
+            r.origin
+        ));
     };
     edit(host, &t, Op::Remove(key.into(), pat.clone()))?;
-    Ok(Effect::File(format!("{pat} tirado de {t}")))
+    Ok(Effect::File(trf!(
+        "{pat} tirado de {t}",
+        "{pat} removed from {t}"
+    )))
 }
 
 /// Próximo modo da troca com `m` (sem-rede só no próximo lançamento, por

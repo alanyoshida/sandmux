@@ -83,7 +83,10 @@ pub async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<Option<Ws
     if len > MAX_FRAME {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "quadro WebSocket grande demais",
+            sandmux_spec::tr!(
+                "quadro WebSocket grande demais",
+                "WebSocket frame too large"
+            ),
         ));
     }
     let mask = if masked {

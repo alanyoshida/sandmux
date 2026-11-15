@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::{Array, DocumentMut, Item, Table, value};
 
 use crate::limits::{MemoryLimit, ProcessLimit};
+use sandmux_spec::{tr, trf};
 
 use super::{
     BOOL_KEYS, Config, ConfigError, LIMIT_KEYS, LIST_KEYS, expand, valid_path, valid_profile_name,
@@ -78,8 +79,8 @@ impl std::error::Error for EditError {}
 /// Interpreta um valor de liga e desliga da linha de comando.
 pub fn parse_bool(s: &str) -> Option<bool> {
     match s.to_lowercase().as_str() {
-        "true" | "sim" => Some(true),
-        "false" | "não" | "nao" => Some(false),
+        "true" | "sim" | "yes" => Some(true),
+        "false" | "não" | "nao" | "no" => Some(false),
         _ => None,
     }
 }
@@ -101,18 +102,27 @@ fn check_op(op: &Op, host: &Host) -> Result<(), EditError> {
             "network" => {
                 super::NetworkMode::parse(v).map_err(refused)?;
             }
-            _ => return Err(refused(format!("`{k}` não é um teto nem o modo de rede"))),
+            _ => {
+                return Err(refused(trf!(
+                    "`{k}` não é um teto nem o modo de rede",
+                    "`{k}` is neither a cap nor the network mode"
+                )));
+            }
         },
         Op::Unset(k) if LIMIT_KEYS.contains(&k.as_str()) || k == "network" => {}
         Op::Set(k, _) | Op::Unset(k) => {
             if !BOOL_KEYS.contains(&k.as_str()) {
                 let hint = if LIST_KEYS.contains(&k.as_str()) {
-                    format!("; `{k}` é uma lista, use `add` e `remove`")
+                    trf!(
+                        "; `{k}` é uma lista, use `add` e `remove`",
+                        "; `{k}` is a list, use `add` and `remove`"
+                    )
                 } else {
                     String::new()
                 };
-                return Err(refused(format!(
+                return Err(refused(trf!(
                     "chave desconhecida para `set` e `unset`: `{k}`. Chaves aceitas: {}{hint}",
+                    "unknown key for `set` and `unset`: `{k}`. Accepted keys: {}{hint}",
                     BOOL_KEYS
                         .iter()
                         .chain(LIMIT_KEYS)
@@ -124,13 +134,22 @@ fn check_op(op: &Op, host: &Host) -> Result<(), EditError> {
         }
         Op::Add(k, item) | Op::Remove(k, item) if super::MCP_LIST_KEYS.contains(&k.as_str()) => {
             if !super::valid_ssh_key_name(item) || item == "*" {
-                return Err(refused(format!(
-                    "`{k}` aceita nomes de servidores MCP: {item:?}"
+                return Err(refused(trf!(
+                    "`{k}` aceita nomes de servidores MCP: {item:?}",
+                    "`{k}` accepts MCP server names: {item:?}"
                 )));
             }
         }
         Op::Add(k, item) | Op::Remove(k, item) if super::FILE_LIST_KEYS.contains(&k.as_str()) => {
             super::valid_file_pattern(item).map_err(|e| refused(format!("`{k}`: {e}")))?;
+        }
+        Op::Add(k, item) | Op::Remove(k, item) if k == super::HOST_PORTS_KEY => {
+            if !item.parse::<u16>().is_ok_and(|n| n > 0) {
+                return Err(refused(trf!(
+                    "`host-ports` aceita números de porta de 1 a 65535: {item:?}",
+                    "`host-ports` accepts port numbers from 1 to 65535: {item:?}"
+                )));
+            }
         }
         Op::Add(k, item) | Op::Remove(k, item) if k == super::PORTS_KEY => {
             item.parse::<sandmux_spec::net::PortRule>()
@@ -138,16 +157,18 @@ fn check_op(op: &Op, host: &Host) -> Result<(), EditError> {
         }
         Op::Add(k, item) | Op::Remove(k, item) if k == super::SSH_KEYS || k == super::DB_KEY => {
             if !super::valid_ssh_key_name(item) {
-                return Err(refused(format!(
-                    "`ssh-keys` aceita nomes de chaves do cofre, ou \"*\": {item:?}"
+                return Err(refused(trf!(
+                    "`ssh-keys` aceita nomes de chaves do cofre, ou \"*\": {item:?}",
+                    "`ssh-keys` accepts vault key names, or \"*\": {item:?}"
                 )));
             }
         }
         Op::Add(k, item) | Op::Remove(k, item) if super::NET_LIST_KEYS.contains(&k.as_str()) => {
             if k == "catalog" {
                 if !crate::netcatalog::is_group(item) {
-                    return Err(refused(format!(
+                    return Err(refused(trf!(
                         "`catalog`: grupo desconhecido {item:?}. Grupos: {}",
+                        "`catalog`: unknown group {item:?}. Groups: {}",
                         crate::netcatalog::group_names()
                     )));
                 }
@@ -159,16 +180,25 @@ fn check_op(op: &Op, host: &Host) -> Result<(), EditError> {
         Op::Add(k, item) | Op::Remove(k, item) => {
             if !LIST_KEYS.contains(&k.as_str()) {
                 let hint = if BOOL_KEYS.contains(&k.as_str()) {
-                    format!("; `{k}` é liga e desliga, use `set` e `unset`")
+                    trf!(
+                        "; `{k}` é liga e desliga, use `set` e `unset`",
+                        "; `{k}` is an on/off switch, use `set` and `unset`"
+                    )
                 } else {
                     String::new()
                 };
-                return Err(refused(format!(
+                return Err(refused(trf!(
                     "chave desconhecida para `add` e `remove`: `{k}`. Chaves aceitas: {}{hint}",
+                    "unknown key for `add` and `remove`: `{k}`. Accepted keys: {}{hint}",
                     LIST_KEYS
                         .iter()
                         .chain(super::NET_LIST_KEYS)
-                        .chain([&super::SSH_KEYS, &super::DB_KEY, &super::PORTS_KEY])
+                        .chain([
+                            &super::SSH_KEYS,
+                            &super::DB_KEY,
+                            &super::PORTS_KEY,
+                            &super::HOST_PORTS_KEY
+                        ])
                         .chain(super::FILE_LIST_KEYS)
                         .chain(super::MCP_LIST_KEYS)
                         .copied()
@@ -178,13 +208,15 @@ fn check_op(op: &Op, host: &Host) -> Result<(), EditError> {
             }
             if k == "pass-env" {
                 if !valid_var_name(item) {
-                    return Err(refused(format!(
-                        "`pass-env` aceita só nomes de variáveis, nunca valores: {item:?}"
+                    return Err(refused(trf!(
+                        "`pass-env` aceita só nomes de variáveis, nunca valores: {item:?}",
+                        "`pass-env` only accepts variable names, never values: {item:?}"
                     )));
                 }
             } else if !valid_path(item) {
-                return Err(refused(format!(
-                    "`{k}` aceita só caminhos absolutos ou iniciados por `~/`: {item:?}"
+                return Err(refused(trf!(
+                    "`{k}` aceita só caminhos absolutos ou iniciados por `~/`: {item:?}",
+                    "`{k}` only accepts absolute paths or paths starting with `~/`: {item:?}"
                 )));
             }
             if k == "rw" && matches!(op, Op::Add(..)) {
@@ -202,9 +234,12 @@ fn target_table<'d>(doc: &'d mut DocumentMut, target: &Target) -> Result<&'d mut
     let (parent, key) = match target {
         Target::Global => {
             let item = doc.entry("global").or_insert(Item::Table(Table::new()));
-            return item
-                .as_table_mut()
-                .ok_or_else(|| refused("`global` no arquivo não é uma seção"));
+            return item.as_table_mut().ok_or_else(|| {
+                refused(tr!(
+                    "`global` no arquivo não é uma seção",
+                    "`global` in the file is not a section"
+                ))
+            });
         }
         Target::Profile(n) => ("profile", n.clone()),
         Target::Project(p) => ("project", p.display().to_string()),
@@ -214,14 +249,22 @@ fn target_table<'d>(doc: &'d mut DocumentMut, target: &Target) -> Result<&'d mut
         t.set_implicit(true);
         Item::Table(t)
     });
-    let parent_t = item
-        .as_table_mut()
-        .ok_or_else(|| refused(format!("`{parent}` no arquivo não é uma seção")))?;
+    let parent_t = item.as_table_mut().ok_or_else(|| {
+        refused(trf!(
+            "`{parent}` no arquivo não é uma seção",
+            "`{parent}` in the file is not a section"
+        ))
+    })?;
     parent_t
         .entry(&key)
         .or_insert(Item::Table(Table::new()))
         .as_table_mut()
-        .ok_or_else(|| refused(format!("`{parent}.{key}` no arquivo não é uma seção")))
+        .ok_or_else(|| {
+            refused(trf!(
+                "`{parent}.{key}` no arquivo não é uma seção",
+                "`{parent}.{key}` in the file is not a section"
+            ))
+        })
 }
 
 /// Tira a seção do alvo quando ficou vazia, e o pai implícito também.
@@ -260,15 +303,17 @@ pub fn apply(path: &Path, host: &Host, target: &Target, op: &Op) -> Result<Outco
     if let Target::Profile(n) = target
         && !valid_profile_name(n)
     {
-        return Err(refused(format!(
-            "nome de perfil inválido: {n:?}. Use letras minúsculas, números, `-` e `_`, começando por letra ou número"
+        return Err(refused(trf!(
+            "nome de perfil inválido: {n:?}. Use letras minúsculas, números, `-` e `_`, começando por letra ou número",
+            "invalid profile name: {n:?}. Use lowercase letters, digits, `-` and `_`, starting with a letter or digit"
         )));
     }
     if let Target::Project(p) = target
         && !p.is_absolute()
     {
-        return Err(refused(format!(
+        return Err(refused(trf!(
             "a pasta de um projeto precisa ser um caminho absoluto: {}",
+            "a project folder must be an absolute path: {}",
             p.display()
         )));
     }
@@ -276,7 +321,13 @@ pub fn apply(path: &Path, host: &Host, target: &Target, op: &Op) -> Result<Outco
     let original = match std::fs::read_to_string(path) {
         Ok(t) => Some(t),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(EditError::Io(format!("ler {}: {e}", path.display()))),
+        Err(e) => {
+            return Err(EditError::Io(trf!(
+                "ler {}: {e}",
+                "read {}: {e}",
+                path.display()
+            )));
+        }
     };
     let text = original.clone().unwrap_or_default();
     // O arquivo atual precisa ser válido: editar por cima de um erro
@@ -302,7 +353,10 @@ pub fn apply(path: &Path, host: &Host, target: &Target, op: &Op) -> Result<Outco
         match op {
             Op::Set(k, v) => {
                 if t.get(k).and_then(Item::as_bool) == Some(*v) {
-                    notice = Some(format!("`{k}` já é {v} em {target}"));
+                    notice = Some(trf!(
+                        "`{k}` já é {v} em {target}",
+                        "`{k}` is already {v} in {target}"
+                    ));
                 } else if let Some(Item::Value(old)) = t.get_mut(k) {
                     // Mantém o comentário ao lado do valor.
                     let decor = old.decor().clone();
@@ -322,7 +376,10 @@ pub fn apply(path: &Path, host: &Host, target: &Target, op: &Op) -> Result<Outco
                     .map(|x| x.to_string().trim().to_string())
                     == Some(new.to_string().trim().to_string())
                 {
-                    notice = Some(format!("`{k}` já é {v} em {target}"));
+                    notice = Some(trf!(
+                        "`{k}` já é {v} em {target}",
+                        "`{k}` is already {v} in {target}"
+                    ));
                 } else if let Some(Item::Value(old)) = t.get_mut(k) {
                     let decor = old.decor().clone();
                     *old = new;
@@ -333,7 +390,10 @@ pub fn apply(path: &Path, host: &Host, target: &Target, op: &Op) -> Result<Outco
             }
             Op::Unset(k) => {
                 if t.remove(k).is_none() {
-                    notice = Some(format!("`{k}` não estava definida em {target}"));
+                    notice = Some(trf!(
+                        "`{k}` não estava definida em {target}",
+                        "`{k}` was not set in {target}"
+                    ));
                 }
             }
             Op::Add(k, item) => {
@@ -342,9 +402,27 @@ pub fn apply(path: &Path, host: &Host, target: &Target, op: &Op) -> Result<Outco
                     .entry(k)
                     .or_insert(value(Array::new()))
                     .as_array_mut()
-                    .ok_or_else(|| refused(format!("`{k}` no arquivo não é uma lista")))?;
-                if arr.iter().any(|v| v.as_str() == Some(item)) {
-                    notice = Some(format!("{item} já está em `{k}` de {target}"));
+                    .ok_or_else(|| {
+                        refused(trf!(
+                            "`{k}` no arquivo não é uma lista",
+                            "`{k}` in the file is not a list"
+                        ))
+                    })?;
+                // `host-ports` guarda números; as outras listas, textos.
+                let num = (k == super::HOST_PORTS_KEY)
+                    .then(|| item.parse::<i64>().ok())
+                    .flatten();
+                let same = |v: &toml_edit::Value| match num {
+                    Some(n) => v.as_integer() == Some(n),
+                    None => v.as_str() == Some(item),
+                };
+                if arr.iter().any(same) {
+                    notice = Some(trf!(
+                        "{item} já está em `{k}` de {target}",
+                        "{item} is already in `{k}` of {target}"
+                    ));
+                } else if let Some(n) = num {
+                    arr.push(n);
                 } else {
                     arr.push(item.as_str());
                 }
@@ -353,10 +431,22 @@ pub fn apply(path: &Path, host: &Host, target: &Target, op: &Op) -> Result<Outco
                 let item = &canon(k, item);
                 let arr = t.get_mut(k).and_then(Item::as_array_mut);
                 let Some(arr) = arr else {
-                    return Err(refused(format!("{item} não está em `{k}` de {target}")));
+                    return Err(refused(trf!(
+                        "{item} não está em `{k}` de {target}",
+                        "{item} is not in `{k}` of {target}"
+                    )));
                 };
-                let Some(i) = arr.iter().position(|v| v.as_str() == Some(item)) else {
-                    return Err(refused(format!("{item} não está em `{k}` de {target}")));
+                let num = (k == super::HOST_PORTS_KEY)
+                    .then(|| item.parse::<i64>().ok())
+                    .flatten();
+                let Some(i) = arr.iter().position(|v| match num {
+                    Some(n) => v.as_integer() == Some(n),
+                    None => v.as_str() == Some(item),
+                }) else {
+                    return Err(refused(trf!(
+                        "{item} não está em `{k}` de {target}",
+                        "{item} is not in `{k}` of {target}"
+                    )));
                 };
                 arr.remove(i);
                 if arr.is_empty() {
@@ -380,14 +470,120 @@ pub fn apply(path: &Path, host: &Host, target: &Target, op: &Op) -> Result<Outco
     if original.is_none() && new_text.trim().is_empty() {
         return Ok(Outcome {
             changed: false,
-            notice: Some(format!("nada a remover em {target}")),
+            notice: Some(trf!(
+                "nada a remover em {target}",
+                "nothing to remove in {target}"
+            )),
         });
     }
     // O resultado precisa ser válido antes de ir para o disco.
     let cfg = Config::parse(path, &new_text).map_err(|e| refused(e.to_string()))?;
     let _ = cfg;
     write_atomic(path, &new_text)
-        .map_err(|e| EditError::Io(format!("gravar {}: {e}", path.display())))?;
+        .map_err(|e| EditError::Io(trf!("gravar {}: {e}", "write {}: {e}", path.display())))?;
+    Ok(Outcome {
+        changed: true,
+        notice: None,
+    })
+}
+
+/// Grava (ou, com `None`, apaga) `key` na tabela `section` (como `["tui"]`,
+/// `["assistant"]` ou `["global"]`), para as chaves fora das camadas: o
+/// tema, o estilo da barra, os modelos do assistente, a retenção da rede.
+/// Cria a tabela que falta, apaga a que ficou vazia e valida o arquivo
+/// inteiro antes de gravar.
+pub fn set_value(
+    path: &Path,
+    section: &[&str],
+    key: &str,
+    new: Option<toml_edit::Value>,
+) -> Result<Outcome, EditError> {
+    if section.is_empty() {
+        return Err(refused(tr!(
+            "a chave precisa de uma seção",
+            "the key needs a section"
+        )));
+    }
+    let original = match std::fs::read_to_string(path) {
+        Ok(t) => Some(t),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return Err(EditError::Io(trf!(
+                "ler {}: {e}",
+                "read {}: {e}",
+                path.display()
+            )));
+        }
+    };
+    let text = original.clone().unwrap_or_default();
+    Config::parse(path, &text).map_err(EditError::Invalid)?;
+    let mut doc: DocumentMut = text
+        .parse()
+        .map_err(|e: toml_edit::TomlError| EditError::Io(e.to_string()))?;
+    let name = section.join(".");
+    {
+        let mut t: &mut Table = doc.as_table_mut();
+        for (i, s) in section.iter().enumerate() {
+            let last = i + 1 == section.len();
+            t = t
+                .entry(s)
+                .or_insert_with(|| {
+                    let mut n = Table::new();
+                    n.set_implicit(!last);
+                    Item::Table(n)
+                })
+                .as_table_mut()
+                .ok_or_else(|| {
+                    refused(trf!(
+                        "`{name}` no arquivo não é uma seção",
+                        "`{name}` in the file is not a section"
+                    ))
+                })?;
+        }
+        match new {
+            Some(v) => {
+                if let Some(Item::Value(old)) = t.get_mut(key) {
+                    let decor = old.decor().clone();
+                    *old = v;
+                    *old.decor_mut() = decor;
+                } else {
+                    t.insert(key, value(v));
+                }
+            }
+            None => {
+                t.remove(key);
+            }
+        }
+    }
+    // Tira as tabelas que ficaram vazias, de dentro para fora.
+    fn prune_path(t: &mut Table, path: &[&str]) {
+        let Some((first, rest)) = path.split_first() else {
+            return;
+        };
+        if let Some(n) = t.get_mut(first).and_then(Item::as_table_mut) {
+            prune_path(n, rest);
+            if n.is_empty() {
+                t.remove(first);
+            }
+        }
+    }
+    prune_path(doc.as_table_mut(), section);
+    let mut new_text = doc.to_string();
+    if !text.starts_with('\n') {
+        new_text = new_text.trim_start_matches('\n').to_string();
+    }
+    if original.as_deref().unwrap_or("") == new_text {
+        return Ok(Outcome {
+            changed: false,
+            notice: Some(trf!(
+                "`{key}` já estava assim em [{name}]",
+                "`{key}` was already like that in [{name}]"
+            )),
+        });
+    }
+    Config::parse(path, &new_text).map_err(|e| refused(e.message))?;
+    write_atomic(path, &new_text)
+        .map_err(|e| EditError::Io(trf!("gravar {}: {e}", "write {}: {e}", path.display())))?;
     Ok(Outcome {
         changed: true,
         notice: None,
@@ -465,6 +661,42 @@ mod tests {
 
     fn read(t: &T) -> String {
         std::fs::read_to_string(&t.f).unwrap()
+    }
+
+    #[test]
+    fn portas_do_host_como_numeros() {
+        let t = setup();
+        run(
+            &t,
+            Target::Global,
+            Op::Add("host-ports".into(), "8888".into()),
+        )
+        .unwrap();
+        run(
+            &t,
+            Target::Global,
+            Op::Add("host-ports".into(), "9000".into()),
+        )
+        .unwrap();
+        let o = run(
+            &t,
+            Target::Global,
+            Op::Add("host-ports".into(), "8888".into()),
+        )
+        .unwrap();
+        assert!(!o.changed);
+        assert!(run(&t, Target::Global, Op::Add("host-ports".into(), "0".into())).is_err());
+        assert!(run(&t, Target::Global, Op::Add("host-ports".into(), "x".into())).is_err());
+        let text = std::fs::read_to_string(&t.f).unwrap();
+        assert!(text.contains("host-ports = [8888, 9000]"), "{text}");
+        run(
+            &t,
+            Target::Global,
+            Op::Remove("host-ports".into(), "8888".into()),
+        )
+        .unwrap();
+        let c = super::super::Config::load(&t.f).unwrap();
+        assert_eq!(c.global.host_ports, vec![9000]);
     }
 
     #[test]
@@ -673,5 +905,43 @@ mod tests {
         assert_eq!(parse_bool("Não"), Some(false));
         assert_eq!(parse_bool("nao"), Some(false));
         assert_eq!(parse_bool("talvez"), None);
+    }
+
+    #[test]
+    fn valor_fora_das_camadas() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        std::fs::write(&p, "# meu arquivo\n[global]\nkvm = true\n").unwrap();
+        let o = set_value(&p, &["tui"], "theme", Some("dracula".into())).unwrap();
+        assert!(o.changed);
+        set_value(
+            &p,
+            &["assistant"],
+            "models",
+            Some(Array::from_iter(["openai/x"]).into()),
+        )
+        .unwrap();
+        set_value(&p, &["global"], "net-log-days", Some(30i64.into())).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.starts_with("# meu arquivo"), "{text}");
+        let c = Config::parse(&p, &text).unwrap();
+        assert_eq!(c.tui.theme.name, "dracula");
+        assert_eq!(c.assistant.models, vec!["openai/x"]);
+        assert_eq!(c.net_log_days, Some(30));
+        assert!(c.global.kvm == Some(true));
+        // Um valor que deixaria o arquivo inválido é recusado e não grava.
+        let e = set_value(&p, &["tui"], "theme", Some("nenhum".into())).unwrap_err();
+        assert!(e.to_string().contains("tema desconhecido"), "{e}");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
+        // Apagar a última chave tira a seção.
+        set_value(&p, &["tui"], "theme", None).unwrap();
+        set_value(&p, &["assistant"], "models", None).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            !text.contains("[tui]") && !text.contains("[assistant]"),
+            "{text}"
+        );
+        let o = set_value(&p, &["tui"], "theme", None).unwrap();
+        assert!(!o.changed);
     }
 }

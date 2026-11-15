@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
+use sandmux_spec::{tr, trf};
 
 pub const UNIT: &str = "sandmuxd.service";
 
@@ -75,13 +76,14 @@ fn systemctl(args: &[&str]) -> Result<()> {
         .args(args)
         .stdin(Stdio::null())
         .output()
-        .context("executar systemctl")?;
+        .context(tr!("executar systemctl", "run systemctl"))?;
     if !out.status.success() {
-        bail!(
+        bail!(trf!(
             "systemctl --user {} falhou: {}",
+            "systemctl --user {} failed: {}",
             args.join(" "),
             String::from_utf8_lossy(&out.stderr).trim()
-        );
+        ));
     }
     Ok(())
 }
@@ -99,7 +101,7 @@ pub fn write_unit_in(dir: &Path, exec: &Path, homes: Homes<'_>) -> Result<bool> 
         return Ok(false);
     }
     std::fs::create_dir_all(dir)?;
-    std::fs::write(&path, text).with_context(|| format!("gravar {}", path.display()))?;
+    std::fs::write(&path, text).with_context(|| trf!("gravar {}", "write {}", path.display()))?;
     Ok(true)
 }
 
@@ -110,13 +112,21 @@ pub fn install_and_start(exec: &Path, homes: Homes<'_>) -> Result<()> {
     if written {
         if existed {
             eprintln!(
-                "sandmux: atualizei a unidade systemd de usuário {} (o binário ou as pastas do sandmux mudaram)",
-                unit_path().display()
+                "{}",
+                trf!(
+                    "sandmux: atualizei a unidade systemd de usuário {} (o binário ou as pastas do sandmux mudaram)",
+                    "sandmux: updated the systemd user unit {} (the binary or the sandmux folders changed)",
+                    unit_path().display()
+                )
             );
         } else {
             eprintln!(
-                "sandmux: instalei a unidade systemd de usuário {}, habilitada no login, para as sessões sobreviverem ao terminal e voltarem depois de um reboot. `sandmux daemon disable` remove.",
-                unit_path().display()
+                "{}",
+                trf!(
+                    "sandmux: instalei a unidade systemd de usuário {}, habilitada no login, para as sessões sobreviverem ao terminal e voltarem depois de um reboot. `sandmux daemon disable` remove.",
+                    "sandmux: installed the systemd user unit {}, enabled at login, so sessions survive the terminal and come back after a reboot. `sandmux daemon disable` removes it.",
+                    unit_path().display()
+                )
             );
         }
         systemctl(&["daemon-reload"])?;
@@ -134,7 +144,7 @@ pub fn disable(call_systemctl: bool) -> Result<bool> {
     let removed = match std::fs::remove_file(&path) {
         Ok(()) => true,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(e) => return Err(e).with_context(|| format!("remover {}", path.display())),
+        Err(e) => return Err(e).with_context(|| trf!("remover {}", "remove {}", path.display())),
     };
     if call_systemctl && removed {
         systemctl(&["daemon-reload"])?;

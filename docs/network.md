@@ -41,6 +41,33 @@ curl http://host.sandmux.internal:8080/
 
 A variável `SANDMUX_HOST` tem esse nome. A rede local (os outros computadores da sua rede) é alcançada normalmente.
 
+### Portas do host
+
+Um harness configurado no host para um serviço local, como o LM Studio em `http://127.0.0.1:8888/v1`, um Ollama ou um MCP em `127.0.0.1`, recebe `ECONNREFUSED` no sandbox, porque lá o `127.0.0.1` é do próprio sandbox. A chave `host-ports` leva essas portas do host para o `127.0.0.1` de dentro, sem editar a configuração do harness:
+
+```bash
+sandmux config add host-ports 8888 --global
+sandmux run opencode --host-port 9000
+```
+
+- **Como funciona:** o supervisor escuta `127.0.0.1:porta` dentro do namespace de rede do sandbox e repassa cada conexão ao `127.0.0.1:porta` do host.
+- **Registro:** cada conexão gera uma linha `tcp` para `host.sandmux.internal` em `127.0.0.1:porta`.
+- **Política:** a porta é uma permissão explícita e vale em qualquer modo com rede, inclusive `custom` e `inferencia`. Só uma regra da denylist que casa com `host.sandmux.internal` a recusa. No modo sem rede não há gateway, e a chave não vale.
+- **Ao vivo:** uma porta acrescentada com a sessão viva vale em até 2 segundos; uma tirada fecha.
+- **Porta ocupada:** se o agente já escuta naquela porta dentro do sandbox, o encaminhamento não abre, e o registro diz o motivo (uma vez por minuto).
+- **Chave no cofre:** um servidor local que pede chave (o Unsloth Studio, por exemplo) recebe o valor real sem ele entrar no sandbox. Guarde a chave no cofre com o domínio `host.sandmux.internal` (`sandmux vault add unsloth --domain host.sandmux.internal`, ou pelo `sandmux vault import`, quando a importação trocou a chave por um falso).
+  - Quando a conexão começa com um pedido HTTP/1.x, ela passa pelo mesmo proxy das conexões decifradas, que troca o falso pelo real nos cabeçalhos e no caminho.
+  - Cada pedido gera uma linha `http`, com o método, o caminho, o status e o nome do segredo.
+  - Sem segredo para o host, ou sem HTTP, a conexão é copiada como está. Servidor local com TLS não tem troca.
+- **Modelos no opencode:** o opencode só mostra, num provedor próprio, os modelos escritos na configuração. Ao lançar uma sessão do opencode, o daemon pergunta aos servidores locais quais existem e os cadastra só naquela execução, sem editar arquivos. A lista é refeita a cada lançamento: Ctrl+b r na aba pega um modelo novo do servidor.
+  - **Quais provedores:** os que apontam para `127.0.0.1`, `localhost` ou `[::1]` (o `baseURL`, ou o padrão do `lmstudio`, porta 1234, e do `ollama`, porta 11434), com a porta em `host-ports`.
+  - **Consulta:** é `GET <baseURL>/models`, com 1,5 s para conectar e 6 s para a resposta (o Unsloth Studio leva perto de 1,6 s). Um cabeçalho `Authorization` ou `apiKey` com valor falso vai com o real do cofre (domínio `host.sandmux.internal`), fora do sandbox.
+  - **Resultado:** os modelos entram no `OPENCODE_CONFIG_CONTENT`, somados aos da configuração. Um servidor fora do ar deixa o provedor como está.
+  - **Cofre trancado:** sem o cofre, a consulta não tem a chave, e a lista volta vazia. Por isso, depois de um reinício do daemon ou de um reboot, uma aba do opencode cujos provedores locais usam uma chave do cofre fica "aguardando cofre" e sobe, já com a lista, no desbloqueio.
+- **Sem eco:** a porta do host não é publicada de volta como [porta de entrada](#portas-publicadas).
+- **Importação:** quando a configuração importada de um harness cita `127.0.0.1`, `localhost` ou `[::1]` com porta, o `sandmux import` lista as portas e o comando de cada uma.
+- **Aba de chat:** não recebe portas do host; um servidor local de modelo entra como provedor próprio ([chat.md](chat.md#provedor-próprio)).
+
 ## Modos
 
 | Modo | O que passa |

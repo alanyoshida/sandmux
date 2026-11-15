@@ -18,6 +18,7 @@ use crate::host::Host;
 use crate::limits::{self, Limits, MemoryLimit, ProcessLimit};
 use crate::netcatalog;
 use sandmux_spec::net::{NetPolicy, Pattern, Rule, RuleKind};
+use sandmux_spec::{tr, trf};
 
 /// Nome do arquivo dentro da pasta de configuração.
 pub const FILE: &str = "config.toml";
@@ -41,13 +42,15 @@ pub const NET_LIST_KEYS: &[&str] = &[
     "catalog-off",
     "decrypt",
 ];
-pub const GLOBAL_ONLY_KEYS: &[&str] = &["net-log-days", "net-log-max"];
+pub const GLOBAL_ONLY_KEYS: &[&str] = &["net-log-days", "net-log-max", "language"];
 /// Chaves SSH do cofre que a sessão pode usar (`"*"` é todas).
 pub const SSH_KEYS: &str = "ssh-keys";
 /// Conexões de banco do cofre que a sessão pode usar (`"*"` é todas).
 pub const DB_KEY: &str = "db";
 /// Portas de entrada publicadas (`8642` ou `8443@0.0.0.0`).
 pub const PORTS_KEY: &str = "ports";
+/// Portas do host levadas ao `127.0.0.1` do sandbox.
+pub const HOST_PORTS_KEY: &str = "host-ports";
 
 /// Listas de servidores MCP (nomes).
 pub const MCP_LIST_KEYS: &[&str] = &["mcp-deny", "mcp-allow"];
@@ -93,8 +96,9 @@ impl NetworkMode {
             "inferencia" => Ok(NetworkMode::Inferencia),
             "custom" => Ok(NetworkMode::Custom),
             "sem-rede" => Ok(NetworkMode::SemRede),
-            other => Err(format!(
-                "modo de rede inválido: {other:?}; use \"aberta\", \"inferencia\", \"custom\" ou \"sem-rede\""
+            other => Err(trf!(
+                "modo de rede inválido: {other:?}; use \"aberta\", \"inferencia\", \"custom\" ou \"sem-rede\"",
+                "invalid network mode: {other:?}; use \"aberta\", \"inferencia\", \"custom\" or \"sem-rede\""
             )),
         }
     }
@@ -113,10 +117,13 @@ impl NetworkMode {
     /// Descrição curta, para o resumo da política.
     pub fn describe(self) -> &'static str {
         match self {
-            NetworkMode::Aberta => "aberta, registrada",
-            NetworkMode::Inferencia => "só inferência, registrada",
-            NetworkMode::Custom => "custom (allowlist), registrada",
-            NetworkMode::SemRede => "sem rede",
+            NetworkMode::Aberta => tr!("aberta, registrada", "open, logged"),
+            NetworkMode::Inferencia => tr!("só inferência, registrada", "inference only, logged"),
+            NetworkMode::Custom => tr!(
+                "custom (allowlist), registrada",
+                "custom (allowlist), logged"
+            ),
+            NetworkMode::SemRede => tr!("sem rede", "no network"),
         }
     }
 }
@@ -148,18 +155,18 @@ pub struct ConfigError {
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.line {
-            Some(l) => write!(
-                f,
+            Some(l) => f.write_str(&trf!(
                 "configuração inválida em {}, linha {l}: {}",
+                "invalid configuration in {}, line {l}: {}",
                 self.path.display(),
                 self.message
-            ),
-            None => write!(
-                f,
+            )),
+            None => f.write_str(&trf!(
                 "configuração inválida em {}: {}",
+                "invalid configuration in {}: {}",
                 self.path.display(),
                 self.message
-            ),
+            )),
         }
     }
 }
@@ -192,6 +199,8 @@ pub struct Layer {
     pub db: Vec<String>,
     /// Portas de entrada publicadas.
     pub ports: Vec<sandmux_spec::net::PortRule>,
+    /// Portas do host (`host-ports`).
+    pub host_ports: Vec<u16>,
     /// Política de arquivos: `file-deny`, `file-allow`, `secret-files` e
     /// `secret-files-off`, como escritos.
     pub file_deny: Vec<String>,
@@ -311,6 +320,10 @@ impl Layer {
             let v: Vec<String> = self.ports.iter().map(|p| p.to_string()).collect();
             out.push(format!("ports = [{}]", list(&v)));
         }
+        if !self.host_ports.is_empty() {
+            let v: Vec<String> = self.host_ports.iter().map(|p| p.to_string()).collect();
+            out.push(format!("host-ports = [{}]", v.join(", ")));
+        }
         for (k, v) in [
             ("file-deny", &self.file_deny),
             ("file-allow", &self.file_allow),
@@ -352,6 +365,8 @@ pub const TUI_ACTIONS: &[(&str, char)] = &[
     ("mcp", 'm'),
     ("chat", 'i'),
     ("command", 'g'),
+    ("menu", ':'),
+    ("settings", 'e'),
 ];
 
 /// Uma cor do tema da TUI.
@@ -383,7 +398,12 @@ const ANSI_NAMES: &[&str] = &[
 ];
 
 /// Formatos de cor aceitos, para mensagens.
-pub const COLOR_FORMATS: &str = "\"#rrggbb\", um índice de 0 a 255, um dos 16 nomes ANSI (\"red\", \"bright-blue\"…) ou \"default\"";
+pub fn color_formats() -> &'static str {
+    tr!(
+        "\"#rrggbb\", um índice de 0 a 255, um dos 16 nomes ANSI (\"red\", \"bright-blue\"…) ou \"default\"",
+        "\"#rrggbb\", an index from 0 to 255, one of the 16 ANSI names (\"red\", \"bright-blue\"…) or \"default\""
+    )
+}
 
 impl ThemeColor {
     pub fn parse(s: &str) -> Option<ThemeColor> {
@@ -425,10 +445,238 @@ pub const THEME_ELEMENTS: &[&str] = &[
     "error-fg",
     "selection-fg",
     "selection-bg",
+    "tab-index-fg",
+    "tab-index-bg",
+    "tab-active-index-fg",
+    "tab-active-index-bg",
+    "chip-fg",
+    "chip-harness-bg",
+    "chip-folder-bg",
+    "chip-vault-bg",
+    "chip-alert-bg",
+    "chip-time-bg",
+    "accent",
+    "muted-fg",
+    "ok-fg",
+    "page-bg",
+    "page-fg",
+    "surface-bg",
 ];
 
+/// Seções do painel lateral, na ordem padrão (nomes de `panel-order` e
+/// `panel-collapsed`).
+pub const PANEL_SECTIONS: &[&str] = &["protecao", "recursos", "portas", "rede", "mcp"];
+
+/// Estilo da barra de abas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BarStyle {
+    /// Blocos coloridos, sem símbolos especiais: funciona em qualquer fonte.
+    #[default]
+    Blocos,
+    /// Blocos e separadores do Powerline, com ícones do Nerd Font.
+    Powerline,
+    /// Texto simples, sem símbolos especiais.
+    Simples,
+}
+
 /// Temas embutidos.
-pub const THEMES: &[&str] = &["padrao", "escuro", "claro"];
+pub const THEMES: &[&str] = &[
+    "padrao",
+    "escuro",
+    "claro",
+    "catppuccin",
+    "rose-pine",
+    "tokyo-night",
+    "kanagawa",
+    "gruvbox",
+    "dracula",
+];
+
+/// Paleta base de um tema pronto, de onde saem as cores dos elementos.
+struct Palette {
+    /// Fundo da barra e da página.
+    bg: &'static str,
+    /// Fundo das superfícies: nomes das abas, lateral da página.
+    surface: &'static str,
+    /// Fundo do número das abas de fundo.
+    overlay: &'static str,
+    /// Texto sobre `overlay`.
+    on_overlay: &'static str,
+    fg: &'static str,
+    muted: &'static str,
+    accent: &'static str,
+    /// Segundo destaque: o bloco do harness.
+    accent2: &'static str,
+    red: &'static str,
+    green: &'static str,
+    yellow: &'static str,
+    cyan: &'static str,
+}
+
+impl Palette {
+    fn pairs(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("bar-bg", self.bg),
+            ("tab-active-fg", self.bg),
+            ("tab-active-bg", self.accent),
+            ("tab-fg", self.muted),
+            ("tab-bg", self.surface),
+            ("status-fg", self.yellow),
+            ("note-fg", self.bg),
+            ("note-bg", self.red),
+            ("modal-border", self.accent),
+            ("modal-title", self.accent),
+            ("selected-fg", self.bg),
+            ("selected-bg", self.accent),
+            ("error-fg", self.red),
+            ("selection-fg", self.bg),
+            ("selection-bg", self.yellow),
+            ("tab-index-fg", self.on_overlay),
+            ("tab-index-bg", self.overlay),
+            ("tab-active-index-fg", self.bg),
+            ("tab-active-index-bg", self.accent),
+            ("chip-fg", self.bg),
+            ("chip-harness-bg", self.accent2),
+            ("chip-folder-bg", self.accent),
+            ("chip-vault-bg", self.green),
+            ("chip-alert-bg", self.yellow),
+            ("chip-time-bg", self.cyan),
+            ("accent", self.accent),
+            ("muted-fg", self.muted),
+            ("ok-fg", self.green),
+            ("page-bg", self.bg),
+            ("page-fg", self.fg),
+            ("surface-bg", self.surface),
+        ]
+    }
+}
+
+/// As paletas dos temas prontos, das versões públicas de cada um.
+fn palette(name: &str) -> Option<Palette> {
+    let p = match name {
+        // Catppuccin Mocha com azul.
+        "escuro" => Palette {
+            bg: "#1e1e2e",
+            surface: "#313244",
+            overlay: "#45475a",
+            on_overlay: "#cdd6f4",
+            fg: "#cdd6f4",
+            muted: "#a6adc8",
+            accent: "#89b4fa",
+            accent2: "#f38ba8",
+            red: "#f38ba8",
+            green: "#a6e3a1",
+            yellow: "#f9e2af",
+            cyan: "#89dceb",
+        },
+        // Catppuccin Latte.
+        "claro" => Palette {
+            bg: "#eff1f5",
+            surface: "#ccd0da",
+            overlay: "#9ca0b0",
+            on_overlay: "#eff1f5",
+            fg: "#4c4f69",
+            muted: "#5c5f77",
+            accent: "#1e66f5",
+            accent2: "#d20f39",
+            red: "#d20f39",
+            green: "#40a02b",
+            yellow: "#df8e1d",
+            cyan: "#04a5e5",
+        },
+        // Catppuccin Mocha com mauve.
+        "catppuccin" => Palette {
+            bg: "#1e1e2e",
+            surface: "#313244",
+            overlay: "#45475a",
+            on_overlay: "#cdd6f4",
+            fg: "#cdd6f4",
+            muted: "#a6adc8",
+            accent: "#cba6f7",
+            accent2: "#f5c2e7",
+            red: "#f38ba8",
+            green: "#a6e3a1",
+            yellow: "#f9e2af",
+            cyan: "#89dceb",
+        },
+        // Rosé Pine (principal).
+        "rose-pine" => Palette {
+            bg: "#191724",
+            surface: "#26233a",
+            overlay: "#403d52",
+            on_overlay: "#e0def4",
+            fg: "#e0def4",
+            muted: "#908caa",
+            accent: "#c4a7e7",
+            accent2: "#ebbcba",
+            red: "#eb6f92",
+            green: "#9ccfd8",
+            yellow: "#f6c177",
+            cyan: "#31748f",
+        },
+        // Tokyo Night (Night).
+        "tokyo-night" => Palette {
+            bg: "#1a1b26",
+            surface: "#292e42",
+            overlay: "#414868",
+            on_overlay: "#c0caf5",
+            fg: "#c0caf5",
+            muted: "#a9b1d6",
+            accent: "#7aa2f7",
+            accent2: "#bb9af7",
+            red: "#f7768e",
+            green: "#9ece6a",
+            yellow: "#e0af68",
+            cyan: "#7dcfff",
+        },
+        // Kanagawa (Wave).
+        "kanagawa" => Palette {
+            bg: "#1f1f28",
+            surface: "#2a2a37",
+            overlay: "#54546d",
+            on_overlay: "#dcd7ba",
+            fg: "#dcd7ba",
+            muted: "#c8c093",
+            accent: "#7e9cd8",
+            accent2: "#d27e99",
+            red: "#e46876",
+            green: "#98bb6c",
+            yellow: "#e6c384",
+            cyan: "#7fb4ca",
+        },
+        // Gruvbox (escuro).
+        "gruvbox" => Palette {
+            bg: "#282828",
+            surface: "#3c3836",
+            overlay: "#504945",
+            on_overlay: "#ebdbb2",
+            fg: "#ebdbb2",
+            muted: "#a89984",
+            accent: "#fe8019",
+            accent2: "#d3869b",
+            red: "#fb4934",
+            green: "#b8bb26",
+            yellow: "#fabd2f",
+            cyan: "#8ec07c",
+        },
+        "dracula" => Palette {
+            bg: "#282a36",
+            surface: "#44475a",
+            overlay: "#6272a4",
+            on_overlay: "#f8f8f2",
+            fg: "#f8f8f2",
+            muted: "#bfbfbf",
+            accent: "#bd93f9",
+            accent2: "#ff79c6",
+            red: "#ff5555",
+            green: "#50fa7b",
+            yellow: "#f1fa8c",
+            cyan: "#8be9fd",
+        },
+        _ => return None,
+    };
+    Some(p)
+}
 
 /// Tema resolvido: cor por elemento (sem cor é o estilo do tema `padrao`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -439,43 +687,9 @@ pub struct Theme {
 
 impl Theme {
     pub fn builtin(name: &str) -> Option<Theme> {
-        let pairs: &[(&str, &str)] = match name {
-            "padrao" => &[],
-            "escuro" => &[
-                ("bar-bg", "#1e1e2e"),
-                ("tab-active-fg", "#1e1e2e"),
-                ("tab-active-bg", "#89b4fa"),
-                ("tab-fg", "#a6adc8"),
-                ("tab-bg", "#1e1e2e"),
-                ("status-fg", "#f9e2af"),
-                ("note-fg", "#1e1e2e"),
-                ("note-bg", "#f38ba8"),
-                ("modal-border", "#89b4fa"),
-                ("modal-title", "#89b4fa"),
-                ("selected-fg", "#1e1e2e"),
-                ("selected-bg", "#89b4fa"),
-                ("error-fg", "#f38ba8"),
-                ("selection-fg", "#1e1e2e"),
-                ("selection-bg", "#f9e2af"),
-            ],
-            "claro" => &[
-                ("bar-bg", "#eff1f5"),
-                ("tab-active-fg", "#eff1f5"),
-                ("tab-active-bg", "#1e66f5"),
-                ("tab-fg", "#4c4f69"),
-                ("tab-bg", "#eff1f5"),
-                ("status-fg", "#df8e1d"),
-                ("note-fg", "#eff1f5"),
-                ("note-bg", "#d20f39"),
-                ("modal-border", "#1e66f5"),
-                ("modal-title", "#1e66f5"),
-                ("selected-fg", "#eff1f5"),
-                ("selected-bg", "#1e66f5"),
-                ("error-fg", "#d20f39"),
-                ("selection-fg", "#eff1f5"),
-                ("selection-bg", "#df8e1d"),
-            ],
-            _ => return None,
+        let pairs = match name {
+            "padrao" => Vec::new(),
+            _ => palette(name)?.pairs(),
         };
         Some(Theme {
             name: name.into(),
@@ -501,6 +715,14 @@ pub struct TuiConfig {
     pub theme: Theme,
     /// Painel lateral visível ao abrir.
     pub panel: bool,
+    /// Estilo da barra (`style`).
+    pub style: BarStyle,
+    /// Barra na primeira linha (`bar = "top"`); por padrão, na última.
+    pub bar_top: bool,
+    /// Ordem das seções do painel (`panel-order`), sempre com todas.
+    pub panel_order: Vec<String>,
+    /// Seções do painel recolhidas (`panel-collapsed`).
+    pub panel_collapsed: Vec<String>,
 }
 
 impl Default for TuiConfig {
@@ -513,6 +735,10 @@ impl Default for TuiConfig {
                 .collect(),
             theme: Theme::builtin("padrao").unwrap_or_default(),
             panel: true,
+            style: BarStyle::Blocos,
+            bar_top: false,
+            panel_order: PANEL_SECTIONS.iter().map(|s| s.to_string()).collect(),
+            panel_collapsed: Vec::new(),
         }
     }
 }
@@ -531,6 +757,18 @@ impl TuiConfig {
     }
 }
 
+/// Define o idioma do processo: `SANDMUX_LANG`, depois `language` do
+/// arquivo, depois o sistema. Um arquivo que não abre ou é inválido fica de
+/// fora (o erro aparece no idioma do sistema, quando for lido de novo).
+pub fn init_language(path: &Path) -> sandmux_spec::lang::Lang {
+    use sandmux_spec::lang;
+    lang::set(lang::resolve_env(None));
+    let configured = Config::load(path).ok().and_then(|c| c.language);
+    let l = lang::resolve_env(configured);
+    lang::set(l);
+    l
+}
+
 /// O arquivo lido e validado.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
@@ -538,6 +776,9 @@ pub struct Config {
     pub net_log_days: Option<u32>,
     /// Teto do registro de rede em bytes (`net-log-max`, só em `[global]`).
     pub net_log_max: Option<u64>,
+    /// Idioma da interface (`language`, só em `[global]`); sem ele, o do
+    /// sistema.
+    pub language: Option<sandmux_spec::lang::Lang>,
     pub global: Layer,
     pub profiles: BTreeMap<String, Layer>,
     pub projects: BTreeMap<PathBuf, Layer>,
@@ -555,7 +796,10 @@ impl Config {
             Err(e) => Err(ConfigError {
                 path: path.into(),
                 line: None,
-                message: format!("não foi possível ler o arquivo: {e}"),
+                message: trf!(
+                    "não foi possível ler o arquivo: {e}",
+                    "could not read the file: {e}"
+                ),
             }),
         }
     }
@@ -577,7 +821,11 @@ impl Config {
                     let t = item.as_table_like().ok_or_else(|| {
                         err(
                             kspan.clone(),
-                            "`global` precisa ser uma seção `[global]`".into(),
+                            tr!(
+                                "`global` precisa ser uma seção `[global]`",
+                                "`global` must be a `[global]` section"
+                            )
+                            .into(),
                         )
                     })?;
                     cfg.global = layer_in(t, &err, true)?;
@@ -590,9 +838,32 @@ impl Config {
                                     .as_integer()
                                     .filter(|n| (1..=3650).contains(n))
                                     .ok_or_else(|| {
-                                        err(span, "`net-log-days` precisa ser um número de dias de 1 a 3650".into())
+                                        err(
+                                            span,
+                                            tr!(
+                                                "`net-log-days` precisa ser um número de dias de 1 a 3650",
+                                                "`net-log-days` must be a number of days from 1 to 3650"
+                                            )
+                                            .into(),
+                                        )
                                     })?;
                                 cfg.net_log_days = Some(n as u32);
+                            }
+                            "language" => {
+                                let l = item
+                                    .as_str()
+                                    .and_then(sandmux_spec::lang::Lang::parse)
+                                    .ok_or_else(|| {
+                                        err(
+                                            span,
+                                            tr!(
+                                                "`language` precisa ser \"pt\" ou \"en\"",
+                                                "`language` must be \"pt\" or \"en\""
+                                            )
+                                            .into(),
+                                        )
+                                    })?;
+                                cfg.language = Some(l);
                             }
                             _ => {
                                 let b = item
@@ -602,7 +873,14 @@ impl Config {
                                         _ => None,
                                     })
                                     .ok_or_else(|| {
-                                        err(span, "`net-log-max` precisa ser um tamanho como \"500M\" ou \"2G\" (mínimo 128M)".into())
+                                        err(
+                                            span,
+                                            tr!(
+                                                "`net-log-max` precisa ser um tamanho como \"500M\" ou \"2G\" (mínimo 128M)",
+                                                "`net-log-max` must be a size like \"500M\" or \"2G\" (minimum 128M)"
+                                            )
+                                            .into(),
+                                        )
                                     })?;
                                 cfg.net_log_max = Some(b);
                             }
@@ -613,7 +891,10 @@ impl Config {
                     let t = item.as_table_like().ok_or_else(|| {
                         err(
                             kspan.clone(),
-                            format!("`{key}` precisa ser uma seção `[{key}.<nome>]`"),
+                            trf!(
+                                "`{key}` precisa ser uma seção `[{key}.<nome>]`",
+                                "`{key}` must be a `[{key}.<name>]` section"
+                            ),
                         )
                     })?;
                     for (name, sub) in t.iter() {
@@ -621,7 +902,10 @@ impl Config {
                         let st = sub.as_table_like().ok_or_else(|| {
                             err(
                                 nspan.clone(),
-                                format!("`{key}.{name}` precisa ser uma seção"),
+                                trf!(
+                                    "`{key}.{name}` precisa ser uma seção",
+                                    "`{key}.{name}` must be a section"
+                                ),
                             )
                         })?;
                         let l = layer(st, &err)?;
@@ -629,8 +913,9 @@ impl Config {
                             if !valid_profile_name(name) {
                                 return Err(err(
                                     nspan,
-                                    format!(
-                                        "nome de perfil inválido: {name:?}. Use letras minúsculas, números, `-` e `_`, começando por letra ou número"
+                                    trf!(
+                                        "nome de perfil inválido: {name:?}. Use letras minúsculas, números, `-` e `_`, começando por letra ou número",
+                                        "invalid profile name: {name:?}. Use lowercase letters, digits, `-` and `_`, starting with a letter or digit"
                                     ),
                                 ));
                             }
@@ -640,8 +925,9 @@ impl Config {
                             if !p.is_absolute() {
                                 return Err(err(
                                     nspan,
-                                    format!(
-                                        "a pasta de um projeto precisa ser um caminho absoluto: {name:?}"
+                                    trf!(
+                                        "a pasta de um projeto precisa ser um caminho absoluto: {name:?}",
+                                        "a project folder must be an absolute path: {name:?}"
                                     ),
                                 ));
                             }
@@ -651,7 +937,14 @@ impl Config {
                 }
                 "tui" => {
                     let t = item.as_table_like().ok_or_else(|| {
-                        err(kspan.clone(), "`tui` precisa ser uma seção `[tui]`".into())
+                        err(
+                            kspan.clone(),
+                            tr!(
+                                "`tui` precisa ser uma seção `[tui]`",
+                                "`tui` must be a `[tui]` section"
+                            )
+                            .into(),
+                        )
                     })?;
                     cfg.tui = tui_section(t, &err)?;
                 }
@@ -659,7 +952,11 @@ impl Config {
                     let t = item.as_table_like().ok_or_else(|| {
                         err(
                             kspan.clone(),
-                            "`assistant` precisa ser uma seção `[assistant]`".into(),
+                            tr!(
+                                "`assistant` precisa ser uma seção `[assistant]`",
+                                "`assistant` must be an `[assistant]` section"
+                            )
+                            .into(),
                         )
                     })?;
                     cfg.assistant = assistant_section(t, &err)?;
@@ -667,8 +964,9 @@ impl Config {
                 other => {
                     return Err(err(
                         kspan,
-                        format!(
-                            "seção desconhecida: `{other}`. Seções aceitas: `[global]`, `[profile.<nome>]`, `[project.\"<pasta>\"]`, `[tui]` e `[assistant]`"
+                        trf!(
+                            "seção desconhecida: `{other}`. Seções aceitas: `[global]`, `[profile.<nome>]`, `[project.\"<pasta>\"]`, `[tui]` e `[assistant]`",
+                            "unknown section: `{other}`. Accepted sections: `[global]`, `[profile.<name>]`, `[project.\"<folder>\"]`, `[tui]` and `[assistant]`"
                         ),
                     ));
                 }
@@ -680,7 +978,7 @@ impl Config {
     /// Nomes dos perfis, para mensagens.
     pub fn profile_names(&self) -> String {
         if self.profiles.is_empty() {
-            "nenhum perfil definido".into()
+            tr!("nenhum perfil definido", "no profile defined").into()
         } else {
             self.profiles.keys().cloned().collect::<Vec<_>>().join(", ")
         }
@@ -714,8 +1012,9 @@ fn layer_in(
                     if !valid_path(&s) {
                         return Err(err(
                             span,
-                            format!(
-                                "`{key}` aceita só caminhos absolutos ou iniciados por `~/`: {s:?}"
+                            trf!(
+                                "`{key}` aceita só caminhos absolutos ou iniciados por `~/`: {s:?}",
+                                "`{key}` only accepts absolute paths or paths starting with `~/`: {s:?}"
                             ),
                         ));
                     }
@@ -732,8 +1031,9 @@ fn layer_in(
                     if !valid_var_name(&s) {
                         return Err(err(
                             span,
-                            format!(
-                                "`pass-env` aceita só nomes de variáveis, nunca valores: {s:?}"
+                            trf!(
+                                "`pass-env` aceita só nomes de variáveis, nunca valores: {s:?}",
+                                "`pass-env` only accepts variable names, never values: {s:?}"
                             ),
                         ));
                     }
@@ -742,7 +1042,13 @@ fn layer_in(
             }
             "repo" | "kvm" | "gpu" | "clipboard" => {
                 let v = item.as_bool().ok_or_else(|| {
-                    err(vspan.clone(), format!("`{key}` precisa ser true ou false"))
+                    err(
+                        vspan.clone(),
+                        trf!(
+                            "`{key}` precisa ser true ou false",
+                            "`{key}` must be true or false"
+                        ),
+                    )
                 })?;
                 *l.bool_mut(key).expect("chave de liga e desliga") = Some(v);
             }
@@ -750,7 +1056,11 @@ fn layer_in(
                 let s = item.as_str().ok_or_else(|| {
                     err(
                         vspan.clone(),
-                        format!("`memory` precisa ser um texto: {}", limits::MEMORY_FORMATS),
+                        trf!(
+                            "`memory` precisa ser um texto: {}",
+                            "`memory` must be a string: {}",
+                            limits::memory_formats()
+                        ),
                     )
                 })?;
                 l.memory = Some(MemoryLimit::parse(s).map_err(|m| err(vspan.clone(), m))?);
@@ -758,14 +1068,20 @@ fn layer_in(
             "processes" => {
                 let v = if let Some(n) = item.as_integer() {
                     u32::try_from(n)
-                        .map_err(|_| format!("teto de processos inválido: {n}"))
+                        .map_err(|_| {
+                            trf!(
+                                "teto de processos inválido: {n}",
+                                "invalid process cap: {n}"
+                            )
+                        })
                         .and_then(ProcessLimit::count)
                 } else if let Some(s) = item.as_str() {
                     ProcessLimit::parse(s)
                 } else {
-                    Err(format!(
+                    Err(trf!(
                         "`processes` precisa ser {}",
-                        limits::PROCESS_FORMATS
+                        "`processes` must be {}",
+                        limits::process_formats()
                     ))
                 };
                 l.processes = Some(v.map_err(|m| err(vspan.clone(), m))?);
@@ -789,8 +1105,9 @@ fn layer_in(
                     if !netcatalog::is_group(&s) {
                         return Err(err(
                             span,
-                            format!(
+                            trf!(
                                 "`catalog`: grupo desconhecido {s:?}. Grupos: {}",
+                                "`catalog`: unknown group {s:?}. Groups: {}",
                                 netcatalog::group_names()
                             ),
                         ));
@@ -804,7 +1121,10 @@ fn layer_in(
                     if !valid_ssh_key_name(&s) || s == "*" {
                         return Err(err(
                             span,
-                            format!("`{key}` aceita nomes de servidores MCP: {s:?}"),
+                            trf!(
+                                "`{key}` aceita nomes de servidores MCP: {s:?}",
+                                "`{key}` accepts MCP server names: {s:?}"
+                            ),
                         ));
                     }
                     out.push(s);
@@ -823,6 +1143,37 @@ fn layer_in(
                 }
                 *l.file_list_mut(key).expect("lista de arquivos") = out;
             }
+            HOST_PORTS_KEY => {
+                let arr = item.as_array().ok_or_else(|| {
+                    err(
+                        vspan.clone(),
+                        tr!(
+                            "`host-ports` precisa ser uma lista de números de porta, como [8888, 9000]",
+                            "`host-ports` must be a list of port numbers, like [8888, 9000]"
+                        )
+                        .into(),
+                    )
+                })?;
+                for v in arr.iter() {
+                    let p = v
+                        .as_integer()
+                        .and_then(|n| u16::try_from(n).ok())
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| {
+                            err(
+                                v.span().or(vspan.clone()),
+                                tr!(
+                                    "`host-ports` aceita números de porta de 1 a 65535",
+                                    "`host-ports` accepts port numbers from 1 to 65535"
+                                )
+                                .into(),
+                            )
+                        })?;
+                    if !l.host_ports.contains(&p) {
+                        l.host_ports.push(p);
+                    }
+                }
+            }
             PORTS_KEY => {
                 for (s, span) in strings(item, key, vspan.clone(), err)? {
                     l.ports.push(
@@ -836,7 +1187,10 @@ fn layer_in(
                     if !valid_ssh_key_name(&s) {
                         return Err(err(
                             span,
-                            format!("`db` aceita nomes de conexões do cofre, ou \"*\": {s:?}"),
+                            trf!(
+                                "`db` aceita nomes de conexões do cofre, ou \"*\": {s:?}",
+                                "`db` accepts vault connection names, or \"*\": {s:?}"
+                            ),
                         ));
                     }
                     l.db.push(s);
@@ -847,7 +1201,10 @@ fn layer_in(
                     if !valid_ssh_key_name(&s) {
                         return Err(err(
                             span,
-                            format!("`ssh-keys` aceita nomes de chaves do cofre, ou \"*\": {s:?}"),
+                            trf!(
+                                "`ssh-keys` aceita nomes de chaves do cofre, ou \"*\": {s:?}",
+                                "`ssh-keys` accepts vault key names, or \"*\": {s:?}"
+                            ),
                         ));
                     }
                     l.ssh_keys.push(s);
@@ -856,21 +1213,28 @@ fn layer_in(
             other if GLOBAL_ONLY_KEYS.contains(&other) => {
                 // Lidas por quem chama, e só em `[global]`.
                 if !global {
-                    return Err(err(kspan, format!("`{other}` só é aceita em `[global]`")));
+                    return Err(err(
+                        kspan,
+                        trf!(
+                            "`{other}` só é aceita em `[global]`",
+                            "`{other}` is only accepted in `[global]`"
+                        ),
+                    ));
                 }
             }
             other => {
                 return Err(err(
                     kspan,
-                    format!(
+                    trf!(
                         "chave desconhecida: `{other}`. Chaves aceitas: {}",
+                        "unknown key: `{other}`. Accepted keys: {}",
                         LIST_KEYS
                             .iter()
                             .chain(BOOL_KEYS)
                             .chain(LIMIT_KEYS)
                             .chain(NET_KEYS)
                             .chain(NET_LIST_KEYS)
-                            .chain([&SSH_KEYS, &DB_KEY, &PORTS_KEY])
+                            .chain([&SSH_KEYS, &DB_KEY, &PORTS_KEY, &HOST_PORTS_KEY])
                             .chain(FILE_LIST_KEYS)
                             .chain(MCP_LIST_KEYS)
                             .map(|k| format!("`{k}`"))
@@ -886,7 +1250,11 @@ fn layer_in(
         let span = t.key("rw").and_then(|k| k.span());
         return Err(err(
             span,
-            format!("{} aparece em `ro` e em `rw` na mesma seção", p.display()),
+            trf!(
+                "{} aparece em `ro` e em `rw` na mesma seção",
+                "{} appears in both `ro` and `rw` in the same section",
+                p.display()
+            ),
         ));
     }
     Ok(l)
@@ -905,7 +1273,11 @@ fn assistant_section(
         let pt = item.as_table_like().ok_or_else(|| {
             err(
                 kspan.clone(),
-                "`provider` precisa ser uma seção `[assistant.provider.<nome>]`".into(),
+                tr!(
+                    "`provider` precisa ser uma seção `[assistant.provider.<nome>]`",
+                    "`provider` must be an `[assistant.provider.<name>]` section"
+                )
+                .into(),
             )
         })?;
         for (name, sub) in pt.iter() {
@@ -913,22 +1285,27 @@ fn assistant_section(
             if !valid_provider_name(name) {
                 return Err(err(
                     nspan,
-                    format!(
-                        "nome de provedor inválido: {name:?}. Use letras minúsculas, números, `-` e `_`"
+                    trf!(
+                        "nome de provedor inválido: {name:?}. Use letras minúsculas, números, `-` e `_`",
+                        "invalid provider name: {name:?}. Use lowercase letters, digits, `-` and `_`"
                     ),
                 ));
             }
             if KNOWN.iter().any(|(n, _, _)| *n == name) {
                 return Err(err(
                     nspan,
-                    format!("`{name}` já é um provedor conhecido; escolha outro nome"),
+                    trf!(
+                        "`{name}` já é um provedor conhecido; escolha outro nome",
+                        "`{name}` is already a known provider; choose another name"
+                    ),
                 ));
             }
             let st = sub.as_table_like().ok_or_else(|| {
                 err(
                     nspan.clone(),
-                    format!(
-                        "`provider.{name}` precisa ser uma seção `[assistant.provider.{name}]`"
+                    trf!(
+                        "`provider.{name}` precisa ser uma seção `[assistant.provider.{name}]`",
+                        "`provider.{name}` must be an `[assistant.provider.{name}]` section"
                     ),
                 )
             })?;
@@ -941,8 +1318,9 @@ fn assistant_section(
                         if url_host(u).is_none() {
                             return Err(err(
                                 v.span().or(ks),
-                                format!(
-                                    "`url` precisa começar por http:// ou https:// e ter um host: {u:?}"
+                                trf!(
+                                    "`url` precisa começar por http:// ou https:// e ter um host: {u:?}",
+                                    "`url` must start with http:// or https:// and have a host: {u:?}"
                                 ),
                             ));
                         }
@@ -951,8 +1329,9 @@ fn assistant_section(
                     other => {
                         return Err(err(
                             ks,
-                            format!(
-                                "chave desconhecida em `[assistant.provider.{name}]`: `{other}`. Chave aceita: `url`"
+                            trf!(
+                                "chave desconhecida em `[assistant.provider.{name}]`: `{other}`. Chave aceita: `url`",
+                                "unknown key in `[assistant.provider.{name}]`: `{other}`. Accepted key: `url`"
                             ),
                         ));
                     }
@@ -961,7 +1340,10 @@ fn assistant_section(
             let url = url.ok_or_else(|| {
                 err(
                     nspan.clone(),
-                    format!("falta `url` em `[assistant.provider.{name}]`"),
+                    trf!(
+                        "falta `url` em `[assistant.provider.{name}]`",
+                        "missing `url` in `[assistant.provider.{name}]`"
+                    ),
                 )
             })?;
             cfg.providers.insert(name.to_string(), url);
@@ -977,7 +1359,13 @@ fn assistant_section(
             "provider" => {}
             "chat-model" | "command-model" => {
                 let m = item.as_str().ok_or_else(|| {
-                    err(vspan.clone(), format!("`{key}` precisa ser um texto como \"openrouter/deepseek/deepseek-v4.1-flash-1017\""))
+                    err(
+                        vspan.clone(),
+                        trf!(
+                            "`{key}` precisa ser um texto como \"openrouter/deepseek/deepseek-v4.1-flash-1017\"",
+                            "`{key}` must be a string like \"openrouter/deepseek/deepseek-v4.1-flash-1017\""
+                        ),
+                    )
                 })?;
                 check(&cfg, m, vspan.clone())?;
                 if key == "chat-model" {
@@ -990,14 +1378,22 @@ fn assistant_section(
                 let a = item.as_array().ok_or_else(|| {
                     err(
                         vspan.clone(),
-                        "`models` precisa ser uma lista de modelos".into(),
+                        tr!(
+                            "`models` precisa ser uma lista de modelos",
+                            "`models` must be a list of models"
+                        )
+                        .into(),
                     )
                 })?;
                 for v in a.iter() {
                     let m = v.as_str().ok_or_else(|| {
                         err(
                             v.span().or(vspan.clone()),
-                            "`models` precisa ser uma lista de textos".into(),
+                            tr!(
+                                "`models` precisa ser uma lista de textos",
+                                "`models` must be a list of strings"
+                            )
+                            .into(),
                         )
                     })?;
                     check(&cfg, m, v.span().or(vspan.clone()))?;
@@ -1007,8 +1403,9 @@ fn assistant_section(
             other => {
                 return Err(err(
                     kspan,
-                    format!(
-                        "chave desconhecida em `[assistant]`: `{other}`. Chaves aceitas: `chat-model`, `command-model`, `models`, `provider`"
+                    trf!(
+                        "chave desconhecida em `[assistant]`: `{other}`. Chaves aceitas: `chat-model`, `command-model`, `models`, `provider`",
+                        "unknown key in `[assistant]`: `{other}`. Accepted keys: `chat-model`, `command-model`, `models`, `provider`"
                     ),
                 ));
             }
@@ -1028,7 +1425,11 @@ fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfi
         cfg.theme = Theme::builtin(name).ok_or_else(|| {
             err(
                 span,
-                format!("tema desconhecido: {name:?}. Temas: {}", THEMES.join(", ")),
+                trf!(
+                    "tema desconhecido: {name:?}. Temas: {}",
+                    "unknown theme: {name:?}. Themes: {}",
+                    THEMES.join(", ")
+                ),
             )
         })?;
     }
@@ -1046,8 +1447,9 @@ fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfi
                 cfg.prefix = letter.ok_or_else(|| {
                     err(
                         vspan.clone(),
-                        format!(
-                            "`prefix` precisa ser Ctrl com uma letra minúscula, como \"C-b\": {s:?}"
+                        trf!(
+                            "`prefix` precisa ser Ctrl com uma letra minúscula, como \"C-b\": {s:?}",
+                            "`prefix` must be Ctrl with a lowercase letter, like \"C-b\": {s:?}"
                         ),
                     )
                 })?;
@@ -1056,7 +1458,11 @@ fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfi
                 let k = item.as_table_like().ok_or_else(|| {
                     err(
                         kspan.clone(),
-                        "`keys` precisa ser uma seção `[tui.keys]`".into(),
+                        tr!(
+                            "`keys` precisa ser uma seção `[tui.keys]`",
+                            "`keys` must be a `[tui.keys]` section"
+                        )
+                        .into(),
                     )
                 })?;
                 for (action, v) in k.iter() {
@@ -1064,8 +1470,9 @@ fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfi
                     if !TUI_ACTIONS.iter().any(|(a, _)| *a == action) {
                         return Err(err(
                             aspan,
-                            format!(
+                            trf!(
                                 "ação desconhecida em `[tui.keys]`: `{action}`. Ações: {}",
+                                "unknown action in `[tui.keys]`: `{action}`. Actions: {}",
                                 TUI_ACTIONS
                                     .iter()
                                     .map(|(a, _)| *a)
@@ -1082,8 +1489,9 @@ fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfi
                         _ => {
                             return Err(err(
                                 vs,
-                                format!(
-                                    "a tecla de `{action}` precisa ser um caractere visível que não seja dígito: {s:?}"
+                                trf!(
+                                    "a tecla de `{action}` precisa ser um caractere visível que não seja dígito: {s:?}",
+                                    "the key for `{action}` must be a visible character that is not a digit: {s:?}"
                                 ),
                             ));
                         }
@@ -1094,14 +1502,91 @@ fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfi
             "theme" => {}
             "panel" => {
                 cfg.panel = item.as_bool().ok_or_else(|| {
-                    err(vspan.clone(), "`panel` precisa ser true ou false".into())
+                    err(
+                        vspan.clone(),
+                        tr!(
+                            "`panel` precisa ser true ou false",
+                            "`panel` must be true or false"
+                        )
+                        .into(),
+                    )
                 })?;
+            }
+            "style" => {
+                cfg.style = match item.as_str() {
+                    Some("blocos") => BarStyle::Blocos,
+                    Some("powerline") => BarStyle::Powerline,
+                    Some("simples") => BarStyle::Simples,
+                    _ => {
+                        return Err(err(
+                            vspan.clone(),
+                            tr!(
+                                "`style` precisa ser \"blocos\", \"powerline\" (precisa de uma fonte Nerd Font) ou \"simples\"",
+                                "`style` must be \"blocos\", \"powerline\" (needs a Nerd Font) or \"simples\""
+                            )
+                            .into(),
+                        ));
+                    }
+                };
+            }
+            "bar" => {
+                cfg.bar_top = match item.as_str() {
+                    Some("bottom") => false,
+                    Some("top") => true,
+                    _ => {
+                        return Err(err(
+                            vspan.clone(),
+                            tr!(
+                                "`bar` precisa ser \"bottom\" ou \"top\"",
+                                "`bar` must be \"bottom\" or \"top\""
+                            )
+                            .into(),
+                        ));
+                    }
+                };
+            }
+            "panel-order" | "panel-collapsed" => {
+                let msg = || {
+                    trf!(
+                        "`{key}` precisa ser uma lista de seções do painel, sem repetir: {}",
+                        "`{key}` must be a list of panel sections, without repeats: {}",
+                        PANEL_SECTIONS
+                            .iter()
+                            .map(|s| format!("\"{s}\""))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                let a = item.as_array().ok_or_else(|| err(vspan.clone(), msg()))?;
+                let mut names: Vec<String> = Vec::new();
+                for v in a.iter() {
+                    let s = v
+                        .as_str()
+                        .filter(|s| PANEL_SECTIONS.contains(s) && !names.iter().any(|n| n == s))
+                        .ok_or_else(|| err(v.span().or(vspan.clone()), msg()))?;
+                    names.push(s.to_string());
+                }
+                if key == "panel-order" {
+                    // As que faltam vão para o fim, na ordem padrão.
+                    for s in PANEL_SECTIONS {
+                        if !names.iter().any(|n| n == s) {
+                            names.push(s.to_string());
+                        }
+                    }
+                    cfg.panel_order = names;
+                } else {
+                    cfg.panel_collapsed = names;
+                }
             }
             "colors" => {
                 let c = item.as_table_like().ok_or_else(|| {
                     err(
                         kspan.clone(),
-                        "`colors` precisa ser uma seção `[tui.colors]`".into(),
+                        tr!(
+                            "`colors` precisa ser uma seção `[tui.colors]`",
+                            "`colors` must be a `[tui.colors]` section"
+                        )
+                        .into(),
                     )
                 })?;
                 for (el, v) in c.iter() {
@@ -1109,8 +1594,9 @@ fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfi
                     if !THEME_ELEMENTS.contains(&el) {
                         return Err(err(
                             espan,
-                            format!(
+                            trf!(
                                 "elemento desconhecido em `[tui.colors]`: `{el}`. Elementos: {}",
+                                "unknown element in `[tui.colors]`: `{el}`. Elements: {}",
                                 THEME_ELEMENTS.join(", ")
                             ),
                         ));
@@ -1122,7 +1608,14 @@ fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfi
                             .map(ThemeColor::Indexed)
                     });
                     let color = parsed.ok_or_else(|| {
-                        err(vs, format!("cor inválida em `{el}`; use {COLOR_FORMATS}"))
+                        err(
+                            vs,
+                            trf!(
+                                "cor inválida em `{el}`; use {}",
+                                "invalid color in `{el}`; use {}",
+                                color_formats()
+                            ),
+                        )
                     })?;
                     cfg.theme.colors.insert(el.to_string(), color);
                 }
@@ -1130,8 +1623,9 @@ fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfi
             other => {
                 return Err(err(
                     kspan,
-                    format!(
-                        "chave desconhecida em `[tui]`: `{other}`. Chaves aceitas: `prefix`, `theme`, `panel`, `keys`, `colors`"
+                    trf!(
+                        "chave desconhecida em `[tui]`: `{other}`. Chaves aceitas: `prefix`, `theme`, `panel`, `panel-order`, `panel-collapsed`, `style`, `bar`, `keys`, `colors`",
+                        "unknown key in `[tui]`: `{other}`. Accepted keys: `prefix`, `theme`, `panel`, `panel-order`, `panel-collapsed`, `style`, `bar`, `keys`, `colors`"
                     ),
                 ));
             }
@@ -1142,7 +1636,10 @@ fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfi
         if let Some(other) = seen.insert(*c, a) {
             return Err(err(
                 t.key("keys").and_then(|k| k.span()),
-                format!("as ações `{other}` e `{a}` usam a mesma tecla {c:?}"),
+                trf!(
+                    "as ações `{other}` e `{a}` usam a mesma tecla {c:?}",
+                    "the actions `{other}` and `{a}` use the same key {c:?}"
+                ),
             ));
         }
     }
@@ -1160,7 +1657,10 @@ fn strings(
     let arr = item.as_array().ok_or_else(|| {
         err(
             span.clone(),
-            format!("`{key}` precisa ser uma lista de textos"),
+            trf!(
+                "`{key}` precisa ser uma lista de textos",
+                "`{key}` must be a list of strings"
+            ),
         )
     })?;
     arr.iter()
@@ -1170,7 +1670,10 @@ fn strings(
                 .ok_or_else(|| {
                     err(
                         v.span().or(span.clone()),
-                        format!("`{key}` precisa ser uma lista de textos"),
+                        trf!(
+                            "`{key}` precisa ser uma lista de textos",
+                            "`{key}` must be a list of strings"
+                        ),
                     )
                 })
         })
@@ -1234,11 +1737,17 @@ pub enum Origin {
 impl std::fmt::Display for Origin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Origin::Default => write!(f, "padrão"),
-            Origin::Global => write!(f, "modificada (global)"),
-            Origin::Profile(n) => write!(f, "modificada (perfil {n})"),
-            Origin::Project(p) => write!(f, "modificada (projeto {})", p.display()),
-            Origin::Run => write!(f, "modificada (opção do run)"),
+            Origin::Default => f.write_str(tr!("padrão", "default")),
+            Origin::Global => f.write_str(tr!("modificada (global)", "modified (global)")),
+            Origin::Profile(n) => {
+                f.write_str(&trf!("modificada (perfil {n})", "modified (profile {n})"))
+            }
+            Origin::Project(p) => f.write_str(&trf!(
+                "modificada (projeto {})",
+                "modified (project {})",
+                p.display()
+            )),
+            Origin::Run => f.write_str(tr!("modificada (opção do run)", "modified (run option)")),
         }
     }
 }
@@ -1292,6 +1801,8 @@ pub struct Effective {
     pub db: Vec<String>,
     /// Portas de entrada, somadas de todas as camadas.
     pub ports: Vec<sandmux_spec::net::PortRule>,
+    /// Portas do host (`host-ports`).
+    pub host_ports: Vec<u16>,
     /// Listas da política de arquivos, somadas de todas as camadas.
     pub file_deny: Vec<String>,
     pub file_allow: Vec<String>,
@@ -1320,6 +1831,7 @@ impl Effective {
         self.ssh_keys.clear();
         self.db.clear();
         self.ports.clear();
+        self.host_ports.clear();
         self.network = LimitSetting {
             value: NetworkMode::Inferencia,
             origin: Origin::Default,
@@ -1433,6 +1945,7 @@ impl Effective {
             db_mcp: None,
             chat_bin: None,
             chat_env: Vec::new(),
+            opencode_models: Vec::new(),
             net: None,
         }
     }
@@ -1462,6 +1975,7 @@ impl Effective {
             // Os servidores das chaves SSH vêm do cofre, pelo daemon.
             ssh: Vec::new(),
             ports: self.ports.clone(),
+            host_ports: self.host_ports.clone(),
         })
     }
 
@@ -1485,10 +1999,10 @@ pub enum ResolveError {
 impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ResolveError::UnknownProfile { name, available } => write!(
-                f,
-                "o perfil {name:?} não existe no arquivo de configuração. Perfis: {available}"
-            ),
+            ResolveError::UnknownProfile { name, available } => f.write_str(&trf!(
+                "o perfil {name:?} não existe no arquivo de configuração. Perfis: {available}",
+                "profile {name:?} does not exist in the configuration file. Profiles: {available}"
+            )),
         }
     }
 }
@@ -1518,6 +2032,54 @@ pub fn rule_origin(o: &Origin) -> String {
         Origin::Project(p) => format!("projeto {}", p.display()),
         Origin::Run => "aba".into(),
     }
+}
+
+/// O nome de exibição de um valor do arquivo (o modo de rede, o estilo da
+/// barra, o tema): em inglês, a tradução; o arquivo continua com o valor.
+pub fn value_label(key: &str, v: &str) -> String {
+    if !sandmux_spec::lang::is_en() {
+        return v.to_string();
+    }
+    let en = match (key, v) {
+        ("network", "aberta") => "open",
+        ("network", "inferencia") => "inference",
+        ("network", "sem-rede") => "no network",
+        ("style", "blocos") => "blocks",
+        ("style", "simples") => "plain",
+        ("theme", "padrao") => "default",
+        ("theme", "escuro") => "dark",
+        ("theme", "claro") => "light",
+        _ => v,
+    };
+    en.to_string()
+}
+
+/// A origem de uma regra para exibição: o valor guardado (em português, e
+/// comparado pela TUI) traduzido para o idioma atual.
+pub fn origin_text(origin: &str) -> String {
+    if !sandmux_spec::lang::is_en() {
+        return origin.to_string();
+    }
+    let map = [
+        ("catálogo de exfiltração", "exfiltration catalog"),
+        ("catálogo de inferência", "inference catalog"),
+        ("padrão", "default"),
+        ("aba", "tab"),
+        ("assistente", "assistant"),
+    ];
+    if let Some((_, en)) = map.iter().find(|(pt, _)| *pt == origin) {
+        return en.to_string();
+    }
+    for (pt, en) in [
+        ("catálogo comum (", "common catalog ("),
+        ("perfil ", "profile "),
+        ("projeto ", "project "),
+    ] {
+        if let Some(rest) = origin.strip_prefix(pt) {
+            return format!("{en}{rest}");
+        }
+    }
+    origin.to_string()
 }
 
 /// Compila as regras de rede de todas as camadas, da menos para a mais
@@ -1666,6 +2228,7 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
         ssh_keys: Vec::new(),
         db: Vec::new(),
         ports: Vec::new(),
+        host_ports: Vec::new(),
         file_deny: Vec::new(),
         file_allow: Vec::new(),
         secret_files: Vec::new(),
@@ -1690,6 +2253,11 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
         for k in &l.db {
             if !eff.db.contains(k) {
                 eff.db.push(k.clone());
+            }
+        }
+        for p in &l.host_ports {
+            if !eff.host_ports.contains(p) {
+                eff.host_ports.push(*p);
             }
         }
         for r in &l.ports {
@@ -2203,6 +2771,23 @@ repo = true
         assert_eq!(c.tui.action_for('y'), Some("chat"));
         assert_eq!(TuiConfig::default().key("chat"), 'i');
         assert_eq!(TuiConfig::default().key("command"), 'g');
+        let d = TuiConfig::default();
+        assert_eq!((d.style, d.bar_top), (BarStyle::Blocos, false));
+        let c = parse("[tui]\nstyle = \"simples\"\nbar = \"top\"\n").unwrap();
+        assert_eq!((c.tui.style, c.tui.bar_top), (BarStyle::Simples, true));
+        assert!(parse("[tui]\nstyle = \"bonito\"\n").is_err());
+        assert!(parse("[tui]\nbar = \"lado\"\n").is_err());
+        let c =
+            parse("[tui]\npanel-order = [\"rede\", \"mcp\"]\npanel-collapsed = [\"protecao\"]\n")
+                .unwrap();
+        assert_eq!(
+            c.tui.panel_order,
+            vec!["rede", "mcp", "protecao", "recursos", "portas"]
+        );
+        assert_eq!(c.tui.panel_collapsed, vec!["protecao"]);
+        assert!(parse("[tui]\npanel-order = [\"rede\", \"rede\"]\n").is_err());
+        assert!(parse("[tui]\npanel-collapsed = [\"outra\"]\n").is_err());
+        assert!(parse("[tui.colors]\nchip-time-bg = \"#89dceb\"\n").is_ok());
         let c = parse("[assistant]\ncommand-model = \"openai/x\"\n").unwrap();
         assert_eq!(c.assistant.command_model.as_deref(), Some("openai/x"));
         assert_eq!(

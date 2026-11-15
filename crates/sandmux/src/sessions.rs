@@ -8,10 +8,14 @@ use sandmux::client::{self, Conn, systemd};
 use sandmux::paths;
 use sandmux_policy::limits::human;
 use sandmux_proto::{LaunchOptions, Msg, SessionInfo};
+use sandmux_spec::{tr, trf};
 
 fn need_terminal(what: &str) -> Result<()> {
     if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
-        bail!("{what} precisa de um terminal interativo");
+        bail!(trf!(
+            "{what} precisa de um terminal interativo",
+            "{what} needs an interactive terminal"
+        ));
     }
     Ok(())
 }
@@ -42,17 +46,26 @@ pub fn create_detached(opts: LaunchOptions, pass_env: &[String]) -> Result<i32> 
         attach: false,
     })? {
         Msg::Created { id, name } => {
-            println!("sessão {id} criada: {name}");
+            println!(
+                "{}",
+                trf!("sessão {id} criada: {name}", "session {id} created: {name}")
+            );
             Ok(0)
         }
-        m => Err(anyhow!("resposta inesperada do daemon: {m:?}")),
+        m => Err(anyhow!(trf!(
+            "resposta inesperada do daemon: {m:?}",
+            "unexpected reply from the daemon: {m:?}"
+        ))),
     }
 }
 
 fn list(conn: &mut Conn) -> Result<Vec<SessionInfo>> {
     match conn.call(&Msg::List)? {
         Msg::Sessions { sessions } => Ok(sessions),
-        m => Err(anyhow!("resposta inesperada do daemon: {m:?}")),
+        m => Err(anyhow!(trf!(
+            "resposta inesperada do daemon: {m:?}",
+            "unexpected reply from the daemon: {m:?}"
+        ))),
     }
 }
 
@@ -60,21 +73,27 @@ fn list(conn: &mut Conn) -> Result<Vec<SessionInfo>> {
 fn state_text(s: &SessionInfo) -> String {
     match &s.state {
         sandmux_proto::SessionState::Encerrada { codigo } if s.oom_kills > 0 => {
-            format!("encerrada ({codigo}, memória esgotada)")
+            trf!(
+                "encerrada ({codigo}, memória esgotada)",
+                "ended ({codigo}, out of memory)"
+            )
         }
         other => other.to_string(),
     }
 }
 
 fn of_max(cur: String, max: Option<String>) -> String {
-    format!("{cur}/{}", max.unwrap_or_else(|| "sem teto".into()))
+    format!(
+        "{cur}/{}",
+        max.unwrap_or_else(|| tr!("sem teto", "no cap").into())
+    )
 }
 
 pub fn ls() -> Result<i32> {
     let mut conn = client::connect_or_start()?;
     let sessions = list(&mut conn)?;
     if sessions.is_empty() {
-        println!("Não há sessões.");
+        println!("{}", tr!("Não há sessões.", "No sessions."));
         return Ok(0);
     }
     let rows: Vec<[String; 7]> = sessions
@@ -102,7 +121,13 @@ pub fn ls() -> Result<i32> {
         })
         .collect();
     let head = [
-        "ID", "NOME", "ESTADO", "CLIENTES", "MEMÓRIA", "PROC", "PASTA",
+        "ID",
+        tr!("NOME", "NAME"),
+        tr!("ESTADO", "STATE"),
+        tr!("CLIENTES", "CLIENTS"),
+        tr!("MEMÓRIA", "MEMORY"),
+        "PROC",
+        tr!("PASTA", "FOLDER"),
     ];
     let mut w = head.map(|h| h.chars().count());
     for r in &rows {
@@ -144,71 +169,137 @@ pub fn stats(id: u32) -> Result<i32> {
         ports,
     } = conn.call(&Msg::Stats { id })?
     else {
-        bail!("resposta inesperada do daemon");
+        bail!(tr!(
+            "resposta inesperada do daemon",
+            "unexpected reply from the daemon"
+        ));
     };
     let state = match state {
         sandmux_proto::SessionState::Encerrada { codigo } if oom_kills > 0 => {
-            format!("encerrada ({codigo}, memória esgotada)")
+            trf!(
+                "encerrada ({codigo}, memória esgotada)",
+                "ended ({codigo}, out of memory)"
+            )
         }
         other => other.to_string(),
     };
-    println!("Sessão {id}: {state}");
+    println!("{}", trf!("Sessão {id}: {state}", "Session {id}: {state}"));
     match stats {
         Some(s) => {
             let max = |m: Option<u64>, f: &dyn Fn(u64) -> String| {
-                m.map(f).unwrap_or_else(|| "sem teto".into())
+                m.map(f).unwrap_or_else(|| tr!("sem teto", "no cap").into())
             };
             println!(
-                "  memória: {} em uso, pico de {}, teto de {}",
-                human(s.usage.memory),
-                human(s.memory_peak),
-                max(s.usage.memory_max, &human)
+                "{}",
+                trf!(
+                    "  memória: {} em uso, pico de {}, teto de {}",
+                    "  memory: {} in use, peak of {}, cap of {}",
+                    human(s.usage.memory),
+                    human(s.memory_peak),
+                    max(s.usage.memory_max, &human)
+                )
             );
             println!(
-                "  processos: {} em uso, pico de {}, teto de {}",
-                s.usage.processes,
-                s.processes_peak,
-                max(s.usage.processes_max, &|n| n.to_string())
+                "{}",
+                trf!(
+                    "  processos: {} em uso, pico de {}, teto de {}",
+                    "  processes: {} in use, peak of {}, cap of {}",
+                    s.usage.processes,
+                    s.processes_peak,
+                    max(s.usage.processes_max, &|n| n.to_string())
+                )
             );
             let secs = s.cpu_usec as f64 / 1_000_000.0;
-            println!("  CPU usada: {}s", format!("{secs:.1}").replace('.', ","));
+            if sandmux_spec::lang::is_en() {
+                println!("  CPU used: {secs:.1}s");
+            } else {
+                println!("  CPU usada: {}s", format!("{secs:.1}").replace('.', ","));
+            }
         }
-        None => println!("  sem consumo: a sessão não está viva ou roda sem tetos"),
+        None => println!(
+            "{}",
+            tr!(
+                "  sem consumo: a sessão não está viva ou roda sem tetos",
+                "  no usage: the session is not alive or runs without caps"
+            )
+        ),
     }
-    println!("  mortes por falta de memória: {oom_kills}");
-    println!("  criações de processo recusadas pelo teto: {fork_refusals}");
+    println!(
+        "{}",
+        trf!(
+            "  mortes por falta de memória: {oom_kills}",
+            "  out-of-memory kills: {oom_kills}"
+        )
+    );
+    println!(
+        "{}",
+        trf!(
+            "  criações de processo recusadas pelo teto: {fork_refusals}",
+            "  process creations refused by the cap: {fork_refusals}"
+        )
+    );
     match docker {
         Some(d) => {
             let teto = |m: Option<u64>, f: &dyn Fn(u64) -> String| {
-                m.map(f).unwrap_or_else(|| "sem teto".into())
+                m.map(f).unwrap_or_else(|| tr!("sem teto", "no cap").into())
             };
             println!(
-                "Docker privado da pasta: rodando, {} contêineres",
-                d.containers
+                "{}",
+                trf!(
+                    "Docker privado da pasta: rodando, {} contêineres",
+                    "Folder's private Docker: running, {} containers",
+                    d.containers
+                )
             );
             println!(
-                "  memória: {} em uso, teto de {}",
-                human(d.memory),
-                teto(d.memory_max, &human)
+                "{}",
+                trf!(
+                    "  memória: {} em uso, teto de {}",
+                    "  memory: {} in use, cap of {}",
+                    human(d.memory),
+                    teto(d.memory_max, &human)
+                )
             );
             println!(
-                "  processos: {} em uso, teto de {}",
-                d.processes,
-                teto(d.processes_max, &|n| n.to_string())
+                "{}",
+                trf!(
+                    "  processos: {} em uso, teto de {}",
+                    "  processes: {} in use, cap of {}",
+                    d.processes,
+                    teto(d.processes_max, &|n| n.to_string())
+                )
             );
         }
-        None => println!("Docker privado da pasta: parado"),
+        None => println!(
+            "{}",
+            tr!(
+                "Docker privado da pasta: parado",
+                "Folder's private Docker: stopped"
+            )
+        ),
     }
     if ports.is_empty() {
-        println!("Portas publicadas: nenhuma");
+        println!(
+            "{}",
+            tr!("Portas publicadas: nenhuma", "Published ports: none")
+        );
     } else {
-        println!("Portas publicadas no host:");
+        println!(
+            "{}",
+            tr!("Portas publicadas no host:", "Ports published on the host:")
+        );
         for l in port_lines(&ports) {
             println!("  {l}");
         }
     }
     if let Some(p) = policy {
-        println!("Proteção do último lançamento:");
+        println!(
+            "{}",
+            tr!(
+                "Proteção do último lançamento:",
+                "Protection of the last launch:"
+            )
+        );
         for l in policy_lines(&p) {
             println!("  {l}");
         }
@@ -229,42 +320,81 @@ pub fn port_lines(ports: &[sandmux_proto::msg::PortInfo]) -> Vec<String> {
 
 /// O resumo da proteção em linhas curtas, para o `stats` e o painel.
 pub fn policy_lines(p: &sandmux_proto::msg::PolicySummary) -> Vec<String> {
-    let yes = |b: bool| if b { "sim" } else { "não" };
+    let yes = |b: bool| {
+        if b {
+            tr!("sim", "yes")
+        } else {
+            tr!("não", "no")
+        }
+    };
     let mut l = vec![
-        p.level.clone(),
-        format!("camada de escrita: {}", p.layer),
-        format!("pasta: {} (escrita)", p.workdir.display()),
+        sandmux::launch::localize_summary(&p.level),
+        trf!(
+            "camada de escrita: {}",
+            "write layer: {}",
+            sandmux::launch::localize_summary(&p.layer)
+        ),
+        trf!(
+            "pasta: {} (escrita)",
+            "folder: {} (write)",
+            p.workdir.display()
+        ),
     ];
     for d in &p.ro {
-        l.push(format!("extra: {} (leitura)", d.display()));
+        l.push(trf!("extra: {} (leitura)", "extra: {} (read)", d.display()));
     }
     for d in &p.rw {
-        l.push(format!("extra: {} (escrita)", d.display()));
+        l.push(trf!(
+            "extra: {} (escrita)",
+            "extra: {} (write)",
+            d.display()
+        ));
     }
     l.push(format!("GPU: {} · KVM: {}", yes(p.gpu), yes(p.kvm)));
     l.push(format!(
         "clipboard: {}",
-        if p.clipboard { "liberado" } else { "bloqueado" }
+        if p.clipboard {
+            tr!("liberado", "allowed")
+        } else {
+            tr!("bloqueado", "blocked")
+        }
     ));
     if p.pass_env.is_empty() {
-        l.push("pass-env: nenhuma".into());
+        l.push(tr!("pass-env: nenhuma", "pass-env: none").into());
     } else {
-        l.push(format!(
+        l.push(trf!(
             "pass-env: {} (ao alcance do agente)",
+            "pass-env: {} (within the agent's reach)",
             p.pass_env.join(", ")
         ));
     }
     if p.limits {
-        let m = p.memory_max.map(human).unwrap_or_else(|| "sem teto".into());
+        let m = p
+            .memory_max
+            .map(human)
+            .unwrap_or_else(|| tr!("sem teto", "no cap").into());
         let n = p
             .processes_max
             .map(|n| n.to_string())
-            .unwrap_or_else(|| "sem teto".into());
-        l.push(format!("tetos: memória {m}, processos {n}"));
+            .unwrap_or_else(|| tr!("sem teto", "no cap").into());
+        l.push(trf!(
+            "tetos: memória {m}, processos {n}",
+            "caps: memory {m}, processes {n}"
+        ));
     } else {
-        l.push("tetos: sem suporte, sem teto".into());
+        l.push(
+            tr!(
+                "tetos: sem suporte, sem teto",
+                "caps: not supported, no cap"
+            )
+            .into(),
+        );
     }
-    l.push(format!("rede: {}", p.network));
+    l.push(trf!(
+        "rede: {}",
+        "network: {}",
+        sandmux::launch::localize_summary(&p.network)
+    ));
     l
 }
 
@@ -283,14 +413,23 @@ pub fn attach(id: Option<u32>) -> Result<i32> {
             // Reinsere o evento já lido para o laço do modo anexado.
             client::attached_after(conn, id, name)
         }
-        other => Err(anyhow!("resposta inesperada do daemon: {other:?}")),
+        other => Err(anyhow!(trf!(
+            "resposta inesperada do daemon: {other:?}",
+            "unexpected reply from the daemon: {other:?}"
+        ))),
     }
 }
 
 pub fn detach(id: u32) -> Result<i32> {
     let mut conn = client::connect_or_start()?;
     conn.call(&Msg::Detach { id })?;
-    eprintln!("sandmux: sessão {id} desanexada de todos os terminais");
+    eprintln!(
+        "{}",
+        trf!(
+            "sandmux: sessão {id} desanexada de todos os terminais",
+            "sandmux: session {id} detached from all terminals"
+        )
+    );
     Ok(0)
 }
 
@@ -303,12 +442,27 @@ pub fn net(id: Option<u32>) -> Result<i32> {
         limit: 50,
     })?
     else {
-        bail!("resposta inesperada do daemon");
+        bail!(tr!(
+            "resposta inesperada do daemon",
+            "unexpected reply from the daemon"
+        ));
     };
     if lines.is_empty() {
         match id {
-            Some(id) => println!("Nenhuma conexão registrada da sessão {id} desde ontem."),
-            None => println!("Nenhuma conexão registrada desde ontem."),
+            Some(id) => println!(
+                "{}",
+                trf!(
+                    "Nenhuma conexão registrada da sessão {id} desde ontem.",
+                    "No connections logged for session {id} since yesterday."
+                )
+            ),
+            None => println!(
+                "{}",
+                tr!(
+                    "Nenhuma conexão registrada desde ontem.",
+                    "No connections logged since yesterday."
+                )
+            ),
         }
         return Ok(0);
     }
@@ -322,7 +476,10 @@ pub fn net(id: Option<u32>) -> Result<i32> {
 pub fn net_edit(id: u32, action: &str, value: &str) -> Result<i32> {
     if action.starts_with("mcp-") {
         if value.is_empty() || value.contains(char::is_whitespace) {
-            anyhow::bail!("nome de servidor MCP inválido: {value:?}");
+            anyhow::bail!(trf!(
+                "nome de servidor MCP inválido: {value:?}",
+                "invalid MCP server name: {value:?}"
+            ));
         }
     } else if action.starts_with("file-") {
         sandmux_policy::config::valid_file_pattern(value).map_err(|e| anyhow!(e))?;
@@ -340,17 +497,29 @@ pub fn net_edit(id: u32, action: &str, value: &str) -> Result<i32> {
         value: value.into(),
     })?;
     let what = match action {
-        "deny" => format!("{value} negado"),
-        "allow" => format!("{value} liberado"),
-        "forget" | "file-forget" => format!("{value} tirado das regras"),
-        "file-deny" => format!("arquivo {value} negado"),
-        "mcp-deny" => format!("MCP {value} desabilitado"),
-        "mcp-allow" => format!("MCP {value} habilitado"),
-        "mcp-forget" => format!("MCP {value} tirado das regras"),
-        "file-allow" => format!("arquivo {value} liberado"),
-        _ => format!("modo de rede {value}"),
+        "deny" => trf!("{value} negado", "{value} denied"),
+        "allow" => trf!("{value} liberado", "{value} allowed"),
+        "forget" | "file-forget" => trf!(
+            "{value} tirado das regras",
+            "{value} removed from the rules"
+        ),
+        "file-deny" => trf!("arquivo {value} negado", "file {value} denied"),
+        "mcp-deny" => trf!("MCP {value} desabilitado", "MCP {value} disabled"),
+        "mcp-allow" => trf!("MCP {value} habilitado", "MCP {value} enabled"),
+        "mcp-forget" => trf!(
+            "MCP {value} tirado das regras",
+            "MCP {value} removed from the rules"
+        ),
+        "file-allow" => trf!("arquivo {value} liberado", "file {value} allowed"),
+        _ => trf!("modo de rede {value}", "network mode {value}"),
     };
-    eprintln!("sandmux: sessão {id}: {what} na aba");
+    eprintln!(
+        "{}",
+        trf!(
+            "sandmux: sessão {id}: {what} na aba",
+            "sandmux: session {id}: {what} in the tab"
+        )
+    );
     Ok(0)
 }
 
@@ -361,13 +530,22 @@ pub fn rules_lines(eff: &sandmux_policy::config::Effective) -> Vec<String> {
     use sandmux_policy::netcatalog::INFERENCE_ORIGIN;
     use sandmux_spec::net::RuleKind;
     let mode = eff.network.value;
-    let mut out = vec![format!("Modo: {}; {}", mode.describe(), eff.network.origin)];
+    let mut out = vec![trf!(
+        "Modo: {}; {}",
+        "Mode: {}; {}",
+        mode.describe(),
+        eff.network.origin
+    )];
     let row = |r: &sandmux_spec::net::Rule| {
         format!(
             "  {:<10} {:<36} {}",
-            if r.enabled { "ligado" } else { "desligado" },
+            if r.enabled {
+                tr!("ligado", "on")
+            } else {
+                tr!("desligado", "off")
+            },
             r.pattern.to_string(),
-            r.origin
+            sandmux_policy::config::origin_text(&r.origin)
         )
     };
     let section =
@@ -376,25 +554,32 @@ pub fn rules_lines(eff: &sandmux_policy::config::Effective) -> Vec<String> {
             out.push(title);
             out.extend(eff.net_rules.iter().filter(|r| f(r)).map(row));
         };
-    section(&mut out, "Denylist (todos os modos):".into(), &|r| {
-        r.kind == RuleKind::Deny
-    });
+    section(
+        &mut out,
+        tr!("Denylist (todos os modos):", "Denylist (all modes):").into(),
+        &|r| r.kind == RuleKind::Deny,
+    );
     let note = |m: NetworkMode| {
         if mode == m {
             ""
         } else {
-            ", sem efeito neste modo"
+            tr!(", sem efeito neste modo", ", no effect in this mode")
         }
     };
     section(
         &mut out,
-        format!("Allowlist (modo custom{}):", note(NetworkMode::Custom)),
+        trf!(
+            "Allowlist (modo custom{}):",
+            "Allowlist (custom mode{}):",
+            note(NetworkMode::Custom)
+        ),
         &|r| r.kind == RuleKind::Allow && r.origin != INFERENCE_ORIGIN,
     );
     section(
         &mut out,
-        format!(
+        trf!(
             "Provedores (modo só inferência{}):",
+            "Providers (inference-only mode{}):",
             note(NetworkMode::Inferencia)
         ),
         &|r| r.kind == RuleKind::Allow && r.origin == INFERENCE_ORIGIN,
@@ -410,10 +595,12 @@ pub fn net_rules(id: Option<u32>) -> Result<i32> {
         Some(id) => {
             let mut conn = client::connect_or_start()?;
             let sessions = list(&mut conn)?;
-            let s = sessions
-                .into_iter()
-                .find(|s| s.id == id)
-                .ok_or_else(|| anyhow!("não existe a sessão {id}"))?;
+            let s = sessions.into_iter().find(|s| s.id == id).ok_or_else(|| {
+                anyhow!(trf!(
+                    "não existe a sessão {id}",
+                    "session {id} does not exist"
+                ))
+            })?;
             s.opts
         }
         None => {
@@ -425,8 +612,15 @@ pub fn net_rules(id: Option<u32>) -> Result<i32> {
     host.cwd = opts.workdir.clone();
     let eff = sandmux::launch::effective(&host, &opts)?;
     match id {
-        Some(id) => println!("Sessão {id} ({})", opts.workdir.display()),
-        None => println!("Pasta {}", opts.workdir.display()),
+        Some(id) => println!(
+            "{}",
+            trf!(
+                "Sessão {id} ({})",
+                "Session {id} ({})",
+                opts.workdir.display()
+            )
+        ),
+        None => println!("{}", trf!("Pasta {}", "Folder {}", opts.workdir.display())),
     }
     for l in rules_lines(&eff) {
         println!("{l}");
@@ -459,8 +653,12 @@ pub fn net_table(lines: &[sandmux_proto::msg::NetLine]) -> Vec<String> {
                 _ => format!("{}:{}", l.ip, l.port),
             };
             let mut nota = match (&l.blocked, l.new) {
-                (Some(b), _) => format!("bloqueado: {b}"),
-                (None, true) => "novo".into(),
+                (Some(b), _) => trf!(
+                    "bloqueado: {}",
+                    "blocked: {}",
+                    sandmux_spec::net::reason_text(b)
+                ),
+                (None, true) => tr!("novo", "new").into(),
                 _ => String::new(),
             };
             if let Some(s) = &l.secret {
@@ -468,9 +666,9 @@ pub fn net_table(lines: &[sandmux_proto::msg::NetLine]) -> Vec<String> {
                     nota.push_str(", ");
                 }
                 if l.proto == "ssh-sign" {
-                    nota.push_str(&format!("assinatura ssh: {s}"));
+                    nota.push_str(&trf!("assinatura ssh: {s}", "ssh signature: {s}"));
                 } else {
-                    nota.push_str(&format!("chave: {s}"));
+                    nota.push_str(&trf!("chave: {s}", "key: {s}"));
                 }
             }
             [
@@ -485,12 +683,12 @@ pub fn net_table(lines: &[sandmux_proto::msg::NetLine]) -> Vec<String> {
         })
         .collect();
     let head = [
-        "HORA",
-        "SESSÃO",
+        tr!("HORA", "TIME"),
+        tr!("SESSÃO", "SESSION"),
         "PROTO",
-        "DOMÍNIO",
-        "DESTINO",
-        "ENVIADO / RECEBIDO",
+        tr!("DOMÍNIO", "DOMAIN"),
+        tr!("DESTINO", "DESTINATION"),
+        tr!("ENVIADO / RECEBIDO", "SENT / RECEIVED"),
         "",
     ];
     let mut w = head.map(|h| h.chars().count());
@@ -521,14 +719,27 @@ pub fn rename(id: u32, name: &str) -> Result<i32> {
         id,
         name: name.to_string(),
     })?;
-    eprintln!("sandmux: sessão {id} renomeada para {}", name.trim());
+    eprintln!(
+        "{}",
+        trf!(
+            "sandmux: sessão {id} renomeada para {}",
+            "sandmux: session {id} renamed to {}",
+            name.trim()
+        )
+    );
     Ok(0)
 }
 
 pub fn kill(id: u32) -> Result<i32> {
     let mut conn = client::connect_or_start()?;
     conn.call(&Msg::Kill { id })?;
-    eprintln!("sandmux: sessão {id} encerrada");
+    eprintln!(
+        "{}",
+        trf!(
+            "sandmux: sessão {id} encerrada",
+            "sandmux: session {id} ended"
+        )
+    );
     Ok(0)
 }
 
@@ -536,7 +747,10 @@ pub fn restart(id: u32) -> Result<i32> {
     let mut conn = client::connect_or_start()?;
     let sessions = list(&mut conn)?;
     let Some(s) = sessions.iter().find(|s| s.id == id) else {
-        bail!("não existe a sessão {id}");
+        bail!(trf!(
+            "não existe a sessão {id}",
+            "session {id} does not exist"
+        ));
     };
     // A política é resolvida de novo: os nomes de `pass-env` vêm da
     // configuração de agora, com as opções e o perfil guardados.
@@ -554,7 +768,13 @@ pub fn restart(id: u32) -> Result<i32> {
         return client::attached(conn);
     }
     if let Msg::Created { id, name } = reply {
-        eprintln!("sandmux: sessão {id} ({name}) relançada");
+        eprintln!(
+            "{}",
+            trf!(
+                "sandmux: sessão {id} ({name}) relançada",
+                "sandmux: session {id} ({name}) relaunched"
+            )
+        );
     }
     Ok(0)
 }
@@ -562,8 +782,12 @@ pub fn restart(id: u32) -> Result<i32> {
 pub fn daemon_status() -> Result<i32> {
     let Some(mut conn) = Conn::connect()? else {
         println!(
-            "O daemon não está rodando (socket: {}).",
-            paths::socket_path().display()
+            "{}",
+            trf!(
+                "O daemon não está rodando (socket: {}).",
+                "The daemon is not running (socket: {}).",
+                paths::socket_path().display()
+            )
         );
         return Ok(1);
     };
@@ -576,15 +800,33 @@ pub fn daemon_status() -> Result<i32> {
             sessions,
             socket,
         } => {
-            println!("O daemon está rodando.");
+            println!(
+                "{}",
+                tr!("O daemon está rodando.", "The daemon is running.")
+            );
             println!("  PID: {pid}");
-            println!("  versão: {version} (protocolo {protocol})");
-            println!("  iniciado por: {start_mode}");
-            println!("  sessões: {sessions}");
+            println!(
+                "{}",
+                trf!(
+                    "  versão: {version} (protocolo {protocol})",
+                    "  version: {version} (protocol {protocol})"
+                )
+            );
+            println!(
+                "{}",
+                trf!("  iniciado por: {start_mode}", "  started by: {start_mode}")
+            );
+            println!(
+                "{}",
+                trf!("  sessões: {sessions}", "  sessions: {sessions}")
+            );
             println!("  socket: {}", socket.display());
             Ok(0)
         }
-        m => Err(anyhow!("resposta inesperada do daemon: {m:?}")),
+        m => Err(anyhow!(trf!(
+            "resposta inesperada do daemon: {m:?}",
+            "unexpected reply from the daemon: {m:?}"
+        ))),
     }
 }
 
@@ -596,17 +838,54 @@ fn process_alive(pid: u32) -> bool {
     }
 }
 
+/// O PID do daemon pela trava, quando o processo é mesmo um `sandmuxd`.
+fn locked_daemon_pid() -> Option<u32> {
+    let pid: u32 = std::fs::read_to_string(paths::lock_path())
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    (comm.trim() == "sandmuxd" && process_alive(pid)).then_some(pid)
+}
+
 /// Para o daemon e espera o processo terminar. Devolve se havia daemon.
+/// Um daemon de outra versão do protocolo, que recusa a conversa, é parado
+/// pelo SIGTERM, que ele trata como o `stop` (as sessões vivas voltam na
+/// subida seguinte).
 fn stop_daemon() -> Result<bool> {
-    let Some(mut conn) = Conn::connect()? else {
-        return Ok(false);
+    let pid = match Conn::connect() {
+        Ok(None) => return Ok(false),
+        Ok(Some(mut conn)) => {
+            let pid = conn.info.pid;
+            conn.call(&Msg::Stop)?;
+            pid
+        }
+        Err(e) => {
+            let Some(pid) = locked_daemon_pid() else {
+                return Err(e);
+            };
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmux: o daemon em execução (PID {pid}) é de outra versão; parando-o pelo sinal",
+                    "sandmux: the running daemon (PID {pid}) is from another version; stopping it with a signal"
+                )
+            );
+            // SAFETY: kill com um PID e um sinal válidos.
+            if unsafe { libc::kill(pid as i32, libc::SIGTERM) } < 0 {
+                return Err(e);
+            }
+            pid
+        }
     };
-    let pid = conn.info.pid;
-    conn.call(&Msg::Stop)?;
     let deadline = Instant::now() + Duration::from_secs(20);
     while paths::socket_path().exists() || process_alive(pid) {
         if Instant::now() >= deadline {
-            bail!("o daemon (PID {pid}) não parou");
+            bail!(trf!(
+                "o daemon (PID {pid}) não parou",
+                "the daemon (PID {pid}) did not stop"
+            ));
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -615,9 +894,21 @@ fn stop_daemon() -> Result<bool> {
 
 pub fn daemon_stop() -> Result<i32> {
     if stop_daemon()? {
-        eprintln!("sandmux: daemon parado; as sessões vivas voltam na próxima subida");
+        eprintln!(
+            "{}",
+            tr!(
+                "sandmux: daemon parado; as sessões vivas voltam na próxima subida",
+                "sandmux: daemon stopped; the alive sessions come back on the next start"
+            )
+        );
     } else {
-        eprintln!("sandmux: o daemon não está rodando");
+        eprintln!(
+            "{}",
+            tr!(
+                "sandmux: o daemon não está rodando",
+                "sandmux: the daemon is not running"
+            )
+        );
     }
     Ok(0)
 }
@@ -627,8 +918,13 @@ pub fn daemon_restart() -> Result<i32> {
     client::start_daemon()?;
     let conn = client::wait_for_daemon(Duration::from_secs(5))?;
     eprintln!(
-        "sandmux: daemon reiniciado (PID {}, versão {})",
-        conn.info.pid, conn.info.version
+        "{}",
+        trf!(
+            "sandmux: daemon reiniciado (PID {}, versão {})",
+            "sandmux: daemon restarted (PID {}, version {})",
+            conn.info.pid,
+            conn.info.version
+        )
     );
     Ok(0)
 }
@@ -639,11 +935,21 @@ pub fn daemon_disable() -> Result<i32> {
         std::env::var("SANDMUX_DAEMON_START").as_deref() != Ok("direct") && systemd::available();
     if systemd::disable(call)? {
         eprintln!(
-            "sandmux: daemon parado e unidade {} removida",
-            systemd::unit_path().display()
+            "{}",
+            trf!(
+                "sandmux: daemon parado e unidade {} removida",
+                "sandmux: daemon stopped and unit {} removed",
+                systemd::unit_path().display()
+            )
         );
     } else {
-        eprintln!("sandmux: daemon parado; não havia unidade systemd instalada");
+        eprintln!(
+            "{}",
+            tr!(
+                "sandmux: daemon parado; não havia unidade systemd instalada",
+                "sandmux: daemon stopped; no systemd unit was installed"
+            )
+        );
     }
     Ok(0)
 }
@@ -664,14 +970,18 @@ pub fn folder_add(id: u32, pasta: &std::path::Path, rw: bool) -> Result<i32> {
         .find(|f| f.path == std::fs::canonicalize(&p).unwrap_or(p.clone()))
     {
         eprintln!(
-            "sandmux: sessão {id}: {} em {} ({})",
-            f.path.display(),
-            f.dest().display(),
-            if f.rw {
-                "leitura e escrita"
-            } else {
-                "somente leitura"
-            }
+            "{}",
+            trf!(
+                "sandmux: sessão {id}: {} em {} ({})",
+                "sandmux: session {id}: {} at {} ({})",
+                f.path.display(),
+                f.dest().display(),
+                if f.rw {
+                    tr!("leitura e escrita", "read and write")
+                } else {
+                    tr!("somente leitura", "read-only")
+                }
+            )
         );
     }
     Ok(0)
@@ -685,7 +995,13 @@ pub fn folder_remove(id: u32, nome: &str) -> Result<i32> {
         value: nome.into(),
         rw: false,
     })?;
-    eprintln!("sandmux: sessão {id}: /mnt/sandmux/{nome} desmontada");
+    eprintln!(
+        "{}",
+        trf!(
+            "sandmux: sessão {id}: /mnt/sandmux/{nome} desmontada",
+            "sandmux: session {id}: /mnt/sandmux/{nome} unmounted"
+        )
+    );
     Ok(0)
 }
 
@@ -693,14 +1009,23 @@ fn folders_of(id: u32) -> Result<Vec<sandmux_spec::LiveFolder>> {
     let mut conn = client::connect_or_start()?;
     match conn.call(&Msg::FolderList { id })? {
         Msg::Folders { list } => Ok(list),
-        _ => anyhow::bail!("resposta inesperada do daemon"),
+        _ => anyhow::bail!(tr!(
+            "resposta inesperada do daemon",
+            "unexpected reply from the daemon"
+        )),
     }
 }
 
 pub fn folder_list(id: u32) -> Result<i32> {
     let list = folders_of(id)?;
     if list.is_empty() {
-        println!("Nenhuma pasta em /mnt/sandmux.");
+        println!(
+            "{}",
+            tr!(
+                "Nenhuma pasta em /mnt/sandmux.",
+                "No folders in /mnt/sandmux."
+            )
+        );
     }
     for f in list {
         println!(
@@ -720,7 +1045,10 @@ pub fn mcp_list(id: Option<u32>, harness: &str) -> Result<i32> {
             let mut conn = client::connect_or_start()?;
             match conn.call(&Msg::McpList { id })? {
                 Msg::Mcps { list } => list,
-                _ => anyhow::bail!("resposta inesperada do daemon"),
+                _ => anyhow::bail!(tr!(
+                    "resposta inesperada do daemon",
+                    "unexpected reply from the daemon"
+                )),
             }
         }
         None => {
@@ -731,15 +1059,15 @@ pub fn mcp_list(id: Option<u32>, harness: &str) -> Result<i32> {
         }
     };
     if list.is_empty() {
-        println!("Nenhum servidor MCP.");
+        println!("{}", tr!("Nenhum servidor MCP.", "No MCP servers."));
     }
     for m in list {
         println!(
             "{}  {}  {}  {}  {}",
             if m.enabled {
-                "habilitado   "
+                tr!("habilitado   ", "enabled ")
             } else {
-                "desabilitado "
+                tr!("desabilitado ", "disabled")
             },
             m.name,
             m.kind,

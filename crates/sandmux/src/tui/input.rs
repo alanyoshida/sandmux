@@ -29,6 +29,8 @@ pub enum Key {
     Left,
     Right,
     Tab,
+    /// Ctrl com uma letra minúscula (só as que a TUI usa).
+    Ctrl(char),
 }
 
 /// Uma unidade da entrada.
@@ -119,6 +121,7 @@ impl Token {
                 27 => Some(Key::Esc),
                 127 | 8 => Some(Key::Backspace),
                 9 => Some(Key::Tab),
+                c @ 97..=122 if m == 4 => char::from_u32(c).map(Key::Ctrl),
                 _ if m & !1 == 0 => char::from_u32(code).map(Key::Char),
                 _ => None,
             };
@@ -128,6 +131,7 @@ impl Token {
             b"\x1b" => Some(Key::Esc),
             b"\x7f" | b"\x08" => Some(Key::Backspace),
             b"\t" => Some(Key::Tab),
+            b"\x12" => Some(Key::Ctrl('r')),
             b"\x1b[A" | b"\x1bOA" => Some(Key::Up),
             b"\x1b[B" | b"\x1bOB" => Some(Key::Down),
             b"\x1b[C" | b"\x1bOC" => Some(Key::Right),

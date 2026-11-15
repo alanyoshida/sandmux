@@ -20,6 +20,7 @@ use nix::sys::termios::{self, SetArg, Termios};
 use sandmux_proto::msg::{DaemonInfo, check_welcome};
 use sandmux_proto::term::ModeTracker;
 use sandmux_proto::{Frame, Msg, PROTOCOL, Size, read_frame, write_control, write_data};
+use sandmux_spec::{tr, trf};
 
 use crate::{launch, paths};
 
@@ -74,7 +75,7 @@ impl Conn {
             {
                 return Ok(None);
             }
-            Err(e) => return Err(e).context("conectar ao daemon"),
+            Err(e) => return Err(e).context(tr!("conectar ao daemon", "connect to the daemon")),
         };
         write_control(
             &mut stream,
@@ -83,11 +84,15 @@ impl Conn {
                 version: VERSION.into(),
                 data_dir: data_dir(),
                 config_dir: config_dir(),
+                lang: sandmux_spec::lang::get().code().into(),
             },
         )?;
         let reply = match read_frame(&mut stream)? {
             Some(Frame::Control(m)) => m,
-            _ => bail!("o daemon encerrou a conexão na saudação"),
+            _ => bail!(tr!(
+                "o daemon encerrou a conexão na saudação",
+                "the daemon closed the connection during the greeting"
+            )),
         };
         let info = check_welcome(&reply, PROTOCOL, VERSION).map_err(|e| anyhow!(e))?;
         Ok(Some(Conn { stream, info }))
@@ -103,11 +108,17 @@ impl Conn {
         loop {
             match read_frame(&mut self.stream)? {
                 Some(Frame::Control(Msg::Warning { message })) => {
-                    eprintln!("sandmux: aviso: {message}");
+                    eprintln!(
+                        "{}",
+                        trf!("sandmux: aviso: {message}", "sandmux: warning: {message}")
+                    );
                 }
                 Some(Frame::Control(m)) => return Ok(m),
                 Some(Frame::Data(_)) => {}
-                None => bail!("o daemon encerrou a conexão"),
+                None => bail!(tr!(
+                    "o daemon encerrou a conexão",
+                    "the daemon closed the connection"
+                )),
             }
         }
     }
@@ -129,11 +140,12 @@ pub fn wait_for_daemon(timeout: Duration) -> Result<Conn> {
             return Ok(c);
         }
         if Instant::now() >= deadline {
-            bail!(
+            bail!(trf!(
                 "o daemon não respondeu em {}; veja o log em {}",
+                "the daemon did not answer at {}; see the log at {}",
                 paths::socket_path().display(),
                 log_path().display()
-            );
+            ));
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -151,7 +163,7 @@ fn start_direct() -> Result<()> {
         .create(true)
         .append(true)
         .open(log_path())
-        .with_context(|| format!("abrir {}", log_path().display()))?;
+        .with_context(|| trf!("abrir {}", "open {}", log_path().display()))?;
     let mut cmd = Command::new(launch::sibling("sandmuxd"));
     cmd.env("SANDMUX_START_MODE", "direct")
         .stdin(Stdio::null())
@@ -174,7 +186,9 @@ fn start_direct() -> Result<()> {
             Ok(())
         });
     }
-    let mut child = cmd.spawn().context("iniciar o sandmuxd")?;
+    let mut child = cmd
+        .spawn()
+        .context(tr!("iniciar o sandmuxd", "start sandmuxd"))?;
     // A thread que colhe o daemon nasce com todos os sinais bloqueados, para
     // não receber os sinais que o modo anexado trata.
     let old = SigSet::all().thread_swap_mask(nix::sys::signal::SigmaskHow::SIG_BLOCK)?;
@@ -217,7 +231,13 @@ pub fn start_daemon() -> Result<()> {
         };
         match systemd::install_and_start(&exec, homes) {
             Ok(()) => return Ok(()),
-            Err(e) => eprintln!("sandmux: aviso: {e:#}; subindo o daemon sem o systemd"),
+            Err(e) => eprintln!(
+                "{}",
+                trf!(
+                    "sandmux: aviso: {e:#}; subindo o daemon sem o systemd",
+                    "sandmux: warning: {e:#}; starting the daemon without systemd"
+                )
+            ),
         }
     }
     start_direct()
@@ -448,12 +468,22 @@ fn attached_inner(conn: Conn, known: Option<(u32, String)>) -> Result<i32> {
     let outcome = outcome.lock().unwrap_or_else(|e| e.into_inner()).clone();
     match outcome {
         Some(Outcome::Exited(code)) => {
-            eprintln!("sandmux: a sessão {id} ({name}) terminou com código {code}");
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmux: a sessão {id} ({name}) terminou com código {code}",
+                    "sandmux: session {id} ({name}) exited with code {code}"
+                )
+            );
             Ok(code)
         }
         Some(Outcome::Detached) => {
             eprintln!(
-                "sandmux: desanexado; a sessão {id} ({name}) continua viva. Para voltar: sandmux attach {id}"
+                "{}",
+                trf!(
+                    "sandmux: desanexado; a sessão {id} ({name}) continua viva. Para voltar: sandmux attach {id}",
+                    "sandmux: detached; session {id} ({name}) is still alive. To return: sandmux attach {id}"
+                )
             );
             Ok(0)
         }
@@ -463,6 +493,9 @@ fn attached_inner(conn: Conn, known: Option<(u32, String)>) -> Result<i32> {
             Ok(0)
         }
         Some(Outcome::Error(message)) => Err(anyhow!(message)),
-        None => Err(anyhow!("a conexão com o daemon caiu")),
+        None => Err(anyhow!(tr!(
+            "a conexão com o daemon caiu",
+            "the connection to the daemon dropped"
+        ))),
     }
 }

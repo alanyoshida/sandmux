@@ -1,6 +1,7 @@
 //! Auxiliar de conexão: um processo que entra nos namespaces de usuário e de
-//! rede do sandbox e abre, a pedido do supervisor, conexões TCP no
-//! `127.0.0.1` de lá, devolvendo o descritor por SCM_RIGHTS.
+//! rede do sandbox e abre, a pedido do supervisor, conexões TCP (`C`) e
+//! ouvintes (`L`, as portas do host) no `127.0.0.1` de lá, devolvendo o
+//! descritor por SCM_RIGHTS. Cada pedido tem 3 bytes: a operação e a porta.
 //!
 //! O supervisor não entra direto no namespace de rede do sandbox: o `setns`
 //! pede `CAP_SYS_ADMIN` também no namespace de usuário de quem chama. Entrando
@@ -9,7 +10,7 @@
 //! só thread, por isso o auxiliar nasce antes do gateway.
 
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::time::Duration;
 
@@ -25,11 +26,11 @@ fn setns(f: &std::fs::File, kind: libc::c_int) -> io::Result<()> {
     Ok(())
 }
 
-/// Responde um pedido: `C` com o descritor, ou `E` sem nada.
-fn answer(sock: &OwnedFd, stream: Option<&TcpStream>) {
-    match stream {
+/// Responde um pedido: a operação com o descritor, ou `E` sem nada.
+fn answer(sock: &OwnedFd, op: u8, fd: Option<&dyn AsRawFd>) {
+    match fd {
         Some(s) => {
-            let _ = net::send_fd_tagged(sock, s, b'C');
+            let _ = net::send_fd_tagged(sock, &s.as_raw_fd(), op);
         }
         None => {
             let b = *b"E";
@@ -70,21 +71,26 @@ pub unsafe fn spawn(child: Pid) -> io::Result<OwnedFd> {
                 // SAFETY: saída imediata do auxiliar.
                 unsafe { libc::_exit(1) };
             }
-            let mut req = [0u8; 2];
+            let mut req = [0u8; 3];
             loop {
                 // SAFETY: leitura num buffer válido.
-                let n = unsafe { libc::read(theirs.as_raw_fd(), req.as_mut_ptr().cast(), 2) };
-                if n != 2 {
+                let n = unsafe { libc::read(theirs.as_raw_fd(), req.as_mut_ptr().cast(), 3) };
+                if n != 3 {
                     // SAFETY: fim do supervisor ou pedido inválido.
                     unsafe { libc::_exit(0) };
                 }
-                let port = u16::from_be_bytes(req);
-                let s = TcpStream::connect_timeout(
-                    &SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
-                    Duration::from_secs(3),
-                )
-                .ok();
-                answer(&theirs, s.as_ref());
+                let port = u16::from_be_bytes([req[1], req[2]]);
+                let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+                match req[0] {
+                    b'L' => {
+                        let l = TcpListener::bind(addr).ok();
+                        answer(&theirs, b'L', l.as_ref().map(|l| l as &dyn AsRawFd));
+                    }
+                    _ => {
+                        let s = TcpStream::connect_timeout(&addr, Duration::from_secs(3)).ok();
+                        answer(&theirs, b'C', s.as_ref().map(|s| s as &dyn AsRawFd));
+                    }
+                }
             }
         }
     }

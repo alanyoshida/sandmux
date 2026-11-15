@@ -6,6 +6,7 @@ use anyhow::{Result, anyhow};
 use clap::{Args, Subcommand};
 use sandmux_policy::Host;
 use sandmux_policy::config::{self, Config, Effective, Layer, Origin, Request, edit};
+use sandmux_spec::{tr, trf};
 
 #[derive(Subcommand)]
 pub enum ConfigCmd {
@@ -76,9 +77,13 @@ impl Alvo {
         }
         let p = self.project.as_ref().expect("grupo obrigatório");
         let abs = sandmux::launch::absolute(p, &host.cwd);
-        let abs = abs
-            .canonicalize()
-            .map_err(|e| anyhow!("pasta do projeto {}: {e}", abs.display()))?;
+        let abs = abs.canonicalize().map_err(|e| {
+            anyhow!(trf!(
+                "pasta do projeto {}: {e}",
+                "project folder {}: {e}",
+                abs.display()
+            ))
+        })?;
         Ok(edit::Target::Project(abs))
     }
 }
@@ -96,7 +101,10 @@ pub fn run(cmd: ConfigCmd) -> Result<i32> {
                 edit::Op::SetLimit(chave, valor)
             } else {
                 let v = edit::parse_bool(&valor).ok_or_else(|| {
-                    anyhow!("valor inválido para `{chave}`: {valor:?}. Use true ou false")
+                    anyhow!(trf!(
+                        "valor inválido para `{chave}`: {valor:?}. Use true ou false",
+                        "invalid value for `{chave}`: {valor:?}. Use true or false"
+                    ))
                 })?;
                 edit::Op::Set(chave, v)
             };
@@ -116,18 +124,32 @@ fn change(host: &Host, path: &Path, alvo: &Alvo, op: edit::Op) -> Result<i32> {
     let target = alvo.target(host)?;
     let out = edit::apply(path, host, &target, &op)?;
     match (out.changed, out.notice) {
-        (true, _) => eprintln!("sandmux: {} atualizado em {target}", path.display()),
-        (false, Some(n)) => eprintln!("sandmux: nada mudou: {n}"),
-        (false, None) => eprintln!("sandmux: nada mudou"),
+        (true, _) => eprintln!(
+            "{}",
+            trf!(
+                "sandmux: {} atualizado em {target}",
+                "sandmux: {} updated in {target}",
+                path.display()
+            )
+        ),
+        (false, Some(n)) => eprintln!(
+            "{}",
+            trf!("sandmux: nada mudou: {n}", "sandmux: nothing changed: {n}")
+        ),
+        (false, None) => eprintln!("{}", tr!("sandmux: nada mudou", "sandmux: nothing changed")),
     }
     Ok(0)
 }
 
 fn file_line(path: &Path) -> String {
     if path.exists() {
-        format!("Arquivo: {}", path.display())
+        trf!("Arquivo: {}", "File: {}", path.display())
     } else {
-        format!("Arquivo: {} (não existe)", path.display())
+        trf!(
+            "Arquivo: {} (não existe)",
+            "File: {} (does not exist)",
+            path.display()
+        )
     }
 }
 
@@ -141,8 +163,13 @@ fn show(
     let wd = match workdir {
         Some(w) => {
             let abs = sandmux::launch::absolute(&w, &host.cwd);
-            abs.canonicalize()
-                .map_err(|e| anyhow!("pasta de trabalho {}: {e}", abs.display()))?
+            abs.canonicalize().map_err(|e| {
+                anyhow!(trf!(
+                    "pasta de trabalho {}: {e}",
+                    "work folder {}: {e}",
+                    abs.display()
+                ))
+            })?
         }
         None => host.cwd.clone(),
     };
@@ -158,13 +185,22 @@ fn show(
         },
     )?;
     println!("{}", file_line(path));
-    println!("Pasta de trabalho: {}", wd.display());
+    println!(
+        "{}",
+        trf!("Pasta de trabalho: {}", "Work folder: {}", wd.display())
+    );
     match &eff.project {
-        Some(p) => println!("Perfil do projeto: {}", p.display()),
-        None => println!("Perfil do projeto: nenhum"),
+        Some(p) => println!(
+            "{}",
+            trf!("Perfil do projeto: {}", "Project profile: {}", p.display())
+        ),
+        None => println!(
+            "{}",
+            tr!("Perfil do projeto: nenhum", "Project profile: none")
+        ),
     }
     if let Some(p) = &eff.profile {
-        println!("Perfil nomeado: {p}");
+        println!("{}", trf!("Perfil nomeado: {p}", "Named profile: {p}"));
     }
     println!();
     print_table(&rows(&eff));
@@ -189,12 +225,20 @@ fn rows(eff: &Effective) -> Vec<[String; 3]> {
     ]);
     rows.push([
         "network".into(),
-        eff.network.value.to_string(),
+        {
+            let v = eff.network.value.to_string();
+            let l = sandmux_policy::config::value_label("network", &v);
+            if l == v { v } else { format!("{l} ({v})") }
+        },
         eff.network.origin.to_string(),
     ]);
     let mut list = |key: &str, items: Vec<(String, &Origin)>| {
         if items.is_empty() {
-            rows.push([key.into(), "(nenhum)".into(), Origin::Default.to_string()]);
+            rows.push([
+                key.into(),
+                tr!("(nenhum)", "(none)").into(),
+                Origin::Default.to_string(),
+            ]);
         }
         for (v, o) in items {
             rows.push([key.into(), v, o.to_string()]);
@@ -220,20 +264,24 @@ fn rows(eff: &Effective) -> Vec<[String; 3]> {
         ("secret-files-off", &eff.secret_files_off),
     ] {
         if !v.is_empty() {
-            rows.push([k.into(), v.join(", "), "somada das camadas".into()]);
+            rows.push([
+                k.into(),
+                v.join(", "),
+                tr!("somada das camadas", "summed across layers").into(),
+            ]);
         }
     }
     if eff.ssh_keys.is_empty() {
         rows.push([
             "ssh-keys".into(),
-            "(nenhuma)".into(),
+            tr!("(nenhuma)", "(none)").into(),
             Origin::Default.to_string(),
         ]);
     } else {
         rows.push([
             "ssh-keys".into(),
             eff.ssh_keys.join(", "),
-            "somada das camadas".into(),
+            tr!("somada das camadas", "summed across layers").into(),
         ]);
     }
     // Regras de rede das camadas; os catálogos num resumo (o detalhe está em
@@ -246,15 +294,23 @@ fn rows(eff: &Effective) -> Vec<[String; 3]> {
             .filter(|r| r.kind == kind && !r.origin.starts_with("catálogo"))
             .collect();
         if mine.is_empty() {
-            rows.push([key.into(), "(nenhum)".into(), Origin::Default.to_string()]);
+            rows.push([
+                key.into(),
+                tr!("(nenhum)", "(none)").into(),
+                Origin::Default.to_string(),
+            ]);
         }
         for r in mine {
             let v = if r.enabled {
                 r.pattern.to_string()
             } else {
-                format!("{} (desligado)", r.pattern)
+                trf!("{} (desligado)", "{} (off)", r.pattern)
             };
-            rows.push([key.into(), v, format!("modificada ({})", r.origin)]);
+            rows.push([
+                key.into(),
+                v,
+                trf!("modificada ({})", "modified ({})", r.origin),
+            ]);
         }
     }
     let count = |origin: &dyn Fn(&str) -> bool| {
@@ -274,11 +330,12 @@ fn rows(eff: &Effective) -> Vec<[String; 3]> {
         .collect();
     let default = ex_on == ex_all && inf_on == inf_all && groups.is_empty();
     rows.push([
-        "catálogos".into(),
-        format!(
+        tr!("catálogos", "catalogs").into(),
+        trf!(
             "exfiltração {ex_on}/{ex_all}, inferência {inf_on}/{inf_all}, comuns: {}",
+            "exfiltration {ex_on}/{ex_all}, inference {inf_on}/{inf_all}, common: {}",
             if groups.is_empty() {
-                "nenhum".to_string()
+                tr!("nenhum", "none").to_string()
             } else {
                 groups.join(", ")
             }
@@ -286,14 +343,18 @@ fn rows(eff: &Effective) -> Vec<[String; 3]> {
         if default {
             Origin::Default.to_string()
         } else {
-            "modificada".into()
+            tr!("modificada", "modified").into()
         },
     ]);
     rows
 }
 
 fn print_table(rows: &[[String; 3]]) {
-    let head = ["CHAVE", "VALOR", "ORIGEM"];
+    let head = [
+        tr!("CHAVE", "KEY"),
+        tr!("VALOR", "VALUE"),
+        tr!("ORIGEM", "ORIGIN"),
+    ];
     let mut w = head.map(|h| h.chars().count());
     for r in rows {
         for i in 0..2 {
@@ -323,29 +384,33 @@ fn list(path: &Path) -> Result<i32> {
         println!("  {name}");
         let keys = l.describe();
         if keys.is_empty() {
-            println!("    (vazio)");
+            println!("    {}", tr!("(vazio)", "(empty)"));
         }
         for k in keys {
             println!("    {k}");
         }
     };
     if cfg.profiles.is_empty() {
-        println!("Perfis: nenhum");
+        println!("{}", tr!("Perfis: nenhum", "Profiles: none"));
     } else {
-        println!("Perfis:");
+        println!("{}", tr!("Perfis:", "Profiles:"));
         for (n, l) in &cfg.profiles {
             section(n, l);
         }
     }
     if cfg.projects.is_empty() {
-        println!("Projetos: nenhum");
+        println!("{}", tr!("Projetos: nenhum", "Projects: none"));
     } else {
-        println!("Projetos:");
+        println!("{}", tr!("Projetos:", "Projects:"));
         for (p, l) in &cfg.projects {
             let name = if p.is_dir() {
                 p.display().to_string()
             } else {
-                format!("{} (pasta não existe)", p.display())
+                trf!(
+                    "{} (pasta não existe)",
+                    "{} (folder does not exist)",
+                    p.display()
+                )
             };
             section(&name, l);
         }

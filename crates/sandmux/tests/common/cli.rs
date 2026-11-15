@@ -93,6 +93,8 @@ impl Env {
             .env("XDG_STATE_HOME", &self.state)
             .env("XDG_CONFIG_HOME", &self.config)
             .env("SANDMUX_DAEMON_START", "direct")
+            // O ambiente é limpo; sem idioma, o sistema seria `C` (inglês).
+            .env("LANG", "pt_BR.UTF-8")
             .stdin(Stdio::null());
         // O barramento do systemd de usuário de quem roda os testes, para os
         // tetos de recurso (o XDG_RUNTIME_DIR do teste é outra pasta).
@@ -198,4 +200,10 @@ pub fn user_bus() -> Option<String> {
     let uid = unsafe { libc::getuid() };
     let p = format!("/run/user/{uid}/bus");
     Path::new(&p).exists().then(|| format!("unix:path={p}"))
+}
+
+/// O texto de uma aba na barra em blocos (o padrão): o número no bloco e o
+/// nome com as marcas.
+pub fn tab(n: usize, name: &str) -> String {
+    format!(" {n}  {name}")
 }

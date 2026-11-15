@@ -32,6 +32,7 @@ use anyhow::{Context, Result, bail};
 use nix::sys::signal::{SigSet, Signal};
 use sandmux_policy::Host;
 use sandmux_proto::{LaunchOptions, PROTOCOL, SessionInfo, SessionState};
+use sandmux_spec::{tr, trf};
 
 use crate::paths;
 pub use session::{Out, Session};
@@ -91,7 +92,13 @@ impl Shared {
                 .collect(),
         };
         if let Err(e) = store::save(&self.sessions_file(), &saved) {
-            eprintln!("sandmuxd: aviso: gravar a lista de sessões: {e:#}");
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmuxd: aviso: gravar a lista de sessões: {e:#}",
+                    "sandmuxd: warning: saving the session list: {e:#}"
+                )
+            );
         }
     }
 
@@ -108,7 +115,14 @@ impl Shared {
             self.persist(&st);
             st.sessions.values().filter_map(|s| s.pid()).collect()
         };
-        eprintln!("sandmuxd: parando, {} sessões vivas", pids.len());
+        eprintln!(
+            "{}",
+            trf!(
+                "sandmuxd: parando, {} sessões vivas",
+                "sandmuxd: stopping, {} sessions alive",
+                pids.len()
+            )
+        );
         for pid in &pids {
             session::terminate(*pid);
         }
@@ -206,7 +220,7 @@ fn take_instance_lock(path: &std::path::Path) -> Result<Option<File>> {
         .read(true)
         .write(true)
         .open(path)
-        .with_context(|| format!("abrir {}", path.display()))?;
+        .with_context(|| trf!("abrir {}", "open {}", path.display()))?;
     // SAFETY: flock sobre um descritor válido.
     if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Ok(None);
@@ -217,12 +231,19 @@ fn take_instance_lock(path: &std::path::Path) -> Result<Option<File>> {
 }
 
 fn usage() -> ! {
-    eprintln!("uso: sandmuxd [--history-lines N]");
+    eprintln!(
+        "{}",
+        tr!(
+            "uso: sandmuxd [--history-lines N]",
+            "usage: sandmuxd [--history-lines N]"
+        )
+    );
     std::process::exit(2);
 }
 
 /// Ponto de entrada do binário `sandmuxd`.
 pub fn main() -> ExitCode {
+    crate::init_language();
     let mut history = 10_000usize;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -239,7 +260,10 @@ pub fn main() -> ExitCode {
     match run(history) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("sandmuxd: erro: {e:#}");
+            eprintln!(
+                "{}",
+                trf!("sandmuxd: erro: {e:#}", "sandmuxd: error: {e:#}")
+            );
             ExitCode::from(1)
         }
     }
@@ -265,19 +289,26 @@ fn run(history: usize) -> Result<()> {
     paths::ensure_runtime_dir(&dir)?;
     let Some(instance) = take_instance_lock(&paths::lock_path())? else {
         let pid = std::fs::read_to_string(paths::lock_path()).unwrap_or_default();
-        bail!(
+        bail!(trf!(
             "o daemon já está rodando (PID {}); use `sandmux daemon status`",
+            "the daemon is already running (PID {}); use `sandmux daemon status`",
             pid.trim()
-        );
+        ));
     };
     let socket = paths::socket_path();
     match std::fs::remove_file(&socket) {
-        Ok(()) => eprintln!("sandmuxd: removido o socket de um daemon anterior"),
+        Ok(()) => eprintln!(
+            "{}",
+            tr!(
+                "sandmuxd: removido o socket de um daemon anterior",
+                "sandmuxd: removed the socket of a previous daemon"
+            )
+        ),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e).context("remover o socket antigo"),
+        Err(e) => return Err(e).context(tr!("remover o socket antigo", "remove the old socket")),
     }
-    let listener =
-        UnixListener::bind(&socket).with_context(|| format!("criar {}", socket.display()))?;
+    let listener = UnixListener::bind(&socket)
+        .with_context(|| trf!("criar {}", "create {}", socket.display()))?;
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
 
     let protocol = std::env::var("SANDMUX_PROTOCOL_OVERRIDE")
@@ -304,16 +335,23 @@ fn run(history: usize) -> Result<()> {
         vault: Mutex::new(vault::VaultState::new(&base_data)),
     });
     eprintln!(
-        "sandmuxd: ouvindo em {} (PID {}, protocolo {protocol})",
-        socket.display(),
-        shared.pid
+        "{}",
+        trf!(
+            "sandmuxd: ouvindo em {} (PID {}, protocolo {protocol})",
+            "sandmuxd: listening on {} (PID {}, protocol {protocol})",
+            socket.display(),
+            shared.pid
+        )
     );
 
     {
         let shared = shared.clone();
         std::thread::spawn(move || {
             if let Ok(sig) = term.wait() {
-                eprintln!("sandmuxd: recebido {sig:?}");
+                eprintln!(
+                    "{}",
+                    trf!("sandmuxd: recebido {sig:?}", "sandmuxd: received {sig:?}")
+                );
             }
             shared.stop();
         });
@@ -332,7 +370,13 @@ fn run(history: usize) -> Result<()> {
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         if !accept_peer(peer_uid(&stream), me) {
-            eprintln!("sandmuxd: conexão de outro usuário recusada");
+            eprintln!(
+                "{}",
+                tr!(
+                    "sandmuxd: conexão de outro usuário recusada",
+                    "sandmuxd: refused a connection from another user"
+                )
+            );
             continue;
         }
         let shared = shared.clone();
@@ -355,19 +399,22 @@ enum Blocked {
 
 fn blocked_restore(shared: &Shared, opts: &LaunchOptions, id: u32) -> Option<Blocked> {
     if !opts.workdir.is_dir() {
-        return Some(Blocked::Other(format!(
+        return Some(Blocked::Other(trf!(
             "a pasta de trabalho {} não existe mais",
+            "the work folder {} no longer exists",
             opts.workdir.display()
         )));
     }
     let mut host = shared.base.clone();
     host.cwd = opts.workdir.clone();
     match crate::launch::effective(&host, opts) {
-        Err(e) => Some(Blocked::Other(format!(
-            "{e:#}; corrija e rode `sandmux restart {id}`"
+        Err(e) => Some(Blocked::Other(trf!(
+            "{e:#}; corrija e rode `sandmux restart {id}`",
+            "{e:#}; fix it and run `sandmux restart {id}`"
         ))),
-        Ok(eff) if !eff.pass_env.is_empty() => Some(Blocked::PassEnv(format!(
+        Ok(eff) if !eff.pass_env.is_empty() => Some(Blocked::PassEnv(trf!(
             "precisa de --pass-env {}; rode `sandmux restart {id}` num terminal com as variáveis",
+            "needs --pass-env {}; run `sandmux restart {id}` in a terminal with the variables",
             eff.pass_env_names().join(", ")
         ))),
         Ok(_) => None,
@@ -378,7 +425,13 @@ fn restore(shared: &Arc<Shared>) {
     let saved = match store::load(&shared.sessions_file()) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("sandmuxd: aviso: {e:#}; começando sem sessões");
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmuxd: aviso: {e:#}; começando sem sessões",
+                    "sandmuxd: warning: {e:#}; starting with no sessions"
+                )
+            );
             store::Saved::default()
         }
     };
@@ -400,7 +453,9 @@ fn restore(shared: &Arc<Shared>) {
                 .exists();
             // A aba de chat também: a chave do provedor está nele.
             if state == SessionState::Viva
-                && (s.opts.gateway || session::is_chat(&s.opts))
+                && (s.opts.gateway
+                    || session::is_chat(&s.opts)
+                    || session::needs_vault_for_models(shared, &s.opts))
                 && vault_exists
             {
                 state = SessionState::AguardandoCofre;
@@ -436,10 +491,16 @@ fn restore(shared: &Arc<Shared>) {
     if !by_id.is_empty() {
         let mut st = shared.lock();
         for (id, err) in by_id {
-            eprintln!("sandmuxd: sessão {id} não foi restaurada: {err}");
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmuxd: sessão {id} não foi restaurada: {err}",
+                    "sandmuxd: session {id} was not restored: {err}"
+                )
+            );
             if let Some(s) = st.sessions.get_mut(&id) {
                 s.state = SessionState::Parada {
-                    motivo: format!("falhou ao restaurar: {err}"),
+                    motivo: trf!("falhou ao restaurar: {err}", "restore failed: {err}"),
                 };
             }
         }

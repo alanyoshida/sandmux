@@ -6,7 +6,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use sandmux_spec::LiveFolder;
+use sandmux_spec::{LiveFolder, trf};
 
 use super::Shared;
 
@@ -42,8 +42,12 @@ fn free_name(path: &std::path::Path, taken: &[LiveFolder]) -> String {
 /// Manda um pedido ao supervisor do lançamento `tag`.
 fn send(tag: &str, req: &sandmux_launcher::mounter::Request) -> Result<(), String> {
     let path = crate::launch::control_socket_path(tag);
-    let mut s = UnixStream::connect(&path)
-        .map_err(|e| format!("o supervisor da sessão não atende ({e})"))?;
+    let mut s = UnixStream::connect(&path).map_err(|e| {
+        trf!(
+            "o supervisor da sessão não atende ({e})",
+            "the session supervisor does not answer ({e})"
+        )
+    })?;
     let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
     let line = serde_json::to_string(req).map_err(|e| e.to_string())?;
     s.write_all(format!("{line}\n").as_bytes())
@@ -52,8 +56,8 @@ fn send(tag: &str, req: &sandmux_launcher::mounter::Request) -> Result<(), Strin
     BufReader::new(&s)
         .read_line(&mut out)
         .map_err(|e| e.to_string())?;
-    let r: sandmux_launcher::mounter::Reply =
-        serde_json::from_str(&out).map_err(|e| format!("resposta do supervisor: {e}"))?;
+    let r: sandmux_launcher::mounter::Reply = serde_json::from_str(&out)
+        .map_err(|e| trf!("resposta do supervisor: {e}", "supervisor reply: {e}"))?;
     r.error.map_or(Ok(()), Err)
 }
 
@@ -63,7 +67,7 @@ pub fn list(shared: &Shared, id: u32) -> Result<Vec<LiveFolder>, String> {
     let s = st
         .sessions
         .get(&id)
-        .ok_or_else(|| format!("não existe a sessão {id}"))?;
+        .ok_or_else(|| trf!("não existe a sessão {id}", "session {id} does not exist"))?;
     Ok(s.opts.folders.clone())
 }
 
@@ -81,22 +85,27 @@ pub fn edit(
         let s = st
             .sessions
             .get_mut(&id)
-            .ok_or_else(|| format!("não existe a sessão {id}"))?;
+            .ok_or_else(|| trf!("não existe a sessão {id}", "session {id} does not exist"))?;
         let tag = s.live.as_ref().and(s.tags.last().cloned());
         let req = match action {
             "add" => {
                 let p = PathBuf::from(value);
                 let p = std::fs::canonicalize(&p).map_err(|e| format!("{}: {e}", p.display()))?;
                 if !p.is_dir() {
-                    return Err(format!("{} não é uma pasta", p.display()));
+                    return Err(trf!(
+                        "{} não é uma pasta",
+                        "{} is not a folder",
+                        p.display()
+                    ));
                 }
                 let mut host = shared.base.clone();
                 host.cwd = s.opts.workdir.clone();
                 sandmux_policy::check_dangerous(&host, &p, rw).map_err(|e| e.to_string())?;
                 let creds = sandmux_policy::compose::credentials_touched(&host, &p);
                 if !creds.is_empty() {
-                    warning = Some(format!(
+                    warning = Some(trf!(
                         "{} dá ao agente acesso a credenciais reais: {}",
+                        "{} gives the agent access to real credentials: {}",
                         p.display(),
                         creds
                             .iter()
@@ -106,8 +115,9 @@ pub fn edit(
                     ));
                 }
                 if let Some(f) = s.opts.folders.iter().find(|f| f.path == p) {
-                    return Err(format!(
+                    return Err(trf!(
                         "{} já está em /mnt/sandmux/{}",
+                        "{} is already at /mnt/sandmux/{}",
                         p.display(),
                         f.name
                     ));
@@ -127,20 +137,31 @@ pub fn edit(
                 let before = s.opts.folders.len();
                 s.opts.folders.retain(|f| f.name != value);
                 if s.opts.folders.len() == before {
-                    return Err(format!("a sessão {id} não tem a pasta {value}"));
+                    return Err(trf!(
+                        "a sessão {id} não tem a pasta {value}",
+                        "session {id} has no folder {value}"
+                    ));
                 }
                 sandmux_launcher::mounter::Request::Remove {
                     name: value.to_string(),
                     all: s.opts.folders.clone(),
                 }
             }
-            other => return Err(format!("ação de pasta desconhecida: {other}")),
+            other => {
+                return Err(trf!(
+                    "ação de pasta desconhecida: {other}",
+                    "unknown folder action: {other}"
+                ));
+            }
         };
         shared.persist(&st);
         (tag, req)
     };
     let Some(tag) = live_tag else {
-        let note = format!("a sessão {id} não está viva; vale no próximo lançamento");
+        let note = trf!(
+            "a sessão {id} não está viva; vale no próximo lançamento",
+            "session {id} is not alive; it takes effect on the next launch"
+        );
         return Ok(Some(
             warning.map_or(note.clone(), |w| format!("{w}; {note}")),
         ));

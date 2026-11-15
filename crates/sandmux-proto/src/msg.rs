@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use sandmux_spec::{tr, trf};
 use serde::{Deserialize, Serialize};
 
 /// Tamanho de um terminal.
@@ -71,6 +72,10 @@ pub struct LaunchOptions {
     /// Portas de entrada da aba (`--port`, protocolo 18).
     #[serde(default)]
     pub ports: Vec<String>,
+    /// Portas do host levadas ao `127.0.0.1` do sandbox (`--host-port`,
+    /// protocolo 22).
+    #[serde(default)]
+    pub host_ports: Vec<u16>,
     /// Conexões de banco do cofre para o MCP da aba (`--db`, protocolo 17).
     #[serde(default)]
     pub db: Vec<String>,
@@ -116,6 +121,7 @@ impl LaunchOptions {
             mcp_allow: vec![],
             db: vec![],
             ports: vec![],
+            host_ports: vec![],
             gateway: false,
             args: vec![],
         }
@@ -145,11 +151,20 @@ pub enum SessionState {
 impl std::fmt::Display for SessionState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SessionState::Viva => write!(f, "viva"),
-            SessionState::Encerrada { codigo } => write!(f, "encerrada ({codigo})"),
-            SessionState::Parada { motivo } => write!(f, "parada: {motivo}"),
-            SessionState::AguardandoCofre => write!(f, "aguardando cofre"),
-            SessionState::Reiniciando { segundos } => write!(f, "reiniciando em {segundos} s"),
+            SessionState::Viva => f.write_str(tr!("viva", "alive")),
+            SessionState::Encerrada { codigo } => {
+                f.write_str(&trf!("encerrada ({codigo})", "ended ({codigo})"))
+            }
+            SessionState::Parada { motivo } => {
+                f.write_str(&trf!("parada: {motivo}", "stopped: {motivo}"))
+            }
+            SessionState::AguardandoCofre => {
+                f.write_str(tr!("aguardando cofre", "waiting for vault"))
+            }
+            SessionState::Reiniciando { segundos } => f.write_str(&trf!(
+                "reiniciando em {segundos} s",
+                "restarting in {segundos} s"
+            )),
         }
     }
 }
@@ -175,6 +190,9 @@ pub struct SessionInfo {
     /// Processos mortos por falta de memória no último lançamento.
     #[serde(default)]
     pub oom_kills: u64,
+    /// Começo do lançamento atual, em segundos Unix (protocolo 23).
+    #[serde(default)]
+    pub started_at: Option<u64>,
 }
 
 /// Consumo atual de uma sessão, com os tetos (`None` é sem teto).
@@ -357,6 +375,10 @@ pub enum Msg {
         /// Pasta de configuração do cliente (protocolo 2).
         #[serde(default)]
         config_dir: PathBuf,
+        /// Idioma do cliente (`pt` ou `en`), em que o daemon responde
+        /// (protocolo 24); vazio, o do daemon.
+        #[serde(default)]
+        lang: String,
     },
     Welcome {
         protocol: u32,
@@ -460,7 +482,15 @@ pub enum Msg {
     VaultRemove {
         name: String,
     },
+    /// Troca os domínios (ou os servidores de uma chave SSH) de um segredo,
+    /// sem o valor (protocolo 24).
+    VaultSetDomains {
+        name: String,
+        domains: Vec<String>,
+    },
     VaultList,
+    /// Os modelos dos provedores do assistente (protocolo 25).
+    ListModels,
     /// Monta (`add`, com `rw`) ou desmonta (`remove`, pelo nome) uma pasta em
     /// `/mnt/sandmux` na aba da sessão (protocolo 15).
     FolderEdit {
@@ -568,6 +598,12 @@ pub enum Msg {
     Answer {
         text: String,
     },
+    /// Resposta ao `ListModels`: `provedor/modelo` e os avisos dos
+    /// provedores que falharam.
+    Models {
+        ids: Vec<String>,
+        notes: Vec<String>,
+    },
     Folders {
         list: Vec<sandmux_spec::LiveFolder>,
     },
@@ -598,15 +634,24 @@ pub enum Msg {
 pub fn check_session_name(name: &str) -> Result<(), String> {
     let n = name.chars().count();
     if n == 0 || name.trim().is_empty() {
-        return Err("o nome da sessão não pode ser vazio".into());
+        return Err(tr!(
+            "o nome da sessão não pode ser vazio",
+            "the session name cannot be empty"
+        )
+        .into());
     }
     if n > 40 {
-        return Err(format!(
-            "o nome da sessão tem {n} caracteres; o máximo é 40"
+        return Err(trf!(
+            "o nome da sessão tem {n} caracteres; o máximo é 40",
+            "the session name has {n} characters; the maximum is 40"
         ));
     }
     if name.chars().any(char::is_control) {
-        return Err("o nome da sessão não pode ter caracteres de controle".into());
+        return Err(tr!(
+            "o nome da sessão não pode ter caracteres de controle",
+            "the session name cannot contain control characters"
+        )
+        .into());
     }
     Ok(())
 }
@@ -640,8 +685,9 @@ pub fn answer_hello(
             } else if d != data_dir {
                 (
                     Msg::Refused {
-                        message: format!(
+                        message: trf!(
                             "o daemon usa o diretório de dados {} e este terminal usa {}; defina o mesmo XDG_DATA_HOME nos dois ou rode `sandmux daemon restart` neste terminal",
+                            "the daemon uses the data directory {} and this terminal uses {}; set the same XDG_DATA_HOME in both or run `sandmux daemon restart` in this terminal",
                             data_dir.display(),
                             d.display()
                         ),
@@ -651,8 +697,9 @@ pub fn answer_hello(
             } else if c != config_dir {
                 (
                     Msg::Refused {
-                        message: format!(
+                        message: trf!(
                             "o daemon usa a pasta de configuração {} e este terminal usa {}; defina o mesmo XDG_CONFIG_HOME nos dois ou rode `sandmux daemon restart` neste terminal",
+                            "the daemon uses the configuration folder {} and this terminal uses {}; set the same XDG_CONFIG_HOME in both or run `sandmux daemon restart` in this terminal",
                             config_dir.display(),
                             c.display()
                         ),
@@ -673,7 +720,11 @@ pub fn answer_hello(
         }
         _ => (
             Msg::Refused {
-                message: "a conexão precisa começar pela saudação".into(),
+                message: tr!(
+                    "a conexão precisa começar pela saudação",
+                    "the connection must start with the greeting"
+                )
+                .into(),
             },
             false,
         ),
@@ -699,8 +750,9 @@ pub fn check_welcome(reply: &Msg, protocol: u32, version: &str) -> Result<Daemon
             start_mode,
         } => {
             if *p != protocol {
-                Err(format!(
-                    "o daemon em execução usa o protocolo {p} (sandmux {v}) e este cliente usa o protocolo {protocol} (sandmux {version}); rode `sandmux daemon restart` para trocar o daemon pela versão instalada (os agentes são relançados e o histórico de tela se perde)"
+                Err(trf!(
+                    "o daemon em execução usa o protocolo {p} (sandmux {v}) e este cliente usa o protocolo {protocol} (sandmux {version}); rode `sandmux daemon restart` para trocar o daemon pela versão instalada (os agentes são relançados e o histórico de tela se perde)",
+                    "the running daemon uses protocol {p} (sandmux {v}) and this client uses protocol {protocol} (sandmux {version}); run `sandmux daemon restart` to replace the daemon with the installed version (the agents are relaunched and the screen history is lost)"
                 ))
             } else {
                 Ok(DaemonInfo {
@@ -712,7 +764,10 @@ pub fn check_welcome(reply: &Msg, protocol: u32, version: &str) -> Result<Daemon
             }
         }
         Msg::Refused { message } => Err(message.clone()),
-        other => Err(format!("resposta inesperada do daemon: {other:?}")),
+        other => Err(trf!(
+            "resposta inesperada do daemon: {other:?}",
+            "unexpected reply from the daemon: {other:?}"
+        )),
     }
 }
 
@@ -731,6 +786,7 @@ mod tests {
             version: "0.2.0".into(),
             data_dir: dir.into(),
             config_dir: cfg.into(),
+            lang: String::new(),
         }
     }
 

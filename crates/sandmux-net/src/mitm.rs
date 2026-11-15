@@ -162,6 +162,9 @@ pub fn path_of(uri: &hyper::Uri) -> String {
 /// O que o proxy precisa para registrar.
 pub struct Ctx {
     pub log: Arc<crate::log::Log>,
+    /// Protocolo das linhas de pedido: `https` (decifrado) ou `http` (portas
+    /// do host).
+    pub proto: &'static str,
     pub domain: String,
     pub ip: String,
     pub port: u16,
@@ -180,7 +183,12 @@ pub async fn connect_upstream(
         tokio::net::TcpStream::connect(target),
     )
     .await
-    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "tempo esgotado"))??;
+    .map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            sandmux_spec::tr!("tempo esgotado", "timed out"),
+        )
+    })??;
     let name = ServerName::try_from(sni.to_string())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     tokio_rustls::TlsConnector::from(client)
@@ -201,6 +209,16 @@ pub async fn serve<S>(
     let Ok(tls) = tokio_rustls::TlsAcceptor::from(server).accept(guest).await else {
         return;
     };
+    serve_http(tls, upstream, ctx).await;
+}
+
+/// Serve HTTP/1.1 do sandbox ao destino, pedido a pedido, trocando os
+/// falsos dos segredos de `ctx` e registrando cada pedido.
+pub async fn serve_http<G, U>(guest: G, upstream: U, ctx: Arc<Ctx>)
+where
+    G: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    U: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let Ok((sender, conn)) =
         hyper::client::conn::http1::handshake::<_, Boxed>(TokioIo::new(upstream)).await
     else {
@@ -242,6 +260,7 @@ pub async fn serve<S>(
                 Ok(r) => r,
                 Err(_) => {
                     ctx.log.write_http(
+                        ctx.proto,
                         &ctx.domain,
                         &ctx.ip,
                         ctx.port,
@@ -292,6 +311,7 @@ pub async fn serve<S>(
                 n: 0,
                 done: Some(Box::new(move |down| {
                     ctx2.log.write_http(
+                        ctx2.proto,
                         &ctx2.domain,
                         &ctx2.ip,
                         ctx2.port,
@@ -311,7 +331,7 @@ pub async fn serve<S>(
         }
     });
     let _ = hyper::server::conn::http1::Builder::new()
-        .serve_connection(TokioIo::new(tls), service)
+        .serve_connection(TokioIo::new(guest), service)
         .with_upgrades()
         .await;
 }
@@ -362,6 +382,7 @@ async fn tunnel(
     }
     let (upn, used) = a.unwrap_or((0, None));
     ctx.log.write_http(
+        ctx.proto,
         &ctx.domain,
         &ctx.ip,
         ctx.port,

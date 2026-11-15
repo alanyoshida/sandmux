@@ -16,6 +16,7 @@ use sandmux_policy::limits::{self, Counters, Limits};
 use sandmux_proto::msg::{Stats, Usage};
 use sandmux_proto::term::{ModeTracker, OscFilter};
 use sandmux_proto::{LaunchOptions, Msg, SessionInfo, SessionState, Size};
+use sandmux_spec::{tr, trf};
 
 use super::Shared;
 use crate::launch;
@@ -86,6 +87,8 @@ pub struct Session {
     /// Início do lançamento atual e a última espera de reinício (gateway).
     pub started: Option<std::time::Instant>,
     pub restart_delay: u64,
+    /// O mesmo começo, em segundos Unix, para os clientes.
+    pub started_at: Option<u64>,
 }
 
 /// Etiquetas guardadas por sessão.
@@ -139,6 +142,7 @@ impl Session {
             vault_env: false,
             history,
             started: None,
+            started_at: None,
             restart_delay: 0,
         }
     }
@@ -159,6 +163,7 @@ impl Session {
             opts: self.opts.clone(),
             usage: self.counters().map(|c| usage(&c)),
             oom_kills: self.oom_kills,
+            started_at: self.started_at,
         }
     }
 
@@ -435,8 +440,10 @@ pub fn spawn(
         None
     } else {
         Some(
-            super::docker::session_socket(shared, &opts.workdir)
-                .context("socket do Docker privado da sessão")?,
+            super::docker::session_socket(shared, &opts.workdir).context(tr!(
+                "socket do Docker privado da sessão",
+                "socket of the session private Docker"
+            ))?,
         )
     };
     let tag = format!("s{id}-{launch}");
@@ -466,17 +473,24 @@ pub fn spawn(
     } else {
         let v = shared.vault.lock().unwrap_or_else(|e| e.into_inner());
         match v.unknown_ssh(&ssh_names) {
-            Some(u) if !u.is_empty() => {
-                ssh_warnings.push(format!("chave SSH que não está no cofre: {}", u.join(", ")))
-            }
-            None => ssh_warnings
-                .push("o cofre está trancado: o agente SSH assina depois do desbloqueio".into()),
+            Some(u) if !u.is_empty() => ssh_warnings.push(trf!(
+                "chave SSH que não está no cofre: {}",
+                "SSH key that is not in the vault: {}",
+                u.join(", ")
+            )),
+            None => ssh_warnings.push(
+                tr!(
+                    "o cofre está trancado: o agente SSH assina depois do desbloqueio",
+                    "the vault is locked: the SSH agent signs after the unlock"
+                )
+                .into(),
+            ),
             _ => {}
         }
         let servers = v.ssh_servers(&ssh_names);
         drop(v);
         let sock = super::sshagent::agent_socket(shared, &tag, &opts.workdir, ssh_names.clone())
-            .context("socket do agente SSH")?;
+            .context(tr!("socket do agente SSH", "SSH agent socket"))?;
         (Some(sock), servers)
     };
     // MCP de banco: as conexões escolhidas pela configuração e pelo `run`.
@@ -501,8 +515,9 @@ pub fn spawn(
                 .filter(|n| *n != "*" && !list.iter().any(|c| &c.name == *n))
                 .collect();
             if !unknown.is_empty() {
-                ssh_warnings.push(format!(
+                ssh_warnings.push(trf!(
                     "conexão de banco que não está no cofre: {}",
+                    "database connection that is not in the vault: {}",
                     unknown
                         .iter()
                         .map(|s| s.as_str())
@@ -513,7 +528,7 @@ pub fn spawn(
         }
         Some(
             super::db::db_socket(shared, &tag, &opts.workdir, db_names)
-                .context("socket do MCP de banco")?,
+                .context(tr!("socket do MCP de banco", "database MCP socket"))?,
         )
     };
     let access = sandmux_spec::VaultAccess {
@@ -540,6 +555,32 @@ pub fn spawn(
             } else {
                 Vec::new()
             },
+            opencode_models: if opts.harness == "opencode" {
+                let ports = {
+                    let mut h = host.clone();
+                    h.cwd = opts.workdir.clone();
+                    launch::effective(&h, opts)
+                        .map(|e| e.host_ports)
+                        .unwrap_or_default()
+                };
+                // Os segredos do host, para a consulta levar o valor real.
+                let secrets = sandmux_net::inject::for_host(
+                    shared
+                        .vault
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .injections(),
+                    sandmux_net::HOST_NAME,
+                );
+                launch::discover_opencode_models(&host, &opts.workdir, &ports, |a| {
+                    secrets
+                        .iter()
+                        .filter(|s| !s.fake.is_empty())
+                        .fold(a.to_string(), |acc, s| acc.replace(&s.fake, &s.value))
+                })
+            } else {
+                Vec::new()
+            },
         },
     )?;
     let net_policy = prepared
@@ -548,7 +589,8 @@ pub fn spawn(
         .map(|p| super::net::with_vault(shared, p))
         .map(|p| super::net::with_ssh(shared, p, &ssh_names));
     if let Some(p) = &net_policy {
-        super::net::write_policy(&policy_file, p).context("gravar a política de rede")?;
+        super::net::write_policy(&policy_file, p)
+            .context(tr!("gravar a política de rede", "write the network policy"))?;
     }
     let ws = nix::pty::Winsize {
         ws_row: size.rows.max(1),
@@ -556,7 +598,7 @@ pub fn spawn(
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
-    let pty = nix::pty::openpty(Some(&ws), None).context("abrir o PTY")?;
+    let pty = nix::pty::openpty(Some(&ws), None).context(tr!("abrir o PTY", "open the PTY"))?;
     set_cloexec(pty.master.as_raw_fd());
     set_cloexec(pty.slave.as_raw_fd());
     let slave: OwnedFd = pty.slave;
@@ -574,11 +616,21 @@ pub fn spawn(
             inherit: prepared.inherited_fds(),
             reply: tx,
         })
-        .map_err(|_| anyhow!("a thread de lançamento parou"))?;
+        .map_err(|_| {
+            anyhow!(tr!(
+                "a thread de lançamento parou",
+                "the launch thread stopped"
+            ))
+        })?;
     let child = rx
         .recv()
-        .map_err(|_| anyhow!("a thread de lançamento parou"))?
-        .with_context(|| format!("executar {}", prepared.runner.display()))?;
+        .map_err(|_| {
+            anyhow!(tr!(
+                "a thread de lançamento parou",
+                "the launch thread stopped"
+            ))
+        })?
+        .with_context(|| trf!("executar {}", "run {}", prepared.runner.display()))?;
     Ok(Spawned {
         child,
         master: Arc::new(File::from(pty.master)),
@@ -610,21 +662,43 @@ pub fn ask(
     let mut conv = crate::chat::Conversa::new(model, Some(text));
     conv.sistema = system.map(str::to_string);
     let dir = crate::chat::new_dir(&state, &conv)?;
-    let r = ask_in(shared, &dir, vars);
+    let r = ask_in(shared, &dir, vars, "--once").map(|(out, _)| out);
     crate::chat::remove_dir(&state, &dir);
     r
 }
 
+/// Os modelos dos provedores do assistente, pela aba de chat num sandbox
+/// (`sandmux-chat --models`), e os avisos dos provedores que falharam.
+pub fn list_models(shared: &Arc<Shared>) -> Result<(Vec<String>, Vec<String>)> {
+    let state = crate::paths::state_dir();
+    let conv = crate::chat::Conversa::new("lista/modelos", None);
+    let dir = crate::chat::new_dir(&state, &conv)?;
+    let r = ask_in(shared, &dir, &BTreeMap::new(), "--models");
+    crate::chat::remove_dir(&state, &dir);
+    let (out, notes) = r?;
+    Ok((
+        out.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect(),
+        notes,
+    ))
+}
+
+/// Roda `sandmux-chat <mode>` num sandbox na pasta `dir`: a saída e os
+/// avisos (as linhas `sandmux-chat: ` da saída de erro).
 fn ask_in(
     shared: &Arc<Shared>,
     dir: &std::path::Path,
     vars: &BTreeMap<String, String>,
-) -> Result<String> {
+    mode: &str,
+) -> Result<(String, Vec<String>)> {
     use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(1);
     let mut opts = LaunchOptions::new(sandmux_policy::assistant::HARNESS);
     opts.workdir = dir.to_path_buf();
-    opts.args = vec!["--once".into()];
+    opts.args = vec![mode.into()];
     let host = host_for(shared, &opts, vars);
     let tag = format!("ask{}", N.fetch_add(1, Ordering::Relaxed));
     let policy_file = super::net::policy_path(&tag);
@@ -659,7 +733,8 @@ fn ask_in(
         .clone()
         .map(|p| super::net::with_vault(shared, p))
     {
-        super::net::write_policy(&policy_file, &p).context("gravar a política de rede")?;
+        super::net::write_policy(&policy_file, &p)
+            .context(tr!("gravar a política de rede", "write the network policy"))?;
     }
     let mut cmd = prepared.command();
     cmd.stdin(Stdio::null())
@@ -675,11 +750,21 @@ fn ask_in(
             inherit: prepared.inherited_fds(),
             reply: tx,
         })
-        .map_err(|_| anyhow!("a thread de lançamento parou"))?;
+        .map_err(|_| {
+            anyhow!(tr!(
+                "a thread de lançamento parou",
+                "the launch thread stopped"
+            ))
+        })?;
     let child = rx
         .recv()
-        .map_err(|_| anyhow!("a thread de lançamento parou"))?
-        .with_context(|| format!("executar {}", prepared.runner.display()));
+        .map_err(|_| {
+            anyhow!(tr!(
+                "a thread de lançamento parou",
+                "the launch thread stopped"
+            ))
+        })?
+        .with_context(|| trf!("executar {}", "run {}", prepared.runner.display()));
     let child = match child {
         Ok(c) => c,
         Err(e) => {
@@ -697,20 +782,26 @@ fn ask_in(
         Err(_) => {
             terminate(pid);
             cleanup();
-            bail!("o modelo não respondeu em 5 minutos");
+            bail!(tr!(
+                "o modelo não respondeu em 5 minutos",
+                "the model did not answer within 5 minutes"
+            ));
         }
     };
     drop(prepared);
     cleanup();
-    let out = out.context("esperar a resposta")?;
-    if out.status.success() {
-        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
-    }
+    let out = out.context(tr!("esperar a resposta", "wait for the answer"))?;
     let err = String::from_utf8_lossy(&out.stderr);
     let msg: Vec<&str> = err
         .lines()
         .filter_map(|l| l.strip_prefix("sandmux-chat: "))
         .collect();
+    if out.status.success() {
+        return Ok((
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            msg.iter().map(|s| s.to_string()).collect(),
+        ));
+    }
     if msg.is_empty() {
         bail!("{}", err.trim());
     }
@@ -764,6 +855,10 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
             s.state = SessionState::Viva;
             s.killing = false;
             s.started = Some(std::time::Instant::now());
+            s.started_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs());
             s.live = Some(Live {
                 pid,
                 master: master.clone(),
@@ -803,14 +898,17 @@ pub fn relaunch(
 ) -> Result<Vec<String>> {
     let (opts, cur, launch) = {
         let st = shared.lock();
-        let s = st
-            .sessions
-            .get(&id)
-            .ok_or_else(|| anyhow!("não existe a sessão {id}"))?;
+        let s = st.sessions.get(&id).ok_or_else(|| {
+            anyhow!(trf!(
+                "não existe a sessão {id}",
+                "session {id} does not exist"
+            ))
+        })?;
         if s.live.is_some() {
-            return Err(anyhow!(
-                "a sessão {id} está viva; para relançá-la, encerre-a antes com `sandmux kill {id}`"
-            ));
+            return Err(anyhow!(trf!(
+                "a sessão {id} está viva; para relançá-la, encerre-a antes com `sandmux kill {id}`",
+                "session {id} is alive; to relaunch it, end it first with `sandmux kill {id}`"
+            )));
         }
         (s.opts.clone(), s.size, s.launches + 1)
     };
@@ -921,11 +1019,14 @@ fn reader(shared: Arc<Shared>, id: u32, pid: i32, master: Arc<File>, mut child: 
         s.live = None;
         if stopping {
             s.drop_clients(Msg::Detached {
-                reason: "o daemon parou".into(),
+                reason: tr!("o daemon parou", "the daemon stopped").into(),
             });
         } else if s.killing {
             s.drop_clients(Msg::Detached {
-                reason: format!("a sessão {id} foi encerrada por `sandmux kill`"),
+                reason: trf!(
+                    "a sessão {id} foi encerrada por `sandmux kill`",
+                    "session {id} was ended by `sandmux kill`"
+                ),
             });
             remove = true;
         } else if s.opts.gateway {
@@ -991,6 +1092,29 @@ pub fn same_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
         .zip(b.canonicalize().ok())
         .is_some_and(|(x, y)| x == y)
         || a == b
+}
+
+/// Uma sessão do opencode cujos provedores locais (com a porta em
+/// `host-ports`) mandam uma chave falsa do cofre: a lista de modelos dela só
+/// vem com o cofre desbloqueado.
+pub fn needs_vault_for_models(shared: &Shared, opts: &LaunchOptions) -> bool {
+    if opts.harness != "opencode" {
+        return false;
+    }
+    let host = host_for(shared, opts, &BTreeMap::new());
+    let ports = launch::effective(&host, opts)
+        .map(|e| e.host_ports)
+        .unwrap_or_default();
+    let home = sandmux_policy::Layout::new(&host.data_dir).home("opencode");
+    sandmux_policy::opencode_models::local_providers(&home, &opts.workdir)
+        .iter()
+        .filter(|p| ports.contains(&p.port))
+        .any(|p| {
+            [&p.authorization, &p.api_key]
+                .into_iter()
+                .flatten()
+                .any(|v| v.contains("sandmux-fake-"))
+        })
 }
 
 /// A sessão é uma aba de chat?
@@ -1081,7 +1205,10 @@ fn restart_gateway(shared: Arc<Shared>, id: u32, delay: u64) {
         let mut st = shared.lock();
         if let Some(s) = st.sessions.get_mut(&id) {
             s.state = SessionState::Parada {
-                motivo: format!("o gateway não voltou: {e:#}"),
+                motivo: trf!(
+                    "o gateway não voltou: {e:#}",
+                    "the gateway did not come back: {e:#}"
+                ),
             };
         }
         shared.persist(&st);
@@ -1151,7 +1278,11 @@ pub fn store_pass_env(
         shared.persist(&st);
     }
     (!values.is_empty() && !stored).then(|| {
-        "o cofre não existe ou está trancado: os valores de --pass-env não foram guardados, e num reboot esta sessão fica parada até um `sandmux restart` (veja `sandmux vault`)".to_string()
+        tr!(
+            "o cofre não existe ou está trancado: os valores de --pass-env não foram guardados, e num reboot esta sessão fica parada até um `sandmux restart` (veja `sandmux vault`)",
+            "the vault does not exist or is locked: the --pass-env values were not saved, and on a reboot this session stays stopped until a `sandmux restart` (see `sandmux vault`)"
+        )
+        .to_string()
     })
 }
 
@@ -1182,11 +1313,10 @@ pub fn vault_unlocked(shared: &Arc<Shared>) {
             .unwrap_or_else(|e| e.into_inner())
             .pass_env(id);
         // O gateway sem `pass-env` esperava só o cofre (os tokens dos canais).
-        let bare = shared
-            .lock()
-            .sessions
-            .get(&id)
-            .is_some_and(|s| (s.opts.gateway || is_chat(&s.opts)) && s.pass_env.is_empty());
+        let bare = shared.lock().sessions.get(&id).is_some_and(|s| {
+            (s.opts.gateway || is_chat(&s.opts) || needs_vault_for_models(shared, &s.opts))
+                && s.pass_env.is_empty()
+        });
         if saved.is_none() && bare {
             saved = Some(BTreeMap::new());
         }
@@ -1197,8 +1327,9 @@ pub fn vault_unlocked(shared: &Arc<Shared>) {
                 let mut st = shared.lock();
                 if let Some(s) = st.sessions.get_mut(&id) {
                     s.state = SessionState::Parada {
-                        motivo: format!(
-                            "os valores de --pass-env não estão no cofre; rode `sandmux restart {id}` num terminal com as variáveis"
+                        motivo: trf!(
+                            "os valores de --pass-env não estão no cofre; rode `sandmux restart {id}` num terminal com as variáveis",
+                            "the --pass-env values are not in the vault; run `sandmux restart {id}` in a terminal with the variables"
                         ),
                     };
                 }
@@ -1211,7 +1342,7 @@ pub fn vault_unlocked(shared: &Arc<Shared>) {
                 let mut st = shared.lock();
                 if let Some(s) = st.sessions.get_mut(&id) {
                     s.state = SessionState::Parada {
-                        motivo: format!("falhou ao restaurar: {e:#}"),
+                        motivo: trf!("falhou ao restaurar: {e:#}", "restore failed: {e:#}"),
                     };
                 }
                 shared.persist(&st);

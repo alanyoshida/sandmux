@@ -25,9 +25,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use sandmux::chat::{self, Conversa, Mensagem, Papel};
 use sandmux_policy::assistant::Provider;
+use sandmux_spec::{tr, trf};
 use unicode_width::UnicodeWidthChar;
 
 fn main() {
+    sandmux_spec::lang::set(sandmux_spec::lang::resolve_env(None));
     let code = match run() {
         Ok(c) => c,
         Err(e) => {
@@ -40,22 +42,60 @@ fn main() {
 
 fn run() -> Result<i32> {
     let mut once = false;
-    let mut dir = std::env::current_dir().context("pasta atual")?;
+    let mut models = false;
+    let mut dir = std::env::current_dir().context(tr!("pasta atual", "current folder"))?;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--once" => once = true,
-            "--dir" => dir = PathBuf::from(args.next().ok_or_else(|| anyhow!("falta a pasta"))?),
-            other => return Err(anyhow!("argumento desconhecido: {other}")),
+            "--models" => models = true,
+            "--dir" => {
+                dir = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| anyhow!(tr!("falta a pasta", "missing folder")))?,
+                )
+            }
+            other => {
+                return Err(anyhow!(trf!(
+                    "argumento desconhecido: {other}",
+                    "unknown argument: {other}"
+                )));
+            }
         }
     }
-    let conv = Conversa::load(&dir)?
-        .ok_or_else(|| anyhow!("não há conversa em {}", dir.join(chat::FILE).display()))?;
+    if models {
+        return Ok(print_models());
+    }
+    let conv = Conversa::load(&dir)?.ok_or_else(|| {
+        anyhow!(trf!(
+            "não há conversa em {}",
+            "there is no conversation in {}",
+            dir.join(chat::FILE).display()
+        ))
+    })?;
     let providers = chat::providers_from_env();
     if once {
         return Ok(answer_once(&conv, &providers));
     }
     ui(dir, conv, providers)
+}
+
+/// Imprime os modelos dos provedores, um `provedor/modelo` por linha; os
+/// provedores que falharam vão para a saída de erro. Falha só sem nenhum.
+fn print_models() -> i32 {
+    let (ids, notes) = chat::all_models(&chat::providers_from_env());
+    for n in &notes {
+        eprintln!("sandmux-chat: {n}");
+    }
+    if ids.is_empty() {
+        return 1;
+    }
+    let mut out = std::io::stdout().lock();
+    for id in ids {
+        let _ = writeln!(out, "{id}");
+    }
+    let _ = out.flush();
+    0
 }
 
 /// Responde a pergunta pendente, sem streaming, na saída padrão.
@@ -100,6 +140,14 @@ fn answer_once(conv: &Conversa, providers: &[Provider]) -> i32 {
 enum Ev {
     Delta(String),
     Done(Result<String, String>),
+    /// A lista de modelos dos provedores e os avisos.
+    Models(Vec<String>, Vec<String>),
+}
+
+/// O seletor de `/modelo`: o filtro e o escolhido.
+struct Picker {
+    filter: String,
+    sel: usize,
 }
 
 struct App {
@@ -118,13 +166,19 @@ struct App {
     view: usize,
     button: Rect,
     tx: Sender<Ev>,
+    picker: Option<Picker>,
+    /// A lista de modelos (`None` enquanto carrega) e os avisos.
+    models: Option<(Vec<String>, Vec<String>)>,
+    loading: bool,
 }
 
 impl App {
     fn save(&mut self) {
         if let Err(e) = self.conv.save(&self.dir) {
-            self.notes
-                .push(format!("não foi possível gravar a conversa: {e:#}"));
+            self.notes.push(trf!(
+                "não foi possível gravar a conversa: {e:#}",
+                "could not save the conversation: {e:#}"
+            ));
         }
     }
 
@@ -159,6 +213,10 @@ impl App {
     fn on(&mut self, ev: Ev) {
         match ev {
             Ev::Delta(s) => self.partial.push_str(&s),
+            Ev::Models(ids, notes) => {
+                self.loading = false;
+                self.models = Some((ids, notes));
+            }
             Ev::Done(r) => {
                 self.busy = None;
                 let partial = std::mem::take(&mut self.partial);
@@ -171,7 +229,7 @@ impl App {
                         });
                         self.save();
                     }
-                    Err(e) => self.notes.push(format!("erro: {e}")),
+                    Err(e) => self.notes.push(trf!("erro: {e}", "error: {e}")),
                 }
             }
         }
@@ -180,22 +238,22 @@ impl App {
     fn command(&mut self, text: &str) {
         let arg = text.trim_start_matches("/modelo").trim();
         if arg.is_empty() {
-            self.notes.push(format!(
-                "modelo atual: {}. Provedores: {}",
-                self.conv.modelo,
-                self.providers
-                    .iter()
-                    .map(|p| p.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+            // Sem argumento: o seletor com a lista dos provedores.
+            self.picker = Some(Picker {
+                filter: String::new(),
+                sel: 0,
+            });
+            if self.models.is_none() {
+                self.load_models();
+            }
             return;
         }
         match chat::target(arg, &self.providers) {
             Ok(_) => {
                 self.conv.modelo = arg.to_string();
                 self.save();
-                self.notes.push(format!("modelo trocado para {arg}"));
+                self.notes
+                    .push(trf!("modelo trocado para {arg}", "model switched to {arg}"));
             }
             Err(e) => self.notes.push(e),
         }
@@ -213,8 +271,13 @@ impl App {
             return;
         }
         if self.busy.is_some() {
-            self.notes
-                .push("aguarde a resposta (Ctrl+c cancela)".into());
+            self.notes.push(
+                tr!(
+                    "aguarde a resposta (Ctrl+c cancela)",
+                    "wait for the answer (Ctrl+c cancels)"
+                )
+                .into(),
+            );
             return;
         }
         self.input.clear();
@@ -225,6 +288,65 @@ impl App {
         });
         self.save();
         self.start();
+    }
+
+    /// Pede a lista de modelos numa thread.
+    fn load_models(&mut self) {
+        if self.loading {
+            return;
+        }
+        self.loading = true;
+        self.models = None;
+        let providers = self.providers.clone();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let (ids, notes) = chat::all_models(&providers);
+            let _ = tx.send(Ev::Models(ids, notes));
+        });
+    }
+
+    /// Os modelos que passam no filtro do seletor.
+    fn picked_list(&self) -> Vec<String> {
+        match (&self.picker, &self.models) {
+            (Some(p), Some((ids, _))) => chat::filter_models(ids, &p.filter)
+                .into_iter()
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Uma tecla com o seletor aberto.
+    fn picker_key(&mut self, code: KeyCode, ctrl: bool) {
+        let list = self.picked_list();
+        let Some(p) = self.picker.as_mut() else {
+            return;
+        };
+        match code {
+            KeyCode::Esc => self.picker = None,
+            KeyCode::Up => p.sel = p.sel.saturating_sub(1),
+            KeyCode::Down => p.sel = (p.sel + 1).min(list.len().saturating_sub(1)),
+            KeyCode::Backspace => {
+                p.filter.pop();
+                p.sel = 0;
+            }
+            KeyCode::Char('r') if ctrl => self.load_models(),
+            KeyCode::Char(c) if !ctrl => {
+                p.filter.push(c);
+                p.sel = 0;
+            }
+            KeyCode::Enter => {
+                let chosen = list
+                    .get(p.sel)
+                    .cloned()
+                    .unwrap_or_else(|| p.filter.trim().to_string());
+                self.picker = None;
+                if !chosen.is_empty() {
+                    self.command(&format!("/modelo {chosen}"));
+                }
+            }
+            _ => {}
+        }
     }
 
     fn cancel(&mut self) {
@@ -299,12 +421,17 @@ fn lines(app: &App, width: usize) -> Vec<Line<'static>> {
     };
     for m in &app.conv.mensagens {
         match m.papel {
-            Papel::User => push(&mut out, "você", you, &m.texto),
-            Papel::Assistant => push(&mut out, "modelo", model, &m.texto),
+            Papel::User => push(&mut out, tr!("você", "you"), you, &m.texto),
+            Papel::Assistant => push(&mut out, tr!("modelo", "model"), model, &m.texto),
         }
     }
     if app.busy.is_some() {
-        push(&mut out, "modelo", model, &format!("{}▌", app.partial));
+        push(
+            &mut out,
+            tr!("modelo", "model"),
+            model,
+            &format!("{}▌", app.partial),
+        );
     }
     for n in &app.notes {
         for l in wrap(&format!("! {n}"), width) {
@@ -326,7 +453,10 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
     ])
     .areas(area);
     let status = if app.busy.is_some() {
-        "  respondendo… (Ctrl+c cancela)"
+        tr!(
+            "  respondendo… (Ctrl+c cancela)",
+            "  answering… (Ctrl+c cancels)"
+        )
     } else {
         ""
     };
@@ -357,7 +487,15 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
         Paragraph::new(shown).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" mensagem (Enter envia, Ctrl+j quebra a linha, /modelo troca) "),
+                .title(tr!(
+                    " mensagem (Enter envia, Ctrl+j quebra a linha, /modelo troca) ",
+                    " message (Enter sends, Ctrl+j breaks the line, /modelo switches) "
+                ))
+                .title_bottom(trf!(
+                    " {} d sai (a conversa continua numa aba do sandmux) ",
+                    " {} d leaves (the conversation goes on in a sandmux tab) ",
+                    std::env::var("SANDMUX_PREFIX").unwrap_or_else(|_| "Ctrl+b".into())
+                )),
         ),
         inp,
     );
@@ -369,13 +507,91 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
         Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
     };
     f.render_widget(
-        Paragraph::new(Span::styled("[ Enviar ]", bstyle)),
+        Paragraph::new(Span::styled(tr!("[ Enviar ]", "[ Send ]"), bstyle)),
         app.button,
     );
     f.set_cursor_position(Position::new(
         (inp.x + 1 + last).min(inp.right().saturating_sub(2)),
         inp.y + nshown,
     ));
+    if let Some(p) = &app.picker {
+        draw_picker(f, body, app, p);
+    }
+}
+
+/// O seletor de `/modelo` por cima da conversa.
+fn draw_picker(f: &mut ratatui::Frame, body: Rect, app: &App, p: &Picker) {
+    let w = body.width.saturating_sub(4).min(84);
+    let h = body.height.saturating_sub(2).min(24);
+    if w < 20 || h < 6 {
+        return;
+    }
+    let r = Rect::new(
+        body.x + (body.width - w) / 2,
+        body.y + (body.height - h) / 2,
+        w,
+        h,
+    );
+    let list = app.picked_list();
+    let mut lines = vec![
+        Line::from(vec![
+            Span::raw(tr!("filtro: ", "filter: ")),
+            Span::styled(
+                format!("{}▏", p.filter),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::styled(
+            match &app.models {
+                None => tr!(
+                    "carregando os modelos dos provedores…",
+                    "loading the providers' models…"
+                )
+                .to_string(),
+                Some((ids, _)) if list.is_empty() => trf!(
+                    "nenhum de {} modelos; Enter usa o texto digitado",
+                    "none of {} models; Enter uses the typed text",
+                    ids.len()
+                ),
+                Some((ids, _)) => trf!("{} de {}", "{} of {}", list.len(), ids.len()),
+            },
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+    if let Some((_, notes)) = &app.models {
+        for n in notes.iter().take(2) {
+            lines.push(Line::styled(
+                format!("! {n}"),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+    }
+    let room = (h as usize).saturating_sub(lines.len() + 2);
+    let sel = p.sel.min(list.len().saturating_sub(1));
+    let start = sel.saturating_sub(room.saturating_sub(1));
+    for (i, m) in list.iter().enumerate().skip(start).take(room) {
+        lines.push(if i == sel {
+            Line::styled(
+                format!(" {m} "),
+                Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+            )
+        } else {
+            Line::raw(format!(" {m} "))
+        });
+    }
+    f.render_widget(ratatui::widgets::Clear, r);
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(trf!(" modelo: {} ", " model: {} ", app.conv.modelo))
+                .title_bottom(tr!(
+                    " ↑ ↓ · Enter escolhe · Ctrl+r relê · Esc cancela ",
+                    " ↑ ↓ · Enter picks · Ctrl+r reloads · Esc cancels "
+                )),
+        ),
+        r,
+    );
 }
 
 struct Guard;
@@ -394,7 +610,7 @@ impl Drop for Guard {
 
 fn ui(dir: PathBuf, conv: Conversa, providers: Vec<Provider>) -> Result<i32> {
     let (tx, rx): (Sender<Ev>, Receiver<Ev>) = mpsc::channel();
-    enable_raw_mode().context("modo cru do terminal")?;
+    enable_raw_mode().context(tr!("modo cru do terminal", "terminal raw mode"))?;
     let _guard = Guard;
     ratatui::crossterm::execute!(
         std::io::stdout(),
@@ -416,6 +632,9 @@ fn ui(dir: PathBuf, conv: Conversa, providers: Vec<Provider>) -> Result<i32> {
         view: 1,
         button: Rect::default(),
         tx,
+        picker: None,
+        models: None,
+        loading: false,
     };
     // Pergunta sem resposta: a primeira do modal, ou uma interrompida.
     app.start();
@@ -423,6 +642,10 @@ fn ui(dir: PathBuf, conv: Conversa, providers: Vec<Provider>) -> Result<i32> {
         term.draw(|f| draw(f, &mut app))?;
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
+                Event::Key(k) if k.kind != KeyEventKind::Release && app.picker.is_some() => {
+                    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+                    app.picker_key(k.code, ctrl);
+                }
                 Event::Key(k) if k.kind != KeyEventKind::Release => {
                     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
                     let alt = k.modifiers.contains(KeyModifiers::ALT);

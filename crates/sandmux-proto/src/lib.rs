@@ -14,19 +14,39 @@ pub use msg::{LaunchOptions, Msg, SessionInfo, SessionState, Size};
 
 /// Versão do protocolo. Muda a cada alteração incompatível; cliente e daemon
 /// exigem igualdade exata.
-pub const PROTOCOL: u32 = 21;
+pub const PROTOCOL: u32 = 25;
 
 /// Erros de leitura e escrita do protocolo.
 #[derive(Debug, thiserror::Error)]
 pub enum ProtoError {
-    #[error("quadro de {0} bytes passa do limite de {MAX_FRAME}")]
     TooLarge(usize),
-    #[error("tipo de quadro desconhecido: {0}")]
     UnknownKind(u8),
-    #[error("mensagem de controle inválida: {0}")]
     BadMessage(String),
-    #[error("conexão encerrada no meio de um quadro")]
     Truncated,
-    #[error("{0}")]
     Io(#[from] std::io::Error),
+}
+
+impl std::fmt::Display for ProtoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use sandmux_spec::{tr, trf};
+        match self {
+            ProtoError::TooLarge(n) => f.write_str(&trf!(
+                "quadro de {n} bytes passa do limite de {MAX_FRAME}",
+                "frame of {n} bytes exceeds the limit of {MAX_FRAME}"
+            )),
+            ProtoError::UnknownKind(k) => f.write_str(&trf!(
+                "tipo de quadro desconhecido: {k}",
+                "unknown frame type: {k}"
+            )),
+            ProtoError::BadMessage(m) => f.write_str(&trf!(
+                "mensagem de controle inválida: {m}",
+                "invalid control message: {m}"
+            )),
+            ProtoError::Truncated => f.write_str(tr!(
+                "conexão encerrada no meio de um quadro",
+                "connection closed in the middle of a frame"
+            )),
+            ProtoError::Io(e) => write!(f, "{e}"),
+        }
+    }
 }

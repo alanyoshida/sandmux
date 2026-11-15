@@ -32,6 +32,7 @@ path = "src/bin/sandmux-probe.rs"
 sandmux-spec.workspace = true
 sandmux-launcher.workspace = true
 sandmux-policy.workspace = true
+toml_edit.workspace = true
 sandmux-net.workspace = true
 sandmux-vault.workspace = true
 zeroize.workspace = true

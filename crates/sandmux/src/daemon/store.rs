@@ -96,15 +96,16 @@ fn upgrade_v1(v: &mut serde_json::Value) {
 pub fn load(path: &Path) -> Result<Saved> {
     match std::fs::read(path) {
         Ok(b) => {
-            let mut v: serde_json::Value =
-                serde_json::from_slice(&b).with_context(|| format!("ler {}", path.display()))?;
+            let mut v: serde_json::Value = serde_json::from_slice(&b)
+                .with_context(|| sandmux_spec::trf!("ler {}", "read {}", path.display()))?;
             if v.get("version").is_none() {
                 upgrade_v1(&mut v);
             }
-            serde_json::from_value(v).with_context(|| format!("ler {}", path.display()))
+            serde_json::from_value(v)
+                .with_context(|| sandmux_spec::trf!("ler {}", "read {}", path.display()))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Saved::default()),
-        Err(e) => Err(e).with_context(|| format!("ler {}", path.display())),
+        Err(e) => Err(e).with_context(|| sandmux_spec::trf!("ler {}", "read {}", path.display())),
     }
 }
 
@@ -120,10 +121,11 @@ pub fn save(path: &Path, saved: &Saved) -> Result<()> {
         .create_new(true)
         .mode(0o600)
         .open(&tmp)
-        .with_context(|| format!("gravar {}", tmp.display()))?;
+        .with_context(|| sandmux_spec::trf!("gravar {}", "write {}", tmp.display()))?;
     f.write_all(&serde_json::to_vec_pretty(saved)?)?;
     f.sync_all()?;
-    std::fs::rename(&tmp, path).with_context(|| format!("gravar {}", path.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| sandmux_spec::trf!("gravar {}", "write {}", path.display()))?;
     Ok(())
 }
 

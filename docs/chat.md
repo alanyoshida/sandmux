@@ -7,7 +7,7 @@ A aba de chat conversa com um modelo cuja chave está no [cofre](vault.md), sem 
 Na TUI, Ctrl+b `i` abre o modal de chat:
 
 - **mensagem:** a primeira pergunta;
-- **modelo:** começa com `chat-model` de `[assistant]`. As setas ↑ ↓ passam pelos modelos de `models`, e qualquer outro nome pode ser escrito.
+- **modelo:** começa com `chat-model` de `[assistant]`. As setas ↑ ↓ passam pelos modelos de `models`, → abre a [lista dos provedores](#lista-de-modelos), e qualquer outro nome pode ser escrito.
 
 Tab troca de campo, Enter envia e Esc cancela. A resposta abre numa aba de chat nova, com o nome `chat:<modelo>`.
 
@@ -18,7 +18,7 @@ sandmux chat "o que é um inode?"
 sandmux chat --model openrouter/anthropic/claude-sonnet-5
 ```
 
-- **Com terminal:** cria a aba de chat no daemon e anexa, como `sandmux run`. Ctrl+b d desanexa.
+- **Com terminal:** cria a aba de chat no daemon e anexa, como `sandmux run`. Ctrl+b d sai, e a conversa continua numa aba do sandmux (o rodapé da barra de texto lembra disso).
 - **Sem terminal (script, pipe):** precisa do texto. Imprime só a resposta na saída padrão e termina, sem guardar nada. Um erro do provedor termina com código 1.
 
 ## Dentro da aba
@@ -34,7 +34,7 @@ A aba mostra o modelo no topo, a conversa no meio e, embaixo, a barra de texto e
 | PgUp / PgDn e a roda do mouse | Rolam a conversa |
 
 - A resposta aparece aos poucos, conforme chega (streaming).
-- `/modelo <provedor>/<modelo>` troca o modelo das mensagens seguintes. `/modelo` sozinho mostra o atual e os provedores.
+- `/modelo <provedor>/<modelo>` troca o modelo das mensagens seguintes. `/modelo` sozinho abre a [lista dos provedores](#lista-de-modelos), com filtro, para escolher.
 - Um erro do provedor aparece na conversa, com o status e a mensagem dele, e a conversa continua.
 - O texto aparece como veio, sem renderizar Markdown. A aba de chat não tem ferramentas: o modelo não lê arquivos nem roda comandos.
 
@@ -60,6 +60,17 @@ sandmux vault add openrouter --domain openrouter.ai
 ```
 
 Sem ela, o modal e o `sandmux chat` recusam e mostram esse comando. Com o cofre trancado, o modal abre o desbloqueio antes, e o `sandmux chat` num terminal pede a senha.
+
+### Lista de modelos
+
+Os modelos de cada provedor vêm de `GET <url>/models`, pedido dentro do sandbox da aba de chat, com a chave trocada pelo gateway como no chat. Entram na lista os provedores conhecidos com chave no cofre e os provedores próprios. Um provedor que falha fica de fora, com o motivo no topo da lista.
+
+A lista abre:
+- no `/modelo` sem argumento, na aba de chat;
+- com → no campo do modelo dos modais de chat e de comando;
+- com Enter em "Modelo do chat" e "Modelo de comandos" da página de configurações (`e` edita o texto à mão), e com `a` em "Modelos sugeridos".
+
+Digitar filtra por todas as palavras, sem caixa. ↑ ↓ escolhem, Enter usa o marcado (sem item, o texto digitado), Ctrl+r relê e Esc cancela. Na TUI, a lista fica guardada até fechar.
 
 ### Provedor próprio
 

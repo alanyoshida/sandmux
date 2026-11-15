@@ -77,71 +77,116 @@ pub fn setup_root(spec: &LaunchSpec) -> Result<(), MountError> {
             MsFlags::MS_REC | MsFlags::MS_SLAVE,
             None::<&str>,
         ),
-        || "propagação escrava na raiz".into(),
+        || {
+            sandmux_spec::tr!(
+                "propagação escrava na raiz",
+                "slave propagation on the root"
+            )
+            .into()
+        },
     )
     .map_err(|e| {
-        MountError(format!(
-            "{e} (o user namespace não tem capabilities; rode `sandmux doctor`)"
+        MountError(sandmux_spec::trf!(
+            "{e} (o user namespace não tem capabilities; rode `sandmux doctor`)",
+            "{e} (the user namespace has no capabilities; run `sandmux doctor`)"
         ))
     })?;
 
-    let base = ctx(FsContext::open("tmpfs"), || "tmpfs de trabalho".into())?;
+    let base = ctx(FsContext::open("tmpfs"), || {
+        sandmux_spec::tr!("tmpfs de trabalho", "working tmpfs").into()
+    })?;
     ctx(base.set_string("mode", "0755"), || {
-        "tmpfs de trabalho".into()
+        sandmux_spec::tr!("tmpfs de trabalho", "working tmpfs").into()
     })?;
     let base = ctx(base.mount(MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV), || {
-        "tmpfs de trabalho".into()
+        sandmux_spec::tr!("tmpfs de trabalho", "working tmpfs").into()
     })?;
-    let base_target = ctx(open_path_plain(BASE), || format!("abrir {BASE}"))?;
+    let base_target = ctx(open_path_plain(BASE), || {
+        sandmux_spec::trf!("abrir {BASE}", "open {BASE}")
+    })?;
     ctx(sys::move_mount(base.as_fd(), base_target.as_fd()), || {
-        format!("montar tmpfs de trabalho em {BASE}")
+        sandmux_spec::trf!(
+            "montar tmpfs de trabalho em {BASE}",
+            "mount working tmpfs at {BASE}"
+        )
     })?;
     drop(base_target);
 
-    nix_ctx(chdir(BASE), || format!("entrar em {BASE}"))?;
+    nix_ctx(chdir(BASE), || {
+        sandmux_spec::trf!("entrar em {BASE}", "enter {BASE}")
+    })?;
     for d in ["newroot", "oldroot", "gen", "layers"] {
-        ctx(fs::create_dir(d), || format!("criar {d}"))?;
+        ctx(fs::create_dir(d), || {
+            sandmux_spec::trf!("criar {d}", "create {d}")
+        })?;
     }
     ctx(sys::pivot_root(c".", c"oldroot"), || {
-        "pivot_root para o tmpfs de trabalho".into()
+        sandmux_spec::tr!(
+            "pivot_root para o tmpfs de trabalho",
+            "pivot_root to the working tmpfs"
+        )
+        .into()
     })?;
-    nix_ctx(chdir("/"), || "entrar na raiz de trabalho".into())?;
+    nix_ctx(chdir("/"), || {
+        sandmux_spec::tr!("entrar na raiz de trabalho", "enter the working root").into()
+    })?;
 
-    let nr = ctx(FsContext::open("tmpfs"), || "raiz nova".into())?;
-    ctx(nr.set_string("mode", "0755"), || "raiz nova".into())?;
-    let nr = ctx(nr.mount(MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV), || {
-        "raiz nova".into()
+    let nr = ctx(FsContext::open("tmpfs"), || {
+        sandmux_spec::tr!("raiz nova", "new root").into()
     })?;
-    let nr_target = ctx(open_path_plain(NEWROOT), || format!("abrir {NEWROOT}"))?;
+    ctx(nr.set_string("mode", "0755"), || {
+        sandmux_spec::tr!("raiz nova", "new root").into()
+    })?;
+    let nr = ctx(nr.mount(MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV), || {
+        sandmux_spec::tr!("raiz nova", "new root").into()
+    })?;
+    let nr_target = ctx(open_path_plain(NEWROOT), || {
+        sandmux_spec::trf!("abrir {NEWROOT}", "open {NEWROOT}")
+    })?;
     ctx(sys::move_mount(nr.as_fd(), nr_target.as_fd()), || {
-        "montar a raiz nova".into()
+        sandmux_spec::tr!("montar a raiz nova", "mount the new root").into()
     })?;
     drop(nr_target);
 
     let mut b = Builder {
-        newroot: ctx(open_path_plain(NEWROOT), || format!("abrir {NEWROOT}"))?,
-        oldroot: ctx(open_path_plain(OLDROOT), || format!("abrir {OLDROOT}"))?,
+        newroot: ctx(open_path_plain(NEWROOT), || {
+            sandmux_spec::trf!("abrir {NEWROOT}", "open {NEWROOT}")
+        })?,
+        oldroot: ctx(open_path_plain(OLDROOT), || {
+            sandmux_spec::trf!("abrir {OLDROOT}", "open {OLDROOT}")
+        })?,
         counter: 0,
     };
     for m in &spec.mounts {
-        b.apply(m)
-            .map_err(|e| MountError(format!("montagem {}: {e}", m.dest().display())))?;
+        b.apply(m).map_err(|e| {
+            MountError(sandmux_spec::trf!(
+                "montagem {}: {e}",
+                "mount {}: {e}",
+                m.dest().display()
+            ))
+        })?;
     }
 
     let newroot = b.newroot;
     drop(b.oldroot);
-    nix_ctx(fchdir(&newroot), || "entrar na raiz nova".into())?;
+    nix_ctx(fchdir(&newroot), || {
+        sandmux_spec::tr!("entrar na raiz nova", "enter the new root").into()
+    })?;
     ctx(sys::pivot_root(c".", c"."), || {
-        "pivot_root para a raiz nova".into()
+        sandmux_spec::tr!("pivot_root para a raiz nova", "pivot_root to the new root").into()
     })?;
     nix_ctx(umount2(".", MntFlags::MNT_DETACH), || {
-        "desanexar o host".into()
+        sandmux_spec::tr!("desanexar o host", "detach the host").into()
     })?;
-    nix_ctx(chdir("/"), || "entrar na raiz".into())?;
-    let root = ctx(open_path_plain("/"), || "abrir a raiz".into())?;
+    nix_ctx(chdir("/"), || {
+        sandmux_spec::tr!("entrar na raiz", "enter the root").into()
+    })?;
+    let root = ctx(open_path_plain("/"), || {
+        sandmux_spec::tr!("abrir a raiz", "open the root").into()
+    })?;
     ctx(
         sys::mount_setattr(root.as_fd(), false, MOUNT_ATTR_RDONLY, 0),
-        || "raiz em somente leitura".into(),
+        || sandmux_spec::tr!("raiz em somente leitura", "read-only root").into(),
     )?;
     Ok(())
 }
@@ -168,7 +213,7 @@ impl Builder {
             Mount::Tmpfs { dest, mode } => {
                 let fsc = ctx(FsContext::open("tmpfs"), || "tmpfs".into())?;
                 ctx(fsc.set_string("mode", &format!("{mode:o}")), || {
-                    "modo do tmpfs".into()
+                    sandmux_spec::tr!("modo do tmpfs", "tmpfs mode").into()
                 })?;
                 let mnt = ctx(fsc.mount(MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV), || {
                     "tmpfs".into()
@@ -183,12 +228,16 @@ impl Builder {
                 let src = self.open_source(source)?;
                 let kind = kind_of(src.as_fd())?;
                 let tree = ctx(sys::open_tree_clone(src.as_fd(), true), || {
-                    format!("copiar a árvore de {}", source.display())
+                    sandmux_spec::trf!(
+                        "copiar a árvore de {}",
+                        "copy the tree of {}",
+                        source.display()
+                    )
                 })?;
                 if !writable {
                     ctx(
                         sys::mount_setattr(tree.as_fd(), true, MOUNT_ATTR_RDONLY, 0),
-                        || "somente leitura".into(),
+                        || sandmux_spec::tr!("somente leitura", "read-only").into(),
                     )?;
                 }
                 self.attach(tree, dest, kind)
@@ -196,7 +245,7 @@ impl Builder {
             Mount::Device { source, dest } => {
                 let src = self.open_source(source)?;
                 let tree = ctx(sys::open_tree_clone(src.as_fd(), false), || {
-                    format!("copiar {}", source.display())
+                    sandmux_spec::trf!("copiar {}", "copy {}", source.display())
                 })?;
                 self.attach(tree, dest, Kind::File)
             }
@@ -207,8 +256,12 @@ impl Builder {
                         self.counter += 1;
                         let d = PathBuf::from(format!("/layers/{}", self.counter));
                         let (u, w) = (d.join("upper"), d.join("work"));
-                        ctx(fs::create_dir_all(&u), || "camada temporária".into())?;
-                        ctx(fs::create_dir_all(&w), || "camada temporária".into())?;
+                        ctx(fs::create_dir_all(&u), || {
+                            sandmux_spec::tr!("camada temporária", "temporary layer").into()
+                        })?;
+                        ctx(fs::create_dir_all(&w), || {
+                            sandmux_spec::tr!("camada temporária", "temporary layer").into()
+                        })?;
                         (u, w)
                     }
                 };
@@ -216,13 +269,13 @@ impl Builder {
                 let as_str = |p: &Path| p.to_string_lossy().into_owned();
                 ctx(
                     fsc.set_string("lowerdir+", &as_str(&host_path(lower))),
-                    || "camada de baixo".into(),
+                    || sandmux_spec::tr!("camada de baixo", "lower layer").into(),
                 )?;
                 ctx(fsc.set_string("upperdir", &as_str(&upper)), || {
-                    "camada de escrita".into()
+                    sandmux_spec::tr!("camada de escrita", "write layer").into()
                 })?;
                 ctx(fsc.set_string("workdir", &as_str(&work)), || {
-                    "pasta de trabalho do overlay".into()
+                    sandmux_spec::tr!("pasta de trabalho do overlay", "overlay work folder").into()
                 })?;
                 let mnt = ctx(fsc.mount(MOUNT_ATTR_NODEV), || "overlay".into())?;
                 self.attach(mnt, dest, Kind::Dir)
@@ -236,8 +289,12 @@ impl Builder {
                 let kind = kind_of(target.as_fd())?;
                 let mnt = match kind {
                     Kind::Dir => {
-                        let fsc = ctx(FsContext::open("tmpfs"), || "tmpfs vazio".into())?;
-                        ctx(fsc.set_string("mode", "0755"), || "tmpfs vazio".into())?;
+                        let fsc = ctx(FsContext::open("tmpfs"), || {
+                            sandmux_spec::tr!("tmpfs vazio", "empty tmpfs").into()
+                        })?;
+                        ctx(fsc.set_string("mode", "0755"), || {
+                            sandmux_spec::tr!("tmpfs vazio", "empty tmpfs").into()
+                        })?;
                         ctx(
                             fsc.mount(
                                 MOUNT_ATTR_RDONLY
@@ -245,13 +302,13 @@ impl Builder {
                                     | MOUNT_ATTR_NODEV
                                     | MOUNT_ATTR_NOEXEC,
                             ),
-                            || "tmpfs vazio".into(),
+                            || sandmux_spec::tr!("tmpfs vazio", "empty tmpfs").into(),
                         )?
                     }
                     Kind::File => self.generated_file("", 0o444)?,
                 };
                 ctx(sys::move_mount(mnt.as_fd(), target.as_fd()), || {
-                    "cobrir".into()
+                    sandmux_spec::tr!("cobrir", "cover").into()
                 })
             }
             Mount::File {
@@ -271,10 +328,19 @@ impl Builder {
                         let current = nix::fcntl::readlinkat(dir.as_fd(), name.as_os_str());
                         match current {
                             Ok(c) if Path::new(&c) == target.as_path() => Ok(()),
-                            _ => Err(MountError("já existe algo diferente no caminho".into())),
+                            _ => Err(MountError(
+                                sandmux_spec::tr!(
+                                    "já existe algo diferente no caminho",
+                                    "something different already exists at the path"
+                                )
+                                .into(),
+                            )),
                         }
                     }
-                    Err(e) => Err(MountError(format!("criar link simbólico: {e}"))),
+                    Err(e) => Err(MountError(sandmux_spec::trf!(
+                        "criar link simbólico: {e}",
+                        "create symbolic link: {e}"
+                    ))),
                 }
             }
             Mount::Proc { dest } => {
@@ -313,7 +379,7 @@ impl Builder {
     fn attach(&self, mnt: OwnedFd, dest: &Path, kind: Kind) -> Result<(), MountError> {
         let target = self.open_dest(dest, Some(kind))?;
         ctx(sys::move_mount(mnt.as_fd(), target.as_fd()), || {
-            "ligar a montagem".into()
+            sandmux_spec::tr!("ligar a montagem", "attach the mount").into()
         })
     }
 
@@ -321,7 +387,9 @@ impl Builder {
     /// absolutos dentro do host e não na raiz de trabalho.
     fn open_source(&self, source: &Path) -> Result<OwnedFd, MountError> {
         let rel = source.strip_prefix("/").unwrap_or(source);
-        let c = ctx(sys::cstr(rel), || "caminho".into())?;
+        let c = ctx(sys::cstr(rel), || {
+            sandmux_spec::tr!("caminho", "path").into()
+        })?;
         let rel_c = if rel.as_os_str().is_empty() {
             c".".to_owned()
         } else {
@@ -334,7 +402,7 @@ impl Builder {
                 (libc::O_PATH | libc::O_CLOEXEC) as u64,
                 RESOLVE_IN_ROOT | RESOLVE_NO_MAGICLINKS,
             ),
-            || format!("abrir a origem {}", source.display()),
+            || sandmux_spec::trf!("abrir a origem {}", "open the source {}", source.display()),
         )
     }
 
@@ -349,21 +417,25 @@ impl Builder {
                 .create_new(true)
                 .mode(0o600)
                 .open(&path),
-            || "arquivo gerado".into(),
+            || sandmux_spec::tr!("arquivo gerado", "generated file").into(),
         )?;
-        ctx(f.write_all(contents.as_bytes()), || "arquivo gerado".into())?;
+        ctx(f.write_all(contents.as_bytes()), || {
+            sandmux_spec::tr!("arquivo gerado", "generated file").into()
+        })?;
         ctx(
             fs::set_permissions(&path, fs::Permissions::from_mode(mode)),
-            || "arquivo gerado".into(),
+            || sandmux_spec::tr!("arquivo gerado", "generated file").into(),
         )?;
         drop(f);
-        let fd = ctx(open_any(&path), || "arquivo gerado".into())?;
+        let fd = ctx(open_any(&path), || {
+            sandmux_spec::tr!("arquivo gerado", "generated file").into()
+        })?;
         let tree = ctx(sys::open_tree_clone(fd.as_fd(), false), || {
-            "arquivo gerado".into()
+            sandmux_spec::tr!("arquivo gerado", "generated file").into()
         })?;
         ctx(
             sys::mount_setattr(tree.as_fd(), false, MOUNT_ATTR_RDONLY, 0),
-            || "arquivo gerado".into(),
+            || sandmux_spec::tr!("arquivo gerado", "generated file").into(),
         )?;
         Ok(tree)
     }
@@ -379,7 +451,7 @@ impl Builder {
             })
             .collect();
         let mut cur = ctx(open_any_at(self.newroot.as_fd(), OsStr::new(".")), || {
-            "raiz nova".into()
+            sandmux_spec::tr!("raiz nova", "new root").into()
         })?;
         for (i, name) in comps.iter().enumerate() {
             let fd = match open_nofollow_at(cur.as_fd(), name) {
@@ -393,7 +465,11 @@ impl Builder {
                     return Ok(None);
                 }
                 return Err(MountError(
-                    "caminho com link simbólico; montagem recusada".into(),
+                    sandmux_spec::tr!(
+                        "caminho com link simbólico; montagem recusada",
+                        "path with a symbolic link; mount refused"
+                    )
+                    .into(),
                 ));
             }
             cur = fd;
@@ -413,13 +489,16 @@ impl Builder {
             })
             .collect();
         let mut cur = ctx(open_any_at(self.newroot.as_fd(), OsStr::new(".")), || {
-            "raiz nova".into()
+            sandmux_spec::tr!("raiz nova", "new root").into()
         })?;
         if comps.is_empty() {
             return if kind == Some(Kind::Dir) {
                 Ok(cur)
             } else {
-                Err(MountError("destino é a própria raiz".into()))
+                Err(MountError(
+                    sandmux_spec::tr!("destino é a própria raiz", "destination is the root itself")
+                        .into(),
+                ))
             };
         }
         for (i, name) in comps.iter().enumerate() {
@@ -441,15 +520,27 @@ fn step(dir: BorrowedFd<'_>, name: &OsStr, want: Option<Kind>) -> Result<OwnedFd
                 let st = nix_ctx(fstat(fd.as_fd()), || "fstat".into())?;
                 let fmt = SFlag::from_bits_truncate(st.st_mode & SFlag::S_IFMT.bits());
                 if fmt == SFlag::S_IFLNK {
-                    return Err(MountError("é um link simbólico; montagem recusada".into()));
+                    return Err(MountError(
+                        sandmux_spec::tr!(
+                            "é um link simbólico; montagem recusada",
+                            "is a symbolic link; mount refused"
+                        )
+                        .into(),
+                    ));
                 }
                 match want {
                     Some(Kind::Dir) if fmt != SFlag::S_IFDIR => {
-                        return Err(MountError("esperava uma pasta".into()));
+                        return Err(MountError(
+                            sandmux_spec::tr!("esperava uma pasta", "expected a folder").into(),
+                        ));
                     }
                     Some(Kind::File) if fmt == SFlag::S_IFDIR => {
                         return Err(MountError(
-                            "esperava um arquivo, encontrou uma pasta".into(),
+                            sandmux_spec::tr!(
+                                "esperava um arquivo, encontrou uma pasta",
+                                "expected a file, found a folder"
+                            )
+                            .into(),
                         ));
                     }
                     _ => {}
@@ -458,19 +549,34 @@ fn step(dir: BorrowedFd<'_>, name: &OsStr, want: Option<Kind>) -> Result<OwnedFd
             }
             Err(e) if e.raw_os_error() == Some(libc::ENOENT) => {
                 let created = match want {
-                    None => return Err(MountError("não existe".into())),
+                    None => {
+                        return Err(MountError(
+                            sandmux_spec::tr!("não existe", "does not exist").into(),
+                        ));
+                    }
                     Some(Kind::Dir) => match mkdirat(dir, name, Mode::from_bits_truncate(0o755)) {
                         Ok(()) | Err(nix::errno::Errno::EEXIST) => Ok(()),
                         Err(e) => Err(io::Error::from(e)),
                     },
                     Some(Kind::File) => create_file_at(dir, name),
                 };
-                created.map_err(|e| MountError(format!("criar ponto de montagem: {e}")))?;
+                created.map_err(|e| {
+                    MountError(sandmux_spec::trf!(
+                        "criar ponto de montagem: {e}",
+                        "create mount point: {e}"
+                    ))
+                })?;
             }
             Err(e) => return Err(MountError(e.to_string())),
         }
     }
-    Err(MountError("o caminho mudou durante a montagem".into()))
+    Err(MountError(
+        sandmux_spec::tr!(
+            "o caminho mudou durante a montagem",
+            "the path changed during the mount"
+        )
+        .into(),
+    ))
 }
 
 fn open_nofollow_at(dir: BorrowedFd<'_>, name: &OsStr) -> io::Result<OwnedFd> {
@@ -543,9 +649,9 @@ fn host_path(p: &Path) -> PathBuf {
 }
 
 fn split(dest: &Path) -> Result<(PathBuf, PathBuf), MountError> {
-    let name = dest
-        .file_name()
-        .ok_or_else(|| MountError("caminho sem nome".into()))?;
+    let name = dest.file_name().ok_or_else(|| {
+        MountError(sandmux_spec::tr!("caminho sem nome", "path without a name").into())
+    })?;
     let parent = dest.parent().unwrap_or(Path::new("/")).to_path_buf();
     Ok((parent, PathBuf::from(OsStr::from_bytes(name.as_bytes()))))
 }

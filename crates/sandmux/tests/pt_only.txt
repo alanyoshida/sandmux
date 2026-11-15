@@ -1,0 +1,173 @@
+# Textos em português fora de tr!/trf! de propósito: valores gravados ou
+# comparados, texto que vai para o agente no sandbox, tabelas que já têm o par
+# em inglês. Um texto novo em português ao usuário vai em tr!/trf!, não aqui.
+crates/sandmux-net/src/lib.rs	certificado inválido: {e}
+crates/sandmux-net/src/log.rs	sem domínio
+crates/sandmux-net/src/tls.rs	sandmux CA do lançamento
+crates/sandmux-policy/src/config.rs	catálogo comum (
+crates/sandmux-policy/src/config.rs	catálogo de exfiltração
+crates/sandmux-policy/src/config.rs	catálogo de inferência
+crates/sandmux-policy/src/config.rs	padrão
+crates/sandmux-policy/src/config/edit.rs	não
+crates/sandmux-policy/src/home.rs	# Gerado pelo sandmux ao criar o HOME sintético do preset shell.\n# O .bashrc e o .zshrc reais não são copiados. Este arquivo pode ser editado.\n
+crates/sandmux-policy/src/netcatalog.rs	OAST e DNS de exfiltração
+crates/sandmux-policy/src/netcatalog.rs	catálogo comum ({group})
+crates/sandmux-policy/src/netcatalog.rs	catálogo de exfiltração
+crates/sandmux-policy/src/netcatalog.rs	catálogo de inferência
+crates/sandmux-policy/src/netcatalog.rs	coletores de requisição
+crates/sandmux-policy/src/netcatalog.rs	túneis
+crates/sandmux-spec/src/lib.rs	# Pastas do host liberadas pelo usuário nesta sessão (sandmux).\n# nome\tmodo\tpasta no host\n
+crates/sandmux-spec/src/net.rs	catálogo
+crates/sandmux-spec/src/net.rs	catálogo comum
+crates/sandmux-spec/src/net.rs	catálogo de exfiltração
+crates/sandmux-spec/src/net.rs	catálogo de inferência
+crates/sandmux-spec/src/net.rs	certificado inválido:
+crates/sandmux-spec/src/net.rs	fora do modo só inferência
+crates/sandmux-spec/src/net.rs	sem domínio
+crates/sandmux/src/configcmd.rs	catálogo
+crates/sandmux/src/daemon/db.rs	Executa um SQL (leitura ou escrita) e devolve até 500 linhas ou as linhas afetadas.
+crates/sandmux/src/daemon/db.rs	JSON inválido: {e}
+crates/sandmux/src/daemon/db.rs	Lista as conexões de banco liberadas nesta sessão.
+crates/sandmux/src/daemon/db.rs	Lista as tabelas de uma conexão.
+crates/sandmux/src/daemon/db.rs	conexão não liberada nesta sessão: {cname}
+crates/sandmux/src/daemon/db.rs	método desconhecido: {method}
+crates/sandmux/src/daemon/db.rs	nome da conexão (veja a ferramenta conexoes)
+crates/sandmux/src/daemon/db.rs	o cofre está trancado; rode `sandmux vault unlock`
+crates/sandmux/src/main.rs	Abre a interface com abas, uma por sessão (o mesmo que `sandmux` sem subcomando).
+crates/sandmux/src/main.rs	Acrescenta um caminho do host com leitura e escrita (repetível).
+crates/sandmux/src/main.rs	Acrescenta um caminho do host em somente leitura (repetível).
+crates/sandmux/src/main.rs	Anexa este terminal a uma sessão.
+crates/sandmux/src/main.rs	Apaga uma conexão.
+crates/sandmux/src/main.rs	Aplica um perfil nomeado do arquivo de configuração.
+crates/sandmux/src/main.rs	Bloqueia a gravação no clipboard, mesmo que a configuração libere.
+crates/sandmux/src/main.rs	Chave SSH do cofre que o agente SSH da sessão pode usar (`*` para todas). Repetível.
+crates/sandmux/src/main.rs	Conexão de banco do cofre que o MCP de banco da sessão pode usar (`*` para todas). Repetível.
+crates/sandmux/src/main.rs	Conexões de banco no cofre, para o MCP de banco, e o registro das queries.
+crates/sandmux/src/main.rs	Configura depois de instalar: o perfil do AppArmor do lançador (com sudo, depois de perguntar), o daemon e o diagnóstico.
+crates/sandmux/src/main.rs	Controla o daemon de sessões.
+crates/sandmux/src/main.rs	Copia a configuração existente de um harness para o HOME sintético.
+crates/sandmux/src/main.rs	DOMÍNIO
+crates/sandmux/src/main.rs	Decifra o TLS deste destino (registro de método e caminho). Repetível.
+crates/sandmux/src/main.rs	Desabilita um servidor MCP do harness nesta aba. Repetível.
+crates/sandmux/src/main.rs	Desabilita um servidor na aba da sessão (vale no próximo lançamento).
+crates/sandmux/src/main.rs	Desanexa todos os terminais de uma sessão, sem encerrá-la.
+crates/sandmux/src/main.rs	Dias para trás, contando hoje.
+crates/sandmux/src/main.rs	Diz se o cofre existe e se está desbloqueado.
+crates/sandmux/src/main.rs	Domínio dono do segredo (padrão de destino). Repetível.
+crates/sandmux/src/main.rs	Encerra os harnesses e para o daemon; as sessões vivas voltam na próxima subida.
+crates/sandmux/src/main.rs	Encerra uma sessão e a tira da lista.
+crates/sandmux/src/main.rs	Expõe a GPU, mesmo que a configuração a desligue.
+crates/sandmux/src/main.rs	Ferramenta que usa o segredo: gh, git, npm, pip, cargo ou docker. Repetível; sem ela, vem dos domínios conhecidos.
+crates/sandmux/src/main.rs	Guarda um segredo; o valor é lido do terminal sem eco (ou da entrada padrão).
+crates/sandmux/src/main.rs	Guarda uma chave SSH privada (Ed25519, ECDSA ou RSA) para o agente SSH do sandbox; a passphrase, se houver, é pedida sem eco.
+crates/sandmux/src/main.rs	Guarda uma conexão no cofre; a senha é lida sem eco (ou da entrada padrão).
+crates/sandmux/src/main.rs	Habilita só os servidores da allowlist da aba (vale no próximo lançamento).
+crates/sandmux/src/main.rs	Harness, sem sessão (opencode ou hermes).
+crates/sandmux/src/main.rs	Identificador da sessão (sem ele, a única sessão viva).
+crates/sandmux/src/main.rs	Leva a porta do host ao `127.0.0.1` do sandbox: o agente alcança, por exemplo, o LM Studio em `127.0.0.1:8888` como no host. Repetível.
+crates/sandmux/src/main.rs	Leva para o cofre as chaves reais encontradas nos HOMEs sintéticos, deixando valores falsos no lugar.
+crates/sandmux/src/main.rs	Libera um arquivo ou pasta na aba da sessão (vence a negação e os segredos).
+crates/sandmux/src/main.rs	Libera um arquivo ou pasta nesta aba (vence a negação e os segredos). Repetível.
+crates/sandmux/src/main.rs	Libera um destino no modo custom, na aba da sessão.
+crates/sandmux/src/main.rs	Libera um destino no modo custom, nesta aba. Repetível.
+crates/sandmux/src/main.rs	Lista as conexões (sem as senhas).
+crates/sandmux/src/main.rs	Lista as pastas da sessão.
+crates/sandmux/src/main.rs	Lista as sessões.
+crates/sandmux/src/main.rs	Lista os segredos (só os nomes e os domínios).
+crates/sandmux/src/main.rs	Lista os servidores MCP da sessão, ou do harness na pasta atual.
+crates/sandmux/src/main.rs	Monta a pasta em /mnt/sandmux/<nome> na sessão (só leitura, ou com --rw).
+crates/sandmux/src/main.rs	Monta, desmonta e lista as pastas do host em /mnt/sandmux de uma sessão, sem relançar o agente.
+crates/sandmux/src/main.rs	Mostra a configuração efetiva para a pasta atual, com a origem de cada valor.
+crates/sandmux/src/main.rs	Mostra as queries registradas, de uma sessão ou de todas.
+crates/sandmux/src/main.rs	Mostra as últimas conexões de rede, de uma sessão ou de todas, e muda as regras de rede da aba de uma sessão.
+crates/sandmux/src/main.rs	Mostra e altera o arquivo de configuração (perfis e ajustes).
+crates/sandmux/src/main.rs	Mostra o consumo de memória e de processos de uma sessão.
+crates/sandmux/src/main.rs	Mostra o modo e as regras efetivas de uma sessão, ou da pasta atual.
+crates/sandmux/src/main.rs	Mostra os acessos às pastas do agente, de uma sessão ou de todas.
+crates/sandmux/src/main.rs	Mostra se a máquina tem o suporte necessário e o que falta.
+crates/sandmux/src/main.rs	Mostra se o daemon está rodando, a versão, o PID e o número de sessões.
+crates/sandmux/src/main.rs	Na primeira execução, começa com o HOME sintético vazio sem perguntar.
+crates/sandmux/src/main.rs	Na primeira execução, importa a configuração existente sem perguntar.
+crates/sandmux/src/main.rs	Na seção [global], que vale para toda execução.
+crates/sandmux/src/main.rs	Nega um arquivo ou pasta na aba da sessão (caminho com `/` ou `~/`, ou nome como `*.sql`), com efeito na abertura seguinte.
+crates/sandmux/src/main.rs	Nega um arquivo ou pasta nesta aba (caminho com `/` ou `~/`, ou nome como `*.sql`). Repetível.
+crates/sandmux/src/main.rs	Nega um destino na aba da sessão (domínio, *.domínio, IPv4 ou CIDR).
+crates/sandmux/src/main.rs	Nega um destino nesta aba (domínio, *.domínio, IPv4 ou CIDR). Repetível.
+crates/sandmux/src/main.rs	Numa subpasta de repositório, monta o repositório inteiro em somente leitura.
+crates/sandmux/src/main.rs	Não expõe a GPU dentro do sandbox.
+crates/sandmux/src/main.rs	Não libera /dev/kvm, mesmo que a configuração peça.
+crates/sandmux/src/main.rs	Não monta o repositório inteiro, mesmo que a configuração peça.
+crates/sandmux/src/main.rs	Não sobe o daemon.
+crates/sandmux/src/main.rs	Não usa sudo: mostra os comandos do perfil para rodar como root.
+crates/sandmux/src/main.rs	Onde a mudança é gravada: exatamente um dos três.
+crates/sandmux/src/main.rs	PADRÃO
+crates/sandmux/src/main.rs	PORTA[@ENDEREÇO]
+crates/sandmux/src/main.rs	Padrão: 5432 (postgres) ou 3306 (mysql).
+crates/sandmux/src/main.rs	Para o daemon e remove a unidade systemd de usuário.
+crates/sandmux/src/main.rs	Para o daemon e sobe de novo com o binário instalado, relançando as sessões.
+crates/sandmux/src/main.rs	Passa uma variável do seu ambiente para dentro do sandbox (repetível).
+crates/sandmux/src/main.rs	Pede os valores reais das chaves que a importação trocou por valores falsos.
+crates/sandmux/src/main.rs	Primeira mensagem (obrigatória sem terminal).
+crates/sandmux/src/main.rs	Publica no host a porta de entrada do sandbox (`8642`, ou `8443@0.0.0.0` para escutar também nesse endereço). Com alguma, só elas são publicadas. Repetível.
+crates/sandmux/src/main.rs	Relança uma sessão encerrada ou parada, na mesma pasta e com as mesmas opções.
+crates/sandmux/src/main.rs	Roda agentes de código dentro de um sandbox
+crates/sandmux/src/main.rs	Roda o gateway do hermes (canais de mensagem e tarefas agendadas) numa sessão própria do daemon, que reinicia se cair e volta depois de um reboot.
+crates/sandmux/src/main.rs	Servidor git da chave (domínio exato). Repetível; ao menos um.
+crates/sandmux/src/main.rs	Sessão (sem ela, todas).
+crates/sandmux/src/main.rs	Sobe um harness confinado na pasta atual. Num terminal, cria uma sessão no daemon e anexa a ela (Ctrl+b d desanexa, Ctrl+b Ctrl+b envia Ctrl+b); sem terminal, roda direto, em primeiro plano.
+crates/sandmux/src/main.rs	Substitui os arquivos que já existem no HOME sintético.
+crates/sandmux/src/main.rs	Só estes servidores MCP ficam habilitados nesta aba. Repetível.
+crates/sandmux/src/main.rs	Teto de memória: porcentagem da RAM (50%), tamanho (16G) ou max.
+crates/sandmux/src/main.rs	Teto de processos e threads: um número ou max.
+crates/sandmux/src/main.rs	Tira um padrão das regras da aba da sessão.
+crates/sandmux/src/main.rs	Tira um padrão das regras de arquivos da aba da sessão.
+crates/sandmux/src/main.rs	Tranca o cofre e apaga os segredos da memória do daemon.
+crates/sandmux/src/main.rs	Troca o nome de uma sessão (o nome da aba na TUI).
+crates/sandmux/src/main.rs	true or false (also sim or não); for caps, 50%, 16G, 512 or max.
+crates/sandmux/src/main.rs	true ou false (também sim ou não); nos tetos, 50%, 16G, 512 ou max.
+crates/sandmux/src/sshagent.rs	chave RSA inválida
+crates/sandmux/src/sshagent.rs	chave RSA inválida: {e}
+crates/sandmux/src/sshagent.rs	chave não escolhida ou cofre trancado
+crates/sandmux/src/tui/mod.rs	configurações
+crates/sandmux/src/tui/mod.rs	gerar um comando e escrevê-lo na aba
+crates/sandmux/src/tui/mod.rs	menu de ações
+crates/sandmux/src/tui/mod.rs	próxima aba
+crates/sandmux/src/tui/mod.rs	sair (as sessões continuam)
+crates/sandmux/src/tui/netscreen.rs	catálogo
+crates/sandmux/src/tui/settings.rs	Aparência
+crates/sandmux/src/tui/settings.rs	Catálogos
+crates/sandmux/src/tui/settings.rs	Catálogos desligados
+crates/sandmux/src/tui/settings.rs	Chaves SSH do cofre que a sessão pode usar, ou * para todas.
+crates/sandmux/src/tui/settings.rs	Conexões de banco do cofre que a sessão pode usar, ou * para todas.
+crates/sandmux/src/tui/settings.rs	Cores da barra, dos modais, do painel e desta página. Vale na hora.
+crates/sandmux/src/tui/settings.rs	Ctrl com uma letra minúscula, como C-b. As teclas de cada ação ficam em [tui.keys] (docs/tui.md).
+crates/sandmux/src/tui/settings.rs	Decifração
+crates/sandmux/src/tui/settings.rs	Domínios em que o gateway abre o HTTPS para registrar o método e o caminho.
+crates/sandmux/src/tui/settings.rs	Dá acesso a /dev/kvm (máquinas virtuais e emuladores).
+crates/sandmux/src/tui/settings.rs	Dá acesso à placa de vídeo (/dev/dri e NVIDIA).
+crates/sandmux/src/tui/settings.rs	Grupos do catálogo comum liberados (pacotes, git, documentação…).
+crates/sandmux/src/tui/settings.rs	Grupos do catálogo desligados aqui.
+crates/sandmux/src/tui/settings.rs	Memória
+crates/sandmux/src/tui/settings.rs	Monta o repositório git da pasta de trabalho inteiro, não só a pasta.
+crates/sandmux/src/tui/settings.rs	Mostra o painel de proteção, recursos e rede ao abrir a TUI.
+crates/sandmux/src/tui/settings.rs	Nomes de variáveis de ambiente passadas ao harness (só nomes, nunca valores).
+crates/sandmux/src/tui/settings.rs	Padrões de arquivo que o harness não pode abrir.
+crates/sandmux/src/tui/settings.rs	Padrões embutidos de segredo desligados aqui.
+crates/sandmux/src/tui/settings.rs	Padrões liberados mesmo dentro de um padrão negado.
+crates/sandmux/src/tui/settings.rs	Padrões tratados como segredo (além dos padrões embutidos).
+crates/sandmux/src/tui/settings.rs	Pastas extras montadas com escrita. Pastas perigosas são recusadas.
+crates/sandmux/src/tui/settings.rs	Pastas extras montadas só para leitura (caminhos absolutos ou com ~/).
+crates/sandmux/src/tui/settings.rs	Pastas só leitura
+crates/sandmux/src/tui/settings.rs	Portas da sua máquina levadas ao 127.0.0.1 do sandbox (servidores de modelo locais).
+crates/sandmux/src/tui/settings.rs	Posição da barra
+crates/sandmux/src/tui/settings.rs	Repositório
+crates/sandmux/src/tui/settings.rs	Servidores MCP desabilitados nas sessões.
+crates/sandmux/src/tui/settings.rs	Tamanho máximo do registro de rede, como 500M ou 2G (mínimo 128M).
+crates/sandmux/src/tui/settings.rs	Teto de memória: um tamanho como 8G, uma porcentagem como 50% ou max. Vazio volta ao padrão.
+crates/sandmux/src/tui/settings.rs	Teto de processos: um número ou max. Vazio volta ao padrão.
+crates/sandmux/src/tui/settings.rs	Variáveis passadas
+crates/sandmux/src/tui/settings.rs	aberta registra tudo; inferencia só deixa os provedores de modelo; custom usa a allowlist; sem-rede corta a rede.
+crates/sandmux/src/tui/settings.rs	blocos funciona em qualquer fonte; powerline precisa de uma Nerd Font; simples é só texto.
+crates/sandmux/src/tui/settings.rs	bottom põe a barra na última linha; top, na primeira.
+crates/sandmux/src/vaultcmd.rs	DOMÍNIO
+crates/sandmux/src/vaultcmd.rs	PADRÃO

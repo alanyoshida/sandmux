@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
+use sandmux_spec::{tr, trf};
 
 /// Onde fica o perfil do lançador.
 pub const PROFILE_PATH: &str = "/etc/apparmor.d/sandmux-run";
@@ -68,7 +69,7 @@ pub fn manual_commands(profile: &str) -> String {
 }
 
 fn ask(question: &str) -> Result<bool> {
-    eprint!("{question} [S/n] ");
+    eprint!("{question} {} ", tr!("[S/n]", "[Y/n]"));
     std::io::stderr().flush()?;
     let mut l = String::new();
     std::io::stdin().read_line(&mut l)?;
@@ -94,21 +95,30 @@ fn install_profile(profile: &str, parser: &Path, sudo: bool) -> Result<()> {
             Stdio::inherit()
         })
         .stdout(Stdio::null());
-        let mut child = c.spawn().with_context(|| format!("executar {}", args[0]))?;
+        let mut child = c
+            .spawn()
+            .with_context(|| trf!("executar {}", "run {}", args[0]))?;
         if let Some(i) = input {
             child
                 .stdin
                 .take()
-                .context("entrada do processo")?
+                .context(tr!("entrada do processo", "process input"))?
                 .write_all(i.as_bytes())?;
         }
         if !child.wait()?.success() {
-            bail!("`{}` falhou", args.join(" "));
+            bail!(trf!("`{}` falhou", "`{}` failed", args.join(" ")));
         }
         Ok(())
     };
     run(&["tee", PROFILE_PATH], Some(profile))?;
     run(&[&parser.to_string_lossy(), "-r", PROFILE_PATH], None)
+}
+
+fn installed_msg() -> String {
+    trf!(
+        "AppArmor: perfil do lançador gravado em {PROFILE_PATH} e carregado.",
+        "AppArmor: launcher profile written to {PROFILE_PATH} and loaded."
+    )
 }
 
 pub fn run(no_sudo: bool, no_daemon: bool) -> Result<i32> {
@@ -125,45 +135,70 @@ pub fn run(no_sudo: bool, no_daemon: bool) -> Result<i32> {
     let mut ok = true;
     match step {
         ProfileStep::NotNeeded => {
-            println!("AppArmor: o kernel não restringe user namespaces; o perfil não é preciso.")
+            println!(
+                "{}",
+                tr!(
+                    "AppArmor: o kernel não restringe user namespaces; o perfil não é preciso.",
+                    "AppArmor: the kernel does not restrict user namespaces; the profile is not needed."
+                )
+            )
         }
         ProfileStep::NoParser => println!(
-            "AppArmor: o kernel tem a restrição de user namespace, mas falta o apparmor_parser; instale o pacote do AppArmor e rode `sandmux setup` de novo."
+            "{}",
+            tr!(
+                "AppArmor: o kernel tem a restrição de user namespace, mas falta o apparmor_parser; instale o pacote do AppArmor e rode `sandmux setup` de novo.",
+                "AppArmor: the kernel has the user namespace restriction, but apparmor_parser is missing; install the AppArmor package and run `sandmux setup` again."
+            )
         ),
         ProfileStep::UpToDate => {
-            println!("AppArmor: o perfil do lançador já está em {PROFILE_PATH}.")
+            println!(
+                "{}",
+                trf!(
+                    "AppArmor: o perfil do lançador já está em {PROFILE_PATH}.",
+                    "AppArmor: the launcher profile is already at {PROFILE_PATH}."
+                )
+            )
         }
         ProfileStep::Install => {
             let parser = parser.unwrap_or_else(|| PathBuf::from("apparmor_parser"));
             let interactive = std::io::stdin().is_terminal();
             if root {
                 install_profile(&want, &parser, false)?;
-                println!("AppArmor: perfil do lançador gravado em {PROFILE_PATH} e carregado.");
+                println!("{}", installed_msg());
             } else if !no_sudo
                 && interactive
                 && has_sudo()
-                && ask(&format!(
-                    "O lançador precisa de um perfil do AppArmor em {PROFILE_PATH}. Instalar com sudo?"
+                && ask(&trf!(
+                    "O lançador precisa de um perfil do AppArmor em {PROFILE_PATH}. Instalar com sudo?",
+                    "The launcher needs an AppArmor profile at {PROFILE_PATH}. Install it with sudo?"
                 ))?
             {
                 install_profile(&want, &parser, true)?;
-                println!("AppArmor: perfil do lançador gravado em {PROFILE_PATH} e carregado.");
+                println!("{}", installed_msg());
             } else {
                 ok = false;
                 println!(
-                    "AppArmor: o lançador precisa de um perfil próprio. Como root, rode:\n\n{}\nSem ele, o sandbox não sobe enquanto kernel.apparmor_restrict_unprivileged_userns for 1.",
-                    manual_commands(&want)
+                    "{}",
+                    trf!(
+                        "AppArmor: o lançador precisa de um perfil próprio. Como root, rode:\n\n{}\nSem ele, o sandbox não sobe enquanto kernel.apparmor_restrict_unprivileged_userns for 1.",
+                        "AppArmor: the launcher needs its own profile. As root, run:\n\n{}\nWithout it, the sandbox does not start while kernel.apparmor_restrict_unprivileged_userns is 1.",
+                        manual_commands(&want)
+                    )
                 );
             }
         }
     }
     if root || no_daemon {
         println!(
-            "Daemon: não iniciado (o daemon é por usuário; rode `sandmux setup` como o seu usuário)."
+            "{}",
+            tr!(
+                "Daemon: não iniciado (o daemon é por usuário; rode `sandmux setup` como o seu usuário).",
+                "Daemon: not started (the daemon is per user; run `sandmux setup` as your user)."
+            )
         );
     } else {
-        sandmux::client::connect_or_start().context("subir o daemon")?;
-        println!("Daemon: rodando.");
+        sandmux::client::connect_or_start().context(tr!("subir o daemon", "start the daemon"))?;
+        println!("{}", tr!("Daemon: rodando.", "Daemon: running."));
     }
     println!();
     let code = crate::doctor::run()?;
