@@ -19,7 +19,7 @@ A spec já promete que um navegador que cria o próprio isolamento inicia dentro
 (nenhuma)
 
 ### Modified Capabilities
-- `file-access-log`: o mapeamento de ids do próprio processo é aberto no user namespace pai, e o `/proc/self` de um processo num pid namespace aninhado é o dele.
+- `file-access-log`: requisito novo, o mapeamento de ids do próprio processo aberto no user namespace pai e o `/proc/self` de um processo num pid namespace aninhado.
 - `sandbox-isolation`: dentro de um user namespace aninhado, o processo mapeia o próprio uid, e um navegador sobe com o sandbox dele.
 
 ## Impact
