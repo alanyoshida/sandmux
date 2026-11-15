@@ -1,24 +1,17 @@
-sandmux 0.1.1, antes da v1: correções do primeiro uso, página de configurações, idioma inglês e cofre na TUI.
+sandmux 0.1.2, antes da v1: shell dentro do sandbox de uma aba e proteção dos arquivos que o host executa.
 
-The interface is now available in English too: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
+The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Portas do host:** `host-ports` leva portas da sua máquina ao `127.0.0.1` do sandbox, para servidores de modelo locais (LM Studio, Ollama, Unsloth) e MCPs locais. A chave do servidor fica no cofre e é trocada também em HTTP.
-- **Modelos locais no opencode:** os modelos do servidor local aparecem sozinhos, lidos de `/models`.
-- **Clipboard:** a cópia feita no harness chega ao clipboard do sistema.
-- **Página de configurações** (Ctrl+b `e`): as opções do `config.toml` como toggles, escolhas e listas, gravadas na hora. Também:
-  - um menu de ações (Ctrl+b `:`);
-  - temas prontos: Catppuccin, Rosé Pine, Tokyo Night, Kanagawa, Gruvbox e Dracula.
-- **Barra e painel:**
-  - a barra em blocos funciona com qualquer fonte; o estilo Powerline fica opcional;
-  - o painel lateral tem seções que recolhem e mudam de ordem, com medidores de uso.
-- **Idioma:** português ou inglês em tudo, inclusive a documentação; segue o sistema ou a opção `language`.
-- **Cofre na TUI:** criar, desbloquear, trancar, trocar a senha, acrescentar segredos e chaves SSH, editar domínios e apagar, sem nunca mostrar os valores.
-- **Seletor de modelo:** a lista dos modelos dos provedores (`/models`) para escolher o modelo do chat e dos comandos.
-- **`sandmux doctor --fix`:** leva ao cofre as chaves reais encontradas dentro do sandbox.
+- **Shell dentro da aba:** Ctrl+b `t` na TUI, ou `sandmux enter [id]`, abre um shell dentro do sandbox de uma aba viva. Ele vê exatamente o que o agente vê:
+  - os mesmos arquivos, a mesma rede, o mesmo Landlock e o mesmo seccomp;
+  - as mesmas regras de arquivos (um `.env` continua negado);
+  - os mesmos processos.
+- **Arquivos que o host executa:** a escrita em `~/.bashrc`, `~/.profile`, `~/.zshrc`, `~/.local/bin`, `~/.config/autostart`, `~/.config/systemd` e afins passa a ser recusada em `--rw`, na chave `rw`, na pasta de trabalho e nas pastas montadas ao vivo. Com escrita neles, o agente poderia plantar algo que roda fora do sandbox. `--ro` continua aceito.
+- **Teclas:** uma tecla escolhida em `[tui.keys]` vence a tecla padrão de outra ação. Assim uma ação nova não invalida a configuração.
 
-O protocolo entre o cliente e o daemon mudou (25): depois de atualizar, rode `sandmux daemon restart`.
+Depois de atualizar, rode `sandmux daemon restart`. As abas abertas por uma versão anterior precisam ser reiniciadas (Ctrl+b `r`) para aceitar o Ctrl+b `t`.
 
 ## Instalar
 
