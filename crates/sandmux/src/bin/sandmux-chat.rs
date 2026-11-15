@@ -170,6 +170,55 @@ struct App {
     /// A lista de modelos (`None` enquanto carrega) e os avisos.
     models: Option<(Vec<String>, Vec<String>)>,
     loading: bool,
+    /// Começo da resposta em curso, para o tempo no cartão.
+    started: Option<std::time::Instant>,
+    /// As cores do tema ativo.
+    pal: Pal,
+}
+
+/// As cores do tema ativo, de `SANDMUX_THEME`, com as da TUI como recuo.
+struct Pal {
+    bg: Color,
+    fg: Color,
+    muted: Color,
+    accent: Color,
+    user: Color,
+    chip_fg: Color,
+    idx_bg: Color,
+    idx_fg: Color,
+    err: Color,
+}
+
+impl Pal {
+    fn from_env() -> Pal {
+        use sandmux_policy::config::ThemeColor;
+        let map: std::collections::BTreeMap<String, String> = std::env::var(chat::THEME_ENV)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        let c = |el: &str, padrao: &str| {
+            let tc = map
+                .get(el)
+                .and_then(|v| ThemeColor::parse(v))
+                .or_else(|| ThemeColor::parse(padrao));
+            match tc {
+                Some(ThemeColor::Rgb(r, g, b)) => Color::Rgb(r, g, b),
+                Some(ThemeColor::Indexed(i)) => Color::Indexed(i),
+                _ => Color::Reset,
+            }
+        };
+        Pal {
+            bg: c("page-bg", "#1e1e2e"),
+            fg: c("page-fg", "#cdd6f4"),
+            muted: c("muted-fg", "#6c7086"),
+            accent: c("accent", "#cba6f7"),
+            user: c("chip-harness-bg", "#f38ba8"),
+            chip_fg: c("chip-fg", "#1e1e2e"),
+            idx_bg: c("tab-index-bg", "#45475a"),
+            idx_fg: c("tab-index-fg", "#cdd6f4"),
+            err: c("error-fg", "#f38ba8"),
+        }
+    }
 }
 
 impl App {
@@ -198,6 +247,7 @@ impl App {
         };
         let cancel = Arc::new(AtomicBool::new(false));
         self.busy = Some(cancel.clone());
+        self.started = Some(std::time::Instant::now());
         self.partial.clear();
         let msgs = self.conv.mensagens.clone();
         let tx = self.tx.clone();
@@ -223,9 +273,11 @@ impl App {
                 match r {
                     Ok(text) => {
                         let text = if text.is_empty() { partial } else { text };
+                        let ms = self.started.take().map(|s| s.elapsed().as_millis() as u64);
                         self.conv.mensagens.push(Mensagem {
                             papel: Papel::Assistant,
                             texto: text,
+                            ms,
                         });
                         self.save();
                     }
@@ -285,6 +337,7 @@ impl App {
         self.conv.mensagens.push(Mensagem {
             papel: Papel::User,
             texto: text,
+            ms: None,
         });
         self.save();
         self.start();
@@ -403,39 +456,96 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     out
 }
 
-fn lines(app: &App, width: usize) -> Vec<Line<'static>> {
-    let you = Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD);
-    let model = Style::default()
-        .fg(Color::Green)
-        .add_modifier(Modifier::BOLD);
-    let note = Style::default().fg(Color::Yellow);
-    let mut out: Vec<Line<'static>> = Vec::new();
-    let push = |out: &mut Vec<Line<'static>>, who: &str, st: Style, text: &str| {
-        out.push(Line::from(Span::styled(who.to_string(), st)));
-        for l in wrap(text, width) {
-            out.push(Line::from(l));
-        }
-        out.push(Line::from(""));
+/// O tempo de resposta, em segundos, com a vírgula no português.
+fn secs(ms: u64) -> String {
+    let s = format!("{:.1} s", ms as f64 / 1000.0);
+    if sandmux_spec::lang::is_en() {
+        s
+    } else {
+        s.replace('.', ",")
+    }
+}
+
+/// Um cartão de borda arredondada: o papel no título, um texto à direita
+/// do título (o tempo) e o texto quebrado na largura.
+fn card(
+    out: &mut Vec<Line<'static>>,
+    width: usize,
+    title: &str,
+    right: Option<String>,
+    border: Color,
+    fg: Color,
+    text: &str,
+) {
+    use unicode_width::UnicodeWidthStr;
+    let w = width.max(8);
+    let b = Style::default().fg(border);
+    let left = format!("╭ {title} ");
+    let right = match right {
+        Some(r) => format!(" {r} ─╮"),
+        None => "─╮".to_string(),
     };
+    let fill = w.saturating_sub(left.width() + right.width());
+    out.push(Line::from(vec![
+        Span::styled("╭ ", b),
+        Span::styled(title.to_string(), b.add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" {}", "─".repeat(fill)), b),
+        Span::styled(right, b),
+    ]));
+    let inner = w.saturating_sub(4).max(1);
+    for l in wrap(text, inner) {
+        let pad = inner.saturating_sub(l.width());
+        out.push(Line::from(vec![
+            Span::styled("│ ", b),
+            Span::styled(format!("{l}{}", " ".repeat(pad)), Style::default().fg(fg)),
+            Span::styled(" │", b),
+        ]));
+    }
+    out.push(Line::from(Span::styled(
+        format!("╰{}╯", "─".repeat(w.saturating_sub(2))),
+        b,
+    )));
+}
+
+fn lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let p = &app.pal;
+    let mut out: Vec<Line<'static>> = Vec::new();
     for m in &app.conv.mensagens {
         match m.papel {
-            Papel::User => push(&mut out, tr!("você", "you"), you, &m.texto),
-            Papel::Assistant => push(&mut out, tr!("modelo", "model"), model, &m.texto),
+            Papel::User => card(
+                &mut out,
+                width,
+                tr!("você", "you"),
+                None,
+                p.user,
+                p.fg,
+                &m.texto,
+            ),
+            Papel::Assistant => card(
+                &mut out,
+                width,
+                tr!("modelo", "model"),
+                m.ms.map(secs),
+                p.accent,
+                p.fg,
+                &m.texto,
+            ),
         }
     }
     if app.busy.is_some() {
-        push(
+        card(
             &mut out,
+            width,
             tr!("modelo", "model"),
-            model,
+            Some("…".into()),
+            p.accent,
+            p.fg,
             &format!("{}▌", app.partial),
         );
     }
     for n in &app.notes {
         for l in wrap(&format!("! {n}"), width) {
-            out.push(Line::from(Span::styled(l, note)));
+            out.push(Line::from(Span::styled(l, Style::default().fg(p.err))));
         }
     }
     out
@@ -443,8 +553,13 @@ fn lines(app: &App, width: usize) -> Vec<Line<'static>> {
 
 fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let area = f.area();
-    let input_w = area.width.saturating_sub(14).max(4) as usize;
-    let input_lines = wrap(&app.input, input_w.saturating_sub(2).max(1));
+    let p = &app.pal;
+    let (bg, fg, muted, accent) = (p.bg, p.fg, p.muted, p.accent);
+    let (chip_fg, idx_bg, idx_fg) = (p.chip_fg, p.idx_bg, p.idx_fg);
+    // O fundo e o texto da página em toda a aba.
+    f.render_widget(Block::default().style(Style::default().bg(bg).fg(fg)), area);
+    let input_w = area.width.saturating_sub(16).max(4) as usize;
+    let input_lines = wrap(&app.input, input_w.max(1));
     let ih = (input_lines.len().clamp(1, 5) + 2) as u16;
     let [top, body, bottom] = Layout::vertical([
         Constraint::Length(1),
@@ -462,8 +577,16 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
     };
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(" chat ", Style::default().add_modifier(Modifier::REVERSED)),
-            Span::raw(format!(" {}{status}", app.conv.modelo)),
+            Span::styled(
+                " chat",
+                Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" › ", Style::default().fg(muted)),
+            Span::styled(app.conv.modelo.clone(), Style::default().fg(fg)),
+            Span::styled(
+                status,
+                Style::default().fg(muted).add_modifier(Modifier::ITALIC),
+            ),
         ])),
         top,
     );
@@ -475,7 +598,26 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let end = all.len() - app.scroll;
     let start = end.saturating_sub(h);
     f.render_widget(Paragraph::new(all[start..end].to_vec()), body);
-    let [inp, btn] = Layout::horizontal([Constraint::Min(4), Constraint::Length(12)]).areas(bottom);
+    // O campo da mensagem num cartão, com o botão em dois tons.
+    let prefix = std::env::var("SANDMUX_PREFIX").unwrap_or_else(|_| "Ctrl+b".into());
+    let mbox = Block::default()
+        .borders(Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(Style::default().fg(muted))
+        .title(Span::styled(
+            tr!(" mensagem ", " message "),
+            Style::default().fg(muted),
+        ))
+        .title_bottom(Span::styled(
+            trf!(
+                " Enter envia · Ctrl+j quebra · /modelo troca · {prefix} d sai ",
+                " Enter sends · Ctrl+j breaks · /modelo switches · {prefix} d leaves "
+            ),
+            Style::default().fg(muted),
+        ));
+    let inner = mbox.inner(bottom);
+    f.render_widget(mbox, bottom);
+    let [inp, btn] = Layout::horizontal([Constraint::Min(4), Constraint::Length(13)]).areas(inner);
     let shown: Vec<Line> = input_lines
         .iter()
         .skip(input_lines.len().saturating_sub(5))
@@ -483,36 +625,35 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
         .collect();
     let last = shown.last().map(|l| l.width()).unwrap_or(0) as u16;
     let nshown = shown.len() as u16;
-    f.render_widget(
-        Paragraph::new(shown).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(tr!(
-                    " mensagem (Enter envia, Ctrl+j quebra a linha, /modelo troca) ",
-                    " message (Enter sends, Ctrl+j breaks the line, /modelo switches) "
-                ))
-                .title_bottom(trf!(
-                    " {} d sai (a conversa continua numa aba do sandmux) ",
-                    " {} d leaves (the conversation goes on in a sandmux tab) ",
-                    std::env::var("SANDMUX_PREFIX").unwrap_or_else(|_| "Ctrl+b".into())
-                )),
-        ),
-        inp,
-    );
-    let by = btn.y + btn.height.saturating_sub(1) / 2;
-    app.button = Rect::new(btn.x + 1, by, 10, 1);
-    let bstyle = if app.busy.is_some() {
-        Style::default().fg(Color::DarkGray)
+    f.render_widget(Paragraph::new(shown), inp);
+    let label = tr!(" Enviar ", " Send ");
+    let bw = 3 + label.chars().count() as u16;
+    let by = btn.y + btn.height.saturating_sub(1);
+    app.button = Rect::new(btn.right().saturating_sub(bw), by, bw, 1);
+    let (icon, text) = if app.busy.is_some() {
+        (
+            Style::default().fg(muted).bg(idx_bg),
+            Style::default().fg(muted).bg(idx_bg),
+        )
     } else {
-        Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        (
+            Style::default().fg(idx_fg).bg(idx_bg),
+            Style::default()
+                .fg(chip_fg)
+                .bg(accent)
+                .add_modifier(Modifier::BOLD),
+        )
     };
     f.render_widget(
-        Paragraph::new(Span::styled(tr!("[ Enviar ]", "[ Send ]"), bstyle)),
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ⏎ ", icon),
+            Span::styled(label, text),
+        ])),
         app.button,
     );
     f.set_cursor_position(Position::new(
-        (inp.x + 1 + last).min(inp.right().saturating_sub(2)),
-        inp.y + nshown,
+        (inp.x + last).min(inp.right().saturating_sub(1)),
+        inp.y + nshown.saturating_sub(1),
     ));
     if let Some(p) = &app.picker {
         draw_picker(f, body, app, p);
@@ -532,13 +673,14 @@ fn draw_picker(f: &mut ratatui::Frame, body: Rect, app: &App, p: &Picker) {
         w,
         h,
     );
+    let pal = &app.pal;
     let list = app.picked_list();
     let mut lines = vec![
         Line::from(vec![
-            Span::raw(tr!("filtro: ", "filter: ")),
+            Span::styled(tr!("filtro: ", "filter: "), Style::default().fg(pal.muted)),
             Span::styled(
                 format!("{}▏", p.filter),
-                Style::default().add_modifier(Modifier::BOLD),
+                Style::default().fg(pal.fg).add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::styled(
@@ -555,15 +697,12 @@ fn draw_picker(f: &mut ratatui::Frame, body: Rect, app: &App, p: &Picker) {
                 ),
                 Some((ids, _)) => trf!("{} de {}", "{} of {}", list.len(), ids.len()),
             },
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(pal.muted),
         ),
     ];
     if let Some((_, notes)) = &app.models {
         for n in notes.iter().take(2) {
-            lines.push(Line::styled(
-                format!("! {n}"),
-                Style::default().fg(Color::Yellow),
-            ));
+            lines.push(Line::styled(format!("! {n}"), Style::default().fg(pal.err)));
         }
     }
     let room = (h as usize).saturating_sub(lines.len() + 2);
@@ -573,10 +712,13 @@ fn draw_picker(f: &mut ratatui::Frame, body: Rect, app: &App, p: &Picker) {
         lines.push(if i == sel {
             Line::styled(
                 format!(" {m} "),
-                Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+                Style::default()
+                    .fg(pal.chip_fg)
+                    .bg(pal.accent)
+                    .add_modifier(Modifier::BOLD),
             )
         } else {
-            Line::raw(format!(" {m} "))
+            Line::styled(format!(" {m} "), Style::default().fg(pal.fg))
         });
     }
     f.render_widget(ratatui::widgets::Clear, r);
@@ -584,6 +726,9 @@ fn draw_picker(f: &mut ratatui::Frame, body: Rect, app: &App, p: &Picker) {
         Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Rounded)
+                .border_style(Style::default().fg(pal.accent))
+                .style(Style::default().bg(pal.bg).fg(pal.fg))
                 .title(trf!(" modelo: {} ", " model: {} ", app.conv.modelo))
                 .title_bottom(tr!(
                     " ↑ ↓ · Enter escolhe · Ctrl+r relê · Esc cancela ",
@@ -635,6 +780,8 @@ fn ui(dir: PathBuf, conv: Conversa, providers: Vec<Provider>) -> Result<i32> {
         picker: None,
         models: None,
         loading: false,
+        started: None,
+        pal: Pal::from_env(),
     };
     // Pergunta sem resposta: a primeira do modal, ou uma interrompida.
     app.start();

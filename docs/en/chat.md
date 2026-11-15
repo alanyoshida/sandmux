@@ -29,16 +29,20 @@ sandmux chat "what is an inode?"
 sandmux chat --model openrouter/anthropic/claude-sonnet-5
 ```
 
-- **With a terminal:** creates the chat tab in the daemon and attaches, like `sandmux run`. Ctrl+b d leaves, and the conversation goes on in a sandmux tab (the footer of the text bar reminds you).
+- **With a terminal:** creates the chat tab in the daemon and attaches, like `sandmux run`. Ctrl+b d leaves, and the conversation goes on in a sandmux tab (the footer of the message field reminds you).
 - **Without a terminal (script, pipe):** needs the text. Prints only the answer on standard output and exits, without storing anything. A provider error exits with code 1.
 
 ## Inside the tab
 
-The tab shows the model at the top, the conversation in the middle and, at the bottom, the text bar and the `[ Send ]` button.
+The tab shows ` chat › <model>` at the top, the conversation in the middle and, at the bottom, the message field with the `⏎ Send` button. It follows the colors of the active [theme](tui.md#color-theme), which the daemon passes to the tab when launching it (`SANDMUX_THEME`; the configuration does not get into the sandbox). A changed theme applies the next time the tab starts.
+
+- **Cards:** each message sits in a rounded card, with the role in the title. Yours have the border in the second accent color (`chip-harness-bg`), and the model's in the accent color (`accent`), with the response time in the corner (`1.2 s`). The answer in progress shows in a model card with `▌`.
+- **Message field:** a card with the hints in the footer. The `⏎ Send` button is two-tone, like in the dialogs, and dimmed while the model answers.
+- **`/modelo` picker:** also in the theme colors.
 
 | Key | What it does |
 |---|---|
-| Enter or click on `[ Send ]` | Sends the text in the bar |
+| Enter or click on `⏎ Send` | Sends the text in the field |
 | Ctrl+j or Alt+Enter | Breaks the line |
 | Ctrl+u | Clears the bar |
 | Ctrl+c | Cancels the answer in progress |
@@ -113,7 +117,7 @@ The chat tab is a daemon session that runs the `sandmux-chat` program inside the
 
 ## The stored conversation
 
-The conversation stays in `conversa.json`, in the tab's folder, with the model and the messages.
+The conversation stays in `conversa.json`, in the tab's folder, with the model and the messages. Each answer from the model also stores how long it took (`ms`); conversations from before do not have the time, and the card shows without it.
 
 - **When it is written:** on each message sent and on each complete answer, through a temporary file that is renamed.
 - **Interrupted answer:** is not written. On return, the last question has no answer, and the program sends it again.

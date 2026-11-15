@@ -287,7 +287,7 @@ fn aba_de_chat_conversa_volta_e_some_ao_fechar() {
         let (rows, cols) = (s.size().0.get(), s.size().1.get());
         for r in 0..rows {
             let line = s.contents_between(r, 0, r, cols);
-            if let Some(c) = line.find("[ Enviar ]") {
+            if let Some(c) = line.find("⏎  Enviar") {
                 return (r, line[..c].chars().count() as u16);
             }
         }
@@ -691,4 +691,48 @@ fn chat_no_modal_de_nova_aba() {
     t.wait_text("chat:local/eco");
     t.write(b"\x02d");
     assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
+fn aba_de_chat_em_cartoes_com_o_tema() {
+    let (e, _) = setup();
+    let cfg = std::fs::read_to_string(e.config_file()).unwrap_or_default();
+    e.write_config(&format!("{cfg}\n[tui]\ntheme = \"catppuccin\"\n"));
+    let mut t = Term::spawn(e.cmd(&e.work, &["chat", "primeira"]), 120, 30);
+    t.wait_text("eco: primeira");
+    t.wait_text("╭ modelo");
+    t.with_screen(|s| {
+        let (rows, cols) = (s.size().0.get(), s.size().1.get());
+        let at = |text: &str| {
+            (0..rows)
+                .find_map(|r| {
+                    let line = s.contents_between(r, 0, r, cols);
+                    line.find(text)
+                        .map(|c| (r, line[..c].chars().count() as u16, line.clone()))
+                })
+                .unwrap_or_else(|| panic!("sem {text}: {}", s.contents()))
+        };
+        let accent = vt100::Color::Rgb(0xcb, 0xa6, 0xf7);
+        let page = vt100::Color::Rgb(0x1e, 0x1e, 0x2e);
+        // A borda do cartão do modelo no destaque, com o tempo no título.
+        let (r, c, line) = at("╭ modelo");
+        assert_eq!(s.cell(r, c).unwrap().fgcolor(), accent, "{}", s.contents());
+        let time = line.split("╭ modelo").nth(1).unwrap_or_default();
+        assert!(
+            time.contains(" s ─╮") && time.chars().any(|ch| ch == ','),
+            "{line}"
+        );
+        // A do usuário na segunda cor de destaque.
+        let (r, c, _) = at("╭ você");
+        assert_eq!(
+            s.cell(r, c).unwrap().fgcolor(),
+            vt100::Color::Rgb(0xf5, 0xc2, 0xe7)
+        );
+        // O fundo da página e o botão no destaque.
+        assert_eq!(s.cell(rows / 2, cols - 1).unwrap().bgcolor(), page);
+        let (r, c, _) = at("Enviar");
+        assert_eq!(s.cell(r, c).unwrap().bgcolor(), accent);
+    });
+    t.write(b"\x02d");
+    t.wait_exit();
 }

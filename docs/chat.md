@@ -27,16 +27,20 @@ sandmux chat "o que é um inode?"
 sandmux chat --model openrouter/anthropic/claude-sonnet-5
 ```
 
-- **Com terminal:** cria a aba de chat no daemon e anexa, como `sandmux run`. Ctrl+b d sai, e a conversa continua numa aba do sandmux (o rodapé da barra de texto lembra disso).
+- **Com terminal:** cria a aba de chat no daemon e anexa, como `sandmux run`. Ctrl+b d sai, e a conversa continua numa aba do sandmux (o rodapé do campo da mensagem lembra disso).
 - **Sem terminal (script, pipe):** precisa do texto. Imprime só a resposta na saída padrão e termina, sem guardar nada. Um erro do provedor termina com código 1.
 
 ## Dentro da aba
 
-A aba mostra o modelo no topo, a conversa no meio e, embaixo, a barra de texto e o botão `[ Enviar ]`.
+A aba mostra ` chat › <modelo>` no topo, a conversa no meio e, embaixo, o campo da mensagem com o botão `⏎ Enviar`. Ela segue as cores do [tema](tui.md#tema-de-cores) ativo, que o daemon passa à aba ao lançá-la (`SANDMUX_THEME`; a configuração não entra no sandbox). Um tema trocado vale na próxima vez que a aba subir.
+
+- **Cartões:** cada mensagem fica num cartão de borda arredondada, com o papel no título. As suas têm a borda na segunda cor de destaque (`chip-harness-bg`), e as do modelo, na cor de destaque (`accent`), com o tempo de resposta no canto (`1,2 s`). A resposta em andamento aparece num cartão do modelo com `▌`.
+- **Campo da mensagem:** um cartão com as dicas no rodapé. O botão `⏎ Enviar` fica em dois tons, como nos modais, e apagado enquanto o modelo responde.
+- **Seletor de `/modelo`:** também com as cores do tema.
 
 | Tecla | O que faz |
 |---|---|
-| Enter ou clique em `[ Enviar ]` | Envia o texto da barra |
+| Enter ou clique em `⏎ Enviar` | Envia o texto do campo |
 | Ctrl+j ou Alt+Enter | Quebra a linha |
 | Ctrl+u | Apaga a barra |
 | Ctrl+c | Cancela a resposta em curso |
@@ -111,7 +115,7 @@ A aba de chat é uma sessão do daemon que roda o programa `sandmux-chat` dentro
 
 ## A conversa guardada
 
-A conversa fica em `conversa.json`, na pasta da aba, com o modelo e as mensagens.
+A conversa fica em `conversa.json`, na pasta da aba, com o modelo e as mensagens. Cada resposta do modelo guarda também o tempo que levou (`ms`); as conversas de antes não têm o tempo, e o cartão aparece sem ele.
 
 - **Quando é gravada:** a cada mensagem enviada e a cada resposta completa, num arquivo temporário renomeado.
 - **Resposta interrompida:** não é gravada. Na volta, a última pergunta não tem resposta, e o programa a envia de novo.
