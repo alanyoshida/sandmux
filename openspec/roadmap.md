@@ -410,6 +410,8 @@ Release `v0.1.3` (2026-11-15), com os changes 42, 43 e 44. Decisão do usuário 
 
 Release `v0.1.4` (2026-11-15), com os changes 45 e 46, publicada junto com o change 46, como a `v0.1.3`.
 
+Release `v0.1.5` (2026-11-15), com o change 47. Decisão do usuário (2026-11-15): publicar logo depois do keyring.
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
