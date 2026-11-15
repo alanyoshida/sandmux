@@ -105,8 +105,17 @@ pub fn draw_screen(
     }
 }
 
-fn tab_label(i: usize, t: &super::Tab) -> String {
-    format!(" {}:{}{} ", i + 1, t.name, tab_marks(t))
+fn tab_label(pos: usize, t: &super::Tab, extra: usize) -> String {
+    format!(" {}:{}{} ", pos + 1, display_name(t, extra), tab_marks(t))
+}
+
+/// O nome da aba na barra: o do primeiro painel, com `+N` para os outros.
+fn display_name(t: &super::Tab, extra: usize) -> String {
+    if extra > 0 {
+        format!("{} +{extra}", t.name)
+    } else {
+        t.name.clone()
+    }
 }
 
 /// A barra sem símbolos especiais (`style = "simples"`).
@@ -117,10 +126,13 @@ fn draw_simple_bar(f: &mut Frame, bar: Rect, app: &mut App) {
     app.bar_ranges.clear();
     app.close_ranges.clear();
     let mut x = 0u16;
-    for (i, t) in app.tabs.iter().enumerate() {
-        let label = tab_label(i, t);
+    let entries = app.bar_entries();
+    let act = app.active_entry();
+    for (pos, &(i, extra)) in entries.iter().enumerate() {
+        let t = &app.tabs[i];
+        let label = tab_label(pos, t, extra);
         let w = label.chars().count() as u16;
-        let style = if i == app.active {
+        let style = if i == act {
             themed(
                 &theme,
                 "tab-active-fg",
@@ -139,7 +151,9 @@ fn draw_simple_bar(f: &mut Frame, bar: Rect, app: &mut App) {
         app.bar_ranges.push((x, x + w, i));
         // O ✕ de uma aba encerrada fecha a aba: a coluna dele e a seguinte.
         if matches!(t.state, SessionState::Encerrada { .. }) {
-            let at = x + format!(" {}:{} ", i + 1, t.name).chars().count() as u16;
+            let at = x + format!(" {}:{} ", pos + 1, display_name(t, extra))
+                .chars()
+                .count() as u16;
             app.close_ranges.push((at, at + 2, i));
         }
         x += w;
@@ -327,15 +341,19 @@ fn draw_blocks_bar(f: &mut Frame, bar: Rect, app: &mut App) {
     spans.push(Span::styled(" ", base));
     app.menu_button = Some((0, 3));
     let mut x = 4u16;
-    for (i, t) in app.tabs.iter().enumerate() {
-        let active = i == app.active;
-        let num = format!(" {} ", i + 1);
-        let name = format!(" {}{} ", t.name, tab_marks(t));
+    let entries = app.bar_entries();
+    let act = app.active_entry();
+    for (pos, &(i, extra)) in entries.iter().enumerate() {
+        let t = &app.tabs[i];
+        let active = i == act;
+        let dn = display_name(t, extra);
+        let num = format!(" {} ", pos + 1);
+        let name = format!(" {dn}{} ", tab_marks(t));
         let nw = num.chars().count() as u16;
         let w = nw + name.chars().count() as u16;
         app.bar_ranges.push((x, x + w, i));
         if matches!(t.state, SessionState::Encerrada { .. }) {
-            let at = x + nw + 1 + t.name.chars().count() as u16 + 1;
+            let at = x + nw + 1 + dn.chars().count() as u16 + 1;
             app.close_ranges.push((at, at + 2, i));
         }
         x += w + 1;
@@ -425,19 +443,23 @@ fn draw_powerline_bar(f: &mut Frame, bar: Rect, app: &mut App) {
     spans.push(Span::styled(SEP_OUT, Style::default().fg(accent).bg(bg)));
     app.menu_button = Some((0, 3));
     let mut x = 4u16;
-    for (i, t) in app.tabs.iter().enumerate() {
-        let active = i == app.active;
+    let entries = app.bar_entries();
+    let act = app.active_entry();
+    for (pos, &(i, extra)) in entries.iter().enumerate() {
+        let t = &app.tabs[i];
+        let active = i == act;
         let (cbg, cfg) = if active {
             (act_bg, act_fg)
         } else {
             (idx_bg, idx_fg)
         };
-        let num = format!(" {} ", i + 1);
-        let name = format!(" {}{} ", t.name, tab_marks(t));
+        let dn = display_name(t, extra);
+        let num = format!(" {} ", pos + 1);
+        let name = format!(" {dn}{} ", tab_marks(t));
         let w = 1 + num.chars().count() as u16 + 1 + name.chars().count() as u16;
         app.bar_ranges.push((x, x + w, i));
         if matches!(t.state, SessionState::Encerrada { .. }) {
-            let at = x + 1 + num.chars().count() as u16 + 1 + 1 + t.name.chars().count() as u16 + 1;
+            let at = x + 1 + num.chars().count() as u16 + 1 + 1 + dn.chars().count() as u16 + 1;
             app.close_ranges.push((at, at + 2, i));
         }
         x += w;
@@ -542,16 +564,52 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         sandmux_policy::config::BarStyle::Simples => draw_simple_bar(f, bar, app),
     }
 
-    // Tela da aba ativa.
+    // Painéis da aba ativa: os outros primeiro, depois os separadores e o
+    // painel em foco.
+    let (panes, seps) = app.visible_panes();
+    let sel_style = themed(
+        &theme,
+        "selection-fg",
+        "selection-bg",
+        Style::default().add_modifier(Modifier::REVERSED),
+    );
+    let abs = |r: sandmux_proto::pane::Rect| Rect::new(area.x + r.x, area.y + r.y, r.w, r.h);
+    for &(i, pr) in &panes {
+        if i != app.active
+            && let Some(t) = app.tabs.get(i)
+        {
+            draw_screen(f.buffer_mut(), abs(pr), t.parser.screen(), None, sel_style);
+        }
+    }
+    let focus = panes.iter().find(|(i, _)| *i == app.active).map(|p| p.1);
+    let muted = pl(&theme, "muted-fg", "#6c7086");
+    let accent = pl(&theme, "accent", "#cba6f7");
+    for s in &seps {
+        use sandmux_proto::pane::Dir;
+        for y in s.at.y..s.at.y + s.at.h {
+            for x in s.at.x..s.at.x + s.at.w {
+                let near = focus.is_some_and(|fr| match s.dir {
+                    Dir::Side => {
+                        (x + 1 == fr.x || fr.x + fr.w == x) && y >= fr.y && y < fr.y + fr.h
+                    }
+                    Dir::Stack => {
+                        (y + 1 == fr.y || fr.y + fr.h == y) && x >= fr.x && x < fr.x + fr.w
+                    }
+                });
+                if let Some(c) = f
+                    .buffer_mut()
+                    .cell_mut(Position::new(area.x + x, area.y + y))
+                {
+                    c.set_symbol(if s.dir == Dir::Side { "│" } else { "─" });
+                    c.set_style(Style::default().fg(if near { accent } else { muted }));
+                }
+            }
+        }
+    }
+    let area = focus.map(abs).unwrap_or(area);
     let modal_open = app.modal.is_some();
     if let Some(t) = app.tabs.get(app.active) {
         let screen = t.parser.screen();
-        let sel_style = themed(
-            &theme,
-            "selection-fg",
-            "selection-bg",
-            Style::default().add_modifier(Modifier::REVERSED),
-        );
         draw_screen(f.buffer_mut(), area, screen, app.sel.as_ref(), sel_style);
         if !modal_open && t.scroll == 0 && !screen.hide_cursor() && t.state == SessionState::Viva {
             let (r, c) = screen.cursor_position();

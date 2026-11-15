@@ -67,7 +67,7 @@ pub fn create_detached(
 
 fn list(conn: &mut Conn) -> Result<Vec<SessionInfo>> {
     match conn.call(&Msg::List)? {
-        Msg::Sessions { sessions } => Ok(sessions),
+        Msg::Sessions { sessions, .. } => Ok(sessions),
         m => Err(anyhow!(trf!(
             "resposta inesperada do daemon: {m:?}",
             "unexpected reply from the daemon: {m:?}"

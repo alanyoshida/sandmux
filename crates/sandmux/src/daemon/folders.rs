@@ -154,7 +154,7 @@ pub fn edit(
                 ));
             }
         };
-        shared.persist(&st);
+        shared.persist(&mut st);
         (tag, req)
     };
     let Some(tag) = live_tag else {
@@ -173,7 +173,7 @@ pub fn edit(
             if let Some(s) = st.sessions.get_mut(&id) {
                 s.opts.folders.retain(|f| f.name != folder.name);
             }
-            shared.persist(&st);
+            shared.persist(&mut st);
         }
         return Err(e);
     }

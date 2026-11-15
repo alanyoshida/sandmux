@@ -276,7 +276,7 @@ pub fn edit(shared: &Shared, id: u32, action: &str, value: &str) -> Result<Optio
                         }
                     }
                 }
-                shared.persist(&st);
+                shared.persist(&mut st);
                 return Ok(Some(trf!(
                     "os MCPs valem no próximo lançamento da sessão {id} (`sandmux restart {id}` ou Ctrl+b r)",
                     "the MCPs take effect on the next launch of session {id} (`sandmux restart {id}` or Ctrl+b r)"
@@ -301,7 +301,7 @@ pub fn edit(shared: &Shared, id: u32, action: &str, value: &str) -> Result<Optio
             }
         }
         let live = s.live.is_some();
-        shared.persist(&st);
+        shared.persist(&mut st);
         live
     };
     if !live {

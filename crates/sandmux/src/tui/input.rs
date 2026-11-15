@@ -254,6 +254,19 @@ impl Parser {
                     send.extend_from_slice(&t.bytes);
                     continue;
                 }
+                // As setas depois do prefixo movem o foco entre os painéis.
+                let arrow = match t.bytes.as_slice() {
+                    b"\x1b[A" | b"\x1bOA" => Some("pane-up"),
+                    b"\x1b[B" | b"\x1bOB" => Some("pane-down"),
+                    b"\x1b[C" | b"\x1bOC" => Some("pane-right"),
+                    b"\x1b[D" | b"\x1bOD" => Some("pane-left"),
+                    _ => None,
+                };
+                if let Some(a) = arrow {
+                    flush(&mut send, &mut out);
+                    out.push(Input::Action(a.into()));
+                    continue;
+                }
                 if let Some(c) = t.plain_char() {
                     flush(&mut send, &mut out);
                     if let Some(d) = c.to_digit(10) {

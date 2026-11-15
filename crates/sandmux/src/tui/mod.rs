@@ -34,6 +34,7 @@ use sandmux_proto::{
 
 use input::{Input, Key, Parser};
 use modes::Mouse;
+use sandmux_proto::pane::{Dir, Pane, Rect as PRect, Sep, Toward};
 use sandmux_spec::{tr, trf};
 
 /// Ações da ajuda, na ordem, com a descrição em português e em inglês.
@@ -42,6 +43,23 @@ pub const HELP: &[(&str, &str, &str)] = &[
     ("next", "próxima aba", "next tab"),
     ("prev", "aba anterior", "previous tab"),
     ("list", "lista de abas", "tab list"),
+    (
+        "split-side",
+        "dividir o painel lado a lado",
+        "split the pane side by side",
+    ),
+    (
+        "split-stack",
+        "dividir o painel em cima e embaixo",
+        "split the pane top and bottom",
+    ),
+    (
+        "zoom",
+        "ampliar o painel ou voltar ao layout",
+        "zoom the pane or go back to the layout",
+    ),
+    ("pane-grow", "aumentar o painel", "grow the pane"),
+    ("pane-shrink", "diminuir o painel", "shrink the pane"),
     ("group-prev", "grupo de abas anterior", "previous tab group"),
     ("group-next", "próximo grupo de abas", "next tab group"),
     (
@@ -354,6 +372,12 @@ pub struct App {
     pub group: String,
     /// Os grupos, com o número de abas, do último `sync` (mais o atual).
     pub groups: Vec<(String, usize)>,
+    /// Layouts de painéis das abas do grupo (protocolo 32).
+    pub layouts: Vec<Pane>,
+    /// O painel ativo ampliado para a aba inteira.
+    pub zoom: bool,
+    /// Divisão pedida, esperando a sessão nova: o painel e a direção.
+    pending_split: Option<(u32, Dir)>,
     pub active: usize,
     pub modal: Option<Modal>,
     pub sel: Option<Sel>,
@@ -629,8 +653,8 @@ impl App {
     }
 
     fn sync(&mut self) {
-        let sessions = match self.call(&Msg::List) {
-            Ok(Msg::Sessions { sessions }) => sessions,
+        let (sessions, layouts) = match self.call(&Msg::List) {
+            Ok(Msg::Sessions { sessions, layouts }) => (sessions, layouts),
             _ => return,
         };
         let mut groups: std::collections::BTreeMap<String, usize> =
@@ -645,6 +669,18 @@ impl App {
             .into_iter()
             .filter(|s| s.group == self.group)
             .collect();
+        // Só os layouts com todas as sessões no grupo mostrado.
+        let layouts: Vec<Pane> = layouts
+            .into_iter()
+            .filter(|l| {
+                l.leaves()
+                    .iter()
+                    .all(|i| sessions.iter().any(|s| s.id == *i))
+            })
+            .collect();
+        let relayout = layouts != self.layouts;
+        self.layouts = layouts;
+        let count = self.tabs.len();
         let active_id = self.tabs.get(self.active).map(|t| t.id);
         self.tabs.retain(|t| sessions.iter().any(|s| s.id == t.id));
         for s in &sessions {
@@ -679,6 +715,169 @@ impl App {
         self.active = active_id
             .and_then(|id| self.tabs.iter().position(|t| t.id == id))
             .unwrap_or(self.active.min(self.tabs.len().saturating_sub(1)));
+        if self.zoom
+            && self
+                .tabs
+                .get(self.active)
+                .is_none_or(|t| self.layout_of(t.id).is_none())
+        {
+            self.zoom = false;
+        }
+        if relayout || self.tabs.len() != count {
+            self.resize_all();
+        }
+    }
+
+    /// O layout da aba do painel `id`, quando ela tem painéis.
+    pub fn layout_of(&self, id: u32) -> Option<&Pane> {
+        self.layouts.iter().find(|l| l.contains(id))
+    }
+
+    fn index_of(&self, id: u32) -> Option<usize> {
+        self.tabs.iter().position(|t| t.id == id)
+    }
+
+    /// As abas da barra: o índice da primeira sessão de cada uma e quantos
+    /// painéis a mais ela tem.
+    pub fn bar_entries(&self) -> Vec<(usize, usize)> {
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| match self.layout_of(t.id) {
+                None => Some((i, 0)),
+                Some(l) if l.first() == t.id => Some((i, l.leaves().len() - 1)),
+                Some(_) => None,
+            })
+            .collect()
+    }
+
+    /// O índice da primeira sessão da aba do painel ativo.
+    pub fn active_entry(&self) -> usize {
+        let Some(t) = self.tabs.get(self.active) else {
+            return self.active;
+        };
+        self.layout_of(t.id)
+            .and_then(|l| self.index_of(l.first()))
+            .unwrap_or(self.active)
+    }
+
+    fn area_rect(&self) -> PRect {
+        PRect {
+            x: 0,
+            y: 0,
+            w: self.size.cols,
+            h: self.size.rows,
+        }
+    }
+
+    /// Os painéis visíveis da aba ativa (índice e retângulo na área) e os
+    /// separadores.
+    pub fn visible_panes(&self) -> (Vec<(usize, PRect)>, Vec<Sep>) {
+        let full = self.area_rect();
+        let Some(t) = self.tabs.get(self.active) else {
+            return (Vec::new(), Vec::new());
+        };
+        match self.layout_of(t.id) {
+            Some(l) if !self.zoom => {
+                let (rects, seps) = l.rects(full);
+                (
+                    rects
+                        .into_iter()
+                        .filter_map(|(id, r)| self.index_of(id).map(|i| (i, r)))
+                        .collect(),
+                    seps,
+                )
+            }
+            _ => (vec![(self.active, full)], Vec::new()),
+        }
+    }
+
+    /// Vai à aba da posição `pos` da barra.
+    fn goto_entry(&mut self, pos: usize) {
+        if let Some(&(i, _)) = self.bar_entries().get(pos) {
+            self.leave_zoom();
+            self.set_active(i);
+        }
+    }
+
+    /// A aba seguinte (`1`) ou a anterior (`-1`) da barra.
+    fn step_entry(&mut self, by: isize) {
+        let e = self.bar_entries();
+        if e.is_empty() {
+            return;
+        }
+        let act = self.active_entry();
+        let p = e.iter().position(|(i, _)| *i == act).unwrap_or(0) as isize;
+        let (i, _) = e[(p + by).rem_euclid(e.len() as isize) as usize];
+        self.leave_zoom();
+        self.set_active(i);
+    }
+
+    fn leave_zoom(&mut self) {
+        if self.zoom {
+            self.zoom = false;
+            self.resize_all();
+        }
+    }
+
+    /// Grava o layout de uma aba no daemon e o aplica.
+    fn set_layout(&mut self, pane: Pane) {
+        match self.call(&Msg::SetLayout { pane: pane.clone() }) {
+            Ok(_) => {
+                let leaves = pane.leaves();
+                self.layouts
+                    .retain(|l| !l.leaves().iter().any(|i| leaves.contains(i)));
+                if leaves.len() > 1 {
+                    self.layouts.push(pane);
+                }
+                self.resize_all();
+            }
+            Err(e) => self.say(trf!("painéis: {e:#}", "panes: {e:#}")),
+        }
+    }
+
+    /// Começa uma divisão do painel ativo: o modal de nova aba, com a pasta
+    /// dele.
+    fn split(&mut self, dir: Dir) {
+        let Some(t) = self.tabs.get(self.active) else {
+            return;
+        };
+        let (id, wd) = (t.id, t.workdir.clone());
+        self.pending_split = Some((id, dir));
+        self.open_new();
+        if let Some(Modal::New(n)) = self.modal.as_mut() {
+            n.workdir = wd.display().to_string();
+        }
+    }
+
+    /// O foco no painel vizinho, na direção dada.
+    fn focus_pane(&mut self, toward: Toward) {
+        let Some(t) = self.tabs.get(self.active) else {
+            return;
+        };
+        let id = t.id;
+        let area = self.area_rect();
+        let next = self
+            .layout_of(id)
+            .and_then(|l| l.neighbor(id, toward, area))
+            .and_then(|n| self.index_of(n));
+        if let Some(i) = next {
+            self.leave_zoom();
+            self.set_active(i);
+        }
+    }
+
+    /// Aumenta ou diminui o painel ativo.
+    fn resize_pane(&mut self, delta: i16) {
+        let Some(t) = self.tabs.get(self.active) else {
+            return;
+        };
+        let id = t.id;
+        if let Some(mut l) = self.layout_of(id).cloned()
+            && l.resize(id, delta)
+        {
+            self.set_layout(l);
+        }
     }
 
     /// Copia para o terminal do usuário (OSC 52) e para o clipboard do
@@ -869,13 +1068,36 @@ impl App {
 
     fn resize_all(&mut self) {
         self.size = area_size(self.panel);
+        // Cada sessão no tamanho do seu painel; ampliada, a área inteira.
+        let full = self.area_rect();
+        let mut sizes: std::collections::HashMap<u32, Size> = std::collections::HashMap::new();
+        for l in &self.layouts {
+            for (id, r) in l.rects(full).0 {
+                sizes.insert(
+                    id,
+                    Size {
+                        cols: r.w.max(1),
+                        rows: r.h.max(1),
+                    },
+                );
+            }
+        }
+        if self.zoom
+            && let Some(t) = self.tabs.get(self.active)
+        {
+            sizes.insert(t.id, self.size);
+        }
         for t in &mut self.tabs {
-            t.parser.screen_mut().set_size(
-                std::num::NonZeroU16::new(self.size.rows.max(1)).unwrap(),
-                std::num::NonZeroU16::new(self.size.cols.max(1)).unwrap(),
-            );
+            let size = sizes.get(&t.id).copied().unwrap_or(self.size);
+            let (rows, cols) = t.parser.screen().size();
+            if (rows.get(), cols.get()) != (size.rows, size.cols) {
+                t.parser.screen_mut().set_size(
+                    std::num::NonZeroU16::new(size.rows.max(1)).unwrap(),
+                    std::num::NonZeroU16::new(size.cols.max(1)).unwrap(),
+                );
+            }
             if let Some((_, s)) = t.conn.as_mut() {
-                let _ = write_control(s, &Msg::Resize { size: self.size });
+                let _ = write_control(s, &Msg::Resize { size });
             }
         }
     }
@@ -946,10 +1168,31 @@ impl App {
                     .unwrap_or(0);
                 self.modal = Some(Modal::Groups(GroupsModal { sel, edit: None }));
             }
-            "next" if !self.tabs.is_empty() => self.set_active((self.active + 1) % self.tabs.len()),
-            "prev" if !self.tabs.is_empty() => {
-                self.set_active((self.active + self.tabs.len() - 1) % self.tabs.len())
+            "next" => self.step_entry(1),
+            "prev" => self.step_entry(-1),
+            "split-side" => self.split(Dir::Side),
+            "split-stack" => self.split(Dir::Stack),
+            "zoom" => {
+                if self
+                    .tabs
+                    .get(self.active)
+                    .is_some_and(|t| self.layout_of(t.id).is_some())
+                {
+                    self.zoom = !self.zoom;
+                    self.resize_all();
+                } else {
+                    self.say(tr!(
+                        "ampliar: a aba não tem painéis",
+                        "zoom: the tab has no panes"
+                    ));
+                }
             }
+            "pane-grow" => self.resize_pane(5),
+            "pane-shrink" => self.resize_pane(-5),
+            "pane-left" => self.focus_pane(Toward::Left),
+            "pane-right" => self.focus_pane(Toward::Right),
+            "pane-up" => self.focus_pane(Toward::Up),
+            "pane-down" => self.focus_pane(Toward::Down),
             "list" => self.modal = Some(Modal::List(self.active)),
             "rename" if !self.tabs.is_empty() => {
                 self.modal = Some(Modal::Rename(self.tabs[self.active].name.clone()))
@@ -1359,6 +1602,19 @@ impl App {
         let i = self.tabs.iter().position(|t| t.id == id).unwrap_or(0);
         self.bind(i, s);
         self.set_active(i);
+        // Uma divisão pedida: a sessão nova ocupa a parte nova do painel.
+        if let Some((target, dir)) = self.pending_split.take()
+            && self.index_of(target).is_some()
+        {
+            let mut l = self
+                .layout_of(target)
+                .cloned()
+                .unwrap_or(Pane::leaf(target));
+            if l.split(target, dir, id) {
+                self.zoom = false;
+                self.set_layout(l);
+            }
+        }
         if let Some(w) = warnings.first() {
             self.say(trf!("aviso: {w}", "warning: {w}"));
         }
@@ -2048,6 +2304,20 @@ impl App {
                             return;
                         };
                         let id = t.id;
+                        // Uma aba com painéis vai inteira.
+                        let others: Vec<u32> = self
+                            .layout_of(id)
+                            .map(|l| l.leaves())
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|i| *i != id)
+                            .collect();
+                        for o in others {
+                            let _ = self.call(&Msg::SetGroup {
+                                id: o,
+                                group: g.clone(),
+                            });
+                        }
                         self.modal = None;
                         match self.call(&Msg::SetGroup {
                             id,
@@ -2373,6 +2643,26 @@ impl App {
             return;
         }
         let dy = self.area_dy;
+        // Painéis: um clique em outro painel só põe o foco nele; dentro do
+        // painel em foco, o evento é deslocado para a origem dele.
+        let mut m = m;
+        let (panes, _) = self.visible_panes();
+        if panes.len() > 1 {
+            let (x, y) = (m.x.saturating_sub(1), m.y.saturating_sub(1 + dy));
+            match panes.iter().find(|(_, r)| r.contains(x, y)) {
+                Some(&(i, _)) if i != self.active => {
+                    if !m.release && !m.is_motion() && !m.is_wheel() {
+                        self.set_active(i);
+                    }
+                    return;
+                }
+                Some(&(_, r)) => {
+                    m.x -= r.x;
+                    m.y -= r.y;
+                }
+                None => return,
+            }
+        }
         let Some(t) = self.tabs.get_mut(self.active) else {
             return;
         };
@@ -2438,7 +2728,7 @@ impl App {
                 Input::Action(a) => self.action(&a),
                 Input::Goto(d) => {
                     let i = if d == 0 { 9 } else { d - 1 };
-                    self.set_active(i);
+                    self.goto_entry(i);
                 }
                 Input::Mouse(m) => self.mouse(m),
                 Input::Focus(f) => self.on_focus(f),
@@ -2538,6 +2828,9 @@ pub fn run(group: Option<String>) -> Result<i32> {
         tabs: Vec::new(),
         group: sandmux_proto::msg::main_group(),
         groups: Vec::new(),
+        layouts: Vec::new(),
+        zoom: false,
+        pending_split: None,
         active: 0,
         modal: None,
         sel: None,
@@ -2578,7 +2871,7 @@ pub fn run(group: Option<String>) -> Result<i32> {
     app.group = match group {
         Some(g) => g,
         None => match app.call(&Msg::List) {
-            Ok(Msg::Sessions { sessions })
+            Ok(Msg::Sessions { sessions, .. })
                 if !sessions
                     .iter()
                     .any(|s| s.group == sandmux_proto::msg::MAIN_GROUP) =>
@@ -2661,6 +2954,14 @@ pub fn run(group: Option<String>) -> Result<i32> {
         }
         app.prompt_ended();
         app.report_focus();
+        if app.pending_split.is_some()
+            && !matches!(
+                app.modal,
+                Some(Modal::New(_) | Modal::Chat(_) | Modal::Unlock(..))
+            )
+        {
+            app.pending_split = None;
+        }
         parser.modal = app.modal.is_some();
         if app.panel && app.panel_data.is_none() && !app.tabs.is_empty() {
             app.refresh_panel();

@@ -147,7 +147,7 @@ pub fn fetch(
     id: u32,
 ) -> Result<(LaunchOptions, Vec<NetLine>), String> {
     let opts = match call(&Msg::List) {
-        Ok(Msg::Sessions { sessions }) => sessions
+        Ok(Msg::Sessions { sessions, .. }) => sessions
             .into_iter()
             .find(|s| s.id == id)
             .map(|s| s.opts)
