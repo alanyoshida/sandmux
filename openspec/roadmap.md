@@ -422,6 +422,8 @@ Release `v0.1.7` (2026-11-15), com o change 49. Decisão do usuário (2026-11-15
 
 Release `v0.1.8` (2026-11-15), com o change 50. Decisão do usuário (2026-11-15): publicar logo depois do daemon no boot.
 
+Release `v0.1.9` (2026-11-15), com o change 51. Decisão do usuário (2026-11-15): publicar logo depois dos modais do assistente.
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
