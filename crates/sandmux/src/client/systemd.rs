@@ -27,6 +27,12 @@ pub fn unit_path() -> PathBuf {
     unit_dir().join(UNIT)
 }
 
+/// A unidade está habilitada, pelo link em `default.target.wants` (sem
+/// perguntar ao systemd).
+pub fn enabled_link() -> bool {
+    unit_dir().join("default.target.wants").join(UNIT).exists()
+}
+
 /// `XDG_DATA_HOME` e `XDG_CONFIG_HOME` do cliente, quando definidos.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Homes<'a> {

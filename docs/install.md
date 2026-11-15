@@ -41,7 +41,7 @@ O tarball também traz o `install.sh`: dentro da pasta extraída, `sh install.sh
    - usa `sudo` depois de perguntar.
 
    Com `--no-sudo`, sem `sudo` ou sem terminal, ele mostra os dois comandos para rodar como root. O perfil vale para um caminho: se os binários mudarem de lugar, rode `sandmux setup` de novo.
-2. **Daemon.** Instala e habilita a unidade systemd de usuário `sandmuxd.service`, que sobe o daemon no login ([sessions.md](sessions.md)). `--no-daemon` pula esse passo, e como root ele nunca roda, porque o daemon é por usuário.
+2. **Daemon.** Instala e habilita a unidade systemd de usuário `sandmuxd.service`, que sobe o daemon no login ([sessions.md](sessions.md)). Para ele subir já no boot, sem login, rode `sandmux daemon boot on` ([sessions.md](sessions.md#início-no-boot)). `--no-daemon` pula esse passo, e como root ele nunca roda, porque o daemon é por usuário.
 3. **Diagnóstico.** Termina com o `sandmux doctor`.
 
 ## Pacotes

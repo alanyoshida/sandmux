@@ -14,7 +14,7 @@ pub use msg::{LaunchOptions, Msg, SessionInfo, SessionState, Size};
 
 /// Versão do protocolo. Muda a cada alteração incompatível; cliente e daemon
 /// exigem igualdade exata.
-pub const PROTOCOL: u32 = 30;
+pub const PROTOCOL: u32 = 31;
 
 /// Erros de leitura e escrita do protocolo.
 #[derive(Debug, thiserror::Error)]

@@ -403,7 +403,17 @@ fn run(history: usize) -> Result<()> {
         });
     }
 
-    restore(&shared);
+    let logged_in = crate::login::logged_in();
+    if !logged_in {
+        eprintln!(
+            "{}",
+            tr!(
+                "sandmuxd: subiu sem login (no boot); as sessões voltam no primeiro login",
+                "sandmuxd: started without a login (at boot); the sessions come back at the first login"
+            )
+        );
+    }
+    restore(&shared, logged_in);
     net::start_retention(shared.clone());
     // Slices do Docker que ficaram de um daemon derrubado, já sem processos.
     let _ = std::thread::Builder::new()
@@ -415,15 +425,21 @@ fn run(history: usize) -> Result<()> {
     // Antes de atender: o primeiro cliente já encontra o cofre aberto. Com
     // o keyring desligado, não consulta nada; ligado, espera no máximo o
     // limite do keyring.
-    keyring::try_unlock(&shared, true);
-    // Abas que voltaram esperando o cofre: avisa se ele continua trancado
-    // depois de alguns segundos.
-    {
+    if logged_in {
+        keyring::try_unlock(&shared, true);
+        // Abas que voltaram esperando o cofre: avisa se ele continua
+        // trancado depois de alguns segundos.
         let shared = shared.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(5));
             shared.notify.send(notify::Event::WaitingVault);
         });
+    } else {
+        // Sem login, o keyring está trancado: espera o login.
+        let shared = shared.clone();
+        let _ = std::thread::Builder::new()
+            .name("espera-login".into())
+            .spawn(move || wait_login(shared));
     }
 
     // SAFETY: getuid não falha.
@@ -482,7 +498,9 @@ fn blocked_restore(shared: &Shared, opts: &LaunchOptions, id: u32) -> Option<Blo
     }
 }
 
-fn restore(shared: &Arc<Shared>) {
+/// Restaura a lista guardada. Sem login (`logged_in` falso), nenhuma sessão
+/// é relançada: as que voltariam ficam aguardando o login.
+fn restore(shared: &Arc<Shared>, logged_in: bool) {
     let saved = match store::load(&shared.sessions_file()) {
         Ok(s) => s,
         Err(e) => {
@@ -502,6 +520,10 @@ fn restore(shared: &Arc<Shared>) {
         st.next_id = saved.next_id.max(1);
         for s in saved.sessions {
             let mut state = s.state.clone();
+            // Gravada esperando o login: vale como viva.
+            if state == SessionState::AguardandoLogin {
+                state = SessionState::Viva;
+            }
             // Um shell de dentro não volta: o sandbox da aba alvo é outro.
             if s.opts.harness == crate::launch::ENTER && state == SessionState::Viva {
                 state = SessionState::Parada {
@@ -543,6 +565,11 @@ fn restore(shared: &Arc<Shared>) {
                     None => relaunch.push(s.id),
                 }
             }
+            // Sem login, nada volta: nem as que esperariam o cofre.
+            if !logged_in && matches!(state, SessionState::Viva | SessionState::AguardandoCofre) {
+                state = SessionState::AguardandoLogin;
+                relaunch.retain(|i| *i != s.id);
+            }
             let mut sess = Session::new(s.id, s.name, s.opts, state, shared.history, None);
             sess.group = s.group;
             sess.pass_env = s.pass_env;
@@ -553,6 +580,11 @@ fn restore(shared: &Arc<Shared>) {
         }
         shared.persist(&st);
     }
+    relaunch_all(shared, relaunch);
+}
+
+/// Relança as sessões; as que falham ficam paradas com o motivo.
+fn relaunch_all(shared: &Arc<Shared>, relaunch: Vec<u32>) {
     let vars = shared.default_vars();
     let mut by_id: HashMap<u32, String> = HashMap::new();
     for id in relaunch {
@@ -578,6 +610,80 @@ fn restore(shared: &Arc<Shared>) {
         }
         shared.persist(&st);
     }
+}
+
+/// No primeiro login: as sessões que esperavam o login voltam como na
+/// restauração (vivas, aguardando o cofre ou paradas com o motivo).
+fn resume_after_login(shared: &Arc<Shared>) {
+    let waiting: Vec<(u32, sandmux_proto::LaunchOptions, bool)> = shared
+        .lock()
+        .sessions
+        .values()
+        .filter(|s| s.state == SessionState::AguardandoLogin)
+        .map(|s| (s.id, s.opts.clone(), s.vault_env))
+        .collect();
+    if waiting.is_empty() {
+        return;
+    }
+    let vault_exists = shared
+        .vault
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .exists();
+    let mut decided = Vec::new();
+    for (id, opts, vault_env) in waiting {
+        let state = if (opts.gateway
+            || session::is_chat(&opts)
+            || session::needs_vault_for_models(shared, &opts))
+            && vault_exists
+        {
+            SessionState::AguardandoCofre
+        } else {
+            match blocked_restore(shared, &opts, id) {
+                Some(Blocked::PassEnv(_)) if vault_env => SessionState::AguardandoCofre,
+                Some(Blocked::PassEnv(motivo) | Blocked::Other(motivo)) => {
+                    SessionState::Parada { motivo }
+                }
+                None => SessionState::Viva,
+            }
+        };
+        decided.push((id, state));
+    }
+    let mut relaunch = Vec::new();
+    {
+        let mut st = shared.lock();
+        for (id, state) in decided {
+            if let Some(s) = st.sessions.get_mut(&id) {
+                if state == SessionState::Viva {
+                    relaunch.push(id);
+                } else {
+                    s.state = state;
+                }
+            }
+        }
+        shared.persist(&st);
+    }
+    eprintln!(
+        "{}",
+        trf!(
+            "sandmuxd: login do usuário; relançando {} sessão(ões)",
+            "sandmuxd: user login; relaunching {} session(s)",
+            relaunch.len()
+        )
+    );
+    relaunch_all(shared, relaunch);
+}
+
+/// Espera o primeiro login (o daemon subiu no boot) e então relança as
+/// sessões, tenta o keyring e avisa o cofre trancado.
+fn wait_login(shared: Arc<Shared>) {
+    while !crate::login::logged_in() {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    resume_after_login(&shared);
+    keyring::try_unlock(&shared, true);
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    shared.notify.send(notify::Event::WaitingVault);
 }
 
 #[cfg(test)]

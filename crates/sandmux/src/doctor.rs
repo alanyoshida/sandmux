@@ -680,6 +680,14 @@ fn daemon_section() {
     use sandmux_proto::Msg;
     println!("{}", tr!("\nDaemon de sessões:", "\nSession daemon:"));
     println!("  socket: {}", sandmux::paths::socket_path().display());
+    println!(
+        "{}",
+        trf!(
+            "  início no boot: {}",
+            "  start at boot: {}",
+            crate::sessions::boot_text()
+        )
+    );
     match Conn::connect() {
         Ok(Some(mut c)) => match c.call(&Msg::Status) {
             Ok(Msg::StatusInfo {

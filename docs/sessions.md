@@ -37,6 +37,7 @@ O `sandmuxd` é o processo de cada usuário que segura as sessões. Uma sessão 
 | `sandmux daemon stop` | Encerra os harnesses e para o daemon. As sessões vivas voltam na próxima subida |
 | `sandmux daemon restart` | Para e sobe com o binário instalado; use depois de atualizar o sandmux |
 | `sandmux daemon disable` | Para o daemon e remove a unidade systemd |
+| `sandmux daemon boot [on\|off]` | Liga ou desliga o [início no boot](#início-no-boot), sem login; sem argumento, mostra o estado |
 
 Estados de uma sessão: **viva**, **encerrada** (com o código de saída do harness e, quando houve morte por falta de memória, a nota "memória esgotada"), **parada** (com o motivo: falta de `--pass-env` depois de uma restauração, pasta de trabalho apagada, falha ao relançar) **aguardando cofre** (restaurada com os valores de `--pass-env` guardados no [cofre](vault.md), ou a sessão do gateway do hermes ou uma aba de chat com o cofre criado; sobe quando o cofre é desbloqueado) e **reiniciando em N s** (o [gateway do hermes](hermes.md) terminou e volta depois da espera).
 
@@ -113,6 +114,22 @@ Quando um comando precisa do daemon e ele não responde:
 1. Com systemd de usuário, o cliente grava `~/.config/systemd/user/sandmuxd.service` (com `ExecStart` apontando para o `sandmuxd` instalado e `XDG_DATA_HOME`, quando definido), habilita no login e inicia, avisando na primeira vez. Se o binário mudar de lugar, a unidade é regravada.
 2. Sem systemd, ou com `SANDMUX_DAEMON_START=direct`, o cliente sobe o `sandmuxd` como processo próprio, desligado do terminal, com o log em `$XDG_STATE_HOME/sandmux/sandmuxd.log` (ou `~/.local/state/sandmux/sandmuxd.log`).
 
+### Início no boot
+
+Com o linger do systemd ligado para o seu usuário, o gerenciador de serviços do usuário sobe no boot, e o daemon com ele, sem login:
+
+- **Ligar:** `sandmux daemon boot on` roda `loginctl enable-linger` (sem sudo) e habilita a unidade. Em algumas distros, o polkit pede autorização. Se o `loginctl` recusar, rode `sudo loginctl enable-linger $USER` por conta própria.
+- **Desligar:** `sandmux daemon boot off` roda `loginctl disable-linger`. Os outros serviços systemd do seu usuário também deixam de subir no boot.
+- **Estado:** `sandmux daemon boot`, `sandmux daemon status` e `sandmux doctor` dizem se o daemon sobe no boot.
+
+No boot, sem ninguém logado, nenhuma aba volta:
+
+- As abas que voltariam ficam **aguardando o login** no `sandmux ls`, e `(login)` na TUI. Esse estado fica guardado: um reinício do daemon antes do login não as perde.
+- O daemon não consulta o [keyring](vault.md#keyring), que está trancado até o login.
+- No primeiro login (por tela ou por SSH), as abas voltam sozinhas. Em seguida, o daemon tenta o keyring e avisa no desktop as abas que continuam esperando o cofre.
+
+Com alguém logado quando o daemon sobe, tudo segue como antes. O daemon sabe do login pelo logind (`/run/systemd/users/<uid>`); sem o logind, ele conta como logado.
+
 ## Socket e acesso
 
 - Socket: `$XDG_RUNTIME_DIR/sandmux/sandmuxd.sock`, ou `/tmp/sandmux-<uid>/sandmuxd.sock` sem `XDG_RUNTIME_DIR`. A pasta tem modo 700; uma pasta que já existe com outro dono, outro modo ou como link simbólico é recusada.
@@ -129,7 +146,7 @@ Socket Unix de fluxo. Cada quadro tem 4 bytes de tamanho (big-endian, só o cont
 | 0 | Mensagem de controle em JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Bytes de terminal: entrada do cliente ou saída da sessão |
 
-A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados, a pasta de configuração e o idioma do cliente (o daemon responde nesse idioma). Esta versão usa o protocolo 30. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
+A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados, a pasta de configuração e o idioma do cliente (o daemon responde nesse idioma). Esta versão usa o protocolo 31. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
 
 O cliente envia ao daemon, junto com o pedido de sessão, as opções dadas no `run`, o perfil nomeado, a pasta atual, as variáveis da lista segura, o `SHELL` e os valores de `pass-env` da política efetiva. O daemon resolve as camadas de configuração ([docs/config.md](config.md)) e compõe a especificação de lançamento com a mesma função do `run` direto.
 
@@ -168,5 +185,6 @@ Quando o daemon termina, por parada, reinício ou falha, nenhum processo de sand
 | `SANDMUX_START_MODE` | Como o daemon diz ter sido iniciado (`systemd`, `direct`); preenchida pelo cliente e pela unidade |
 | `SANDMUX_PROTOCOL_OVERRIDE` | O daemon anuncia outro número de protocolo; só serve para testar a recusa |
 | `SANDMUX_SECRET_SCAN_SECS` | Intervalo, em segundos, da varredura periódica de chaves reais nos HOMEs sintéticos (60 por padrão) |
+| `SANDMUX_LOGIND_USER`, `SANDMUX_LINGER_DIR`, `SANDMUX_LOGINCTL` | O arquivo do estado do usuário no logind, a pasta do linger e o comando `loginctl`, no lugar dos do sistema; os testes simulam o boot e o login |
 | `SANDMUX_NOTIFY_BUS` | Endereço do barramento para as notificações do desktop, no lugar do barramento de sessão; os testes apontam para um barramento próprio |
 | `SANDMUX_SECRET_INOTIFY=0` | O vigia de chaves reais não usa inotify, só a varredura periódica; só serve para testá-la |

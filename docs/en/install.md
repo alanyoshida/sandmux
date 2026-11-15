@@ -43,7 +43,7 @@ It is the configuration step for every channel: script, packages, Homebrew and `
    - uses `sudo` after asking.
 
    With `--no-sudo`, without `sudo` or without a terminal, it shows the two commands to run as root. The profile applies to one path: if the binaries move, run `sandmux setup` again.
-2. **Daemon.** Installs and enables the systemd user unit `sandmuxd.service`, which starts the daemon at login ([sessions.md](sessions.md)). `--no-daemon` skips this step, and as root it never runs, because the daemon is per user.
+2. **Daemon.** Installs and enables the systemd user unit `sandmuxd.service`, which starts the daemon at login ([sessions.md](sessions.md)). To have it start at boot, without a login, run `sandmux daemon boot on` ([sessions.md](sessions.md#start-at-boot)). `--no-daemon` skips this step, and as root it never runs, because the daemon is per user.
 3. **Diagnostics.** Ends with `sandmux doctor`.
 
 ## Packages
