@@ -20,6 +20,7 @@ pub mod discover;
 pub mod docker;
 pub mod keyring;
 pub mod launch;
+pub mod login;
 pub mod paths;
 pub mod secretdomains;
 pub mod sshagent;

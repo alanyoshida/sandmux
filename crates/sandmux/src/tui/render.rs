@@ -277,6 +277,7 @@ fn tab_marks(t: &super::Tab) -> String {
         SessionState::Encerrada { .. } => " ✕",
         SessionState::Parada { .. } => " ‖",
         SessionState::AguardandoCofre => tr!(" (cofre)", " (vault)"),
+        SessionState::AguardandoLogin => " (login)",
         SessionState::Reiniciando { .. } => " ↻",
     };
     let net = match (t.blocked, t.new_domain) {
@@ -581,6 +582,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 tr!(
                     " aguardando cofre: a sessão sobe quando o cofre for desbloqueado (sandmux vault unlock) ",
                     " waiting for vault: the session starts once the vault is unlocked (sandmux vault unlock) "
+                )
+                .to_string(),
+            ),
+            SessionState::AguardandoLogin => Some(
+                tr!(
+                    " aguardando o login: o daemon subiu no boot, e a sessão volta no primeiro login ",
+                    " waiting for login: the daemon started at boot, and the session comes back at the first login "
                 )
                 .to_string(),
             ),

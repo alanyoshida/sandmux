@@ -198,7 +198,7 @@ fn start_direct() -> Result<()> {
 }
 
 /// Como o daemon deve subir: `direct` ou `systemd`.
-fn start_mode() -> &'static str {
+pub fn start_mode() -> &'static str {
     if std::env::var("SANDMUX_DAEMON_START").as_deref() == Ok("direct") || !systemd::available() {
         "direct"
     } else {

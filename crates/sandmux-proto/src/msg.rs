@@ -146,6 +146,9 @@ pub enum SessionState {
     Reiniciando {
         segundos: u64,
     },
+    /// O daemon subiu no boot, sem ninguém logado: a sessão volta no
+    /// primeiro login (protocolo 31).
+    AguardandoLogin,
 }
 
 impl std::fmt::Display for SessionState {
@@ -165,6 +168,9 @@ impl std::fmt::Display for SessionState {
                 "reiniciando em {segundos} s",
                 "restarting in {segundos} s"
             )),
+            SessionState::AguardandoLogin => {
+                f.write_str(tr!("aguardando o login", "waiting for login"))
+            }
         }
     }
 }

@@ -956,6 +956,93 @@ pub fn restart(id: u32) -> Result<i32> {
     Ok(0)
 }
 
+/// O daemon sobe no boot: o linger do usuário ligado.
+pub fn boot_text() -> String {
+    let user = sandmux_policy::Host::detect()
+        .map(|h| h.user)
+        .unwrap_or_default();
+    let unit = client::systemd::enabled_link();
+    match (sandmux::login::linger_on(&user), unit) {
+        (true, true) => tr!(
+            "sim (linger ligado; as abas voltam no primeiro login)",
+            "yes (linger on; the tabs come back at the first login)"
+        )
+        .into(),
+        (true, false) => tr!(
+            "não: o linger está ligado, mas a unidade systemd do daemon não está habilitada (`sandmux daemon boot on`)",
+            "no: linger is on, but the daemon's systemd unit is not enabled (`sandmux daemon boot on`)"
+        )
+        .into(),
+        (false, _) => tr!(
+            "não (`sandmux daemon boot on` liga)",
+            "no (`sandmux daemon boot on` turns it on)"
+        )
+        .into(),
+    }
+}
+
+fn run_loginctl(arg: &str) -> Result<()> {
+    let cmd = sandmux::login::loginctl();
+    let out = std::process::Command::new(&cmd)
+        .arg(arg)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| anyhow!("{cmd}: {e}"))?;
+    if !out.status.success() {
+        bail!(trf!(
+            "loginctl {arg} falhou: {}",
+            "loginctl {arg} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// `sandmux daemon boot [on|off]`.
+pub fn daemon_boot(acao: Option<BootCmd>) -> Result<i32> {
+    match acao {
+        None => {}
+        Some(BootCmd::On) => {
+            run_loginctl("enable-linger")?;
+            if client::start_mode() == "systemd" {
+                // Instala e habilita a unidade, como na primeira subida.
+                client::start_daemon()?;
+            }
+            eprintln!(
+                "{}",
+                tr!(
+                    "sandmux: o daemon sobe no boot, sem login; as abas voltam no primeiro login.",
+                    "sandmux: the daemon starts at boot, without a login; the tabs come back at the first login."
+                )
+            );
+        }
+        Some(BootCmd::Off) => {
+            run_loginctl("disable-linger")?;
+            eprintln!(
+                "{}",
+                tr!(
+                    "sandmux: linger desligado; o daemon volta a subir só no login. Outros serviços systemd do seu usuário também deixam de subir no boot.",
+                    "sandmux: linger off; the daemon starts only at login again. Other systemd services of your user also stop starting at boot."
+                )
+            );
+        }
+    }
+    println!(
+        "{}",
+        trf!("Início no boot: {}", "Start at boot: {}", boot_text())
+    );
+    Ok(0)
+}
+
+/// Início do daemon no boot.
+#[derive(clap::Subcommand)]
+pub enum BootCmd {
+    /// Liga o linger do usuário: o daemon sobe no boot, sem login.
+    On,
+    /// Desliga o linger do usuário.
+    Off,
+}
+
 pub fn daemon_status() -> Result<i32> {
     let Some(mut conn) = Conn::connect()? else {
         println!(
@@ -998,6 +1085,10 @@ pub fn daemon_status() -> Result<i32> {
                 trf!("  sessões: {sessions}", "  sessions: {sessions}")
             );
             println!("  socket: {}", socket.display());
+            println!(
+                "{}",
+                trf!("  início no boot: {}", "  start at boot: {}", boot_text())
+            );
             Ok(0)
         }
         m => Err(anyhow!(trf!(

@@ -99,6 +99,9 @@ impl Env {
                 "SANDMUX_NOTIFY_BUS",
                 "unix:path=/nonexistent/sandmux-test-bus",
             )
+            // O login real de quem roda os testes não importa: sem o arquivo
+            // do logind, o usuário conta como logado.
+            .env("SANDMUX_LOGIND_USER", "/nonexistent/sandmux-test-logind")
             // O ambiente é limpo; sem idioma, o sistema seria `C` (inglês).
             .env("LANG", "pt_BR.UTF-8")
             .stdin(Stdio::null());

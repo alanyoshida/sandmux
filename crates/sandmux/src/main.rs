@@ -226,6 +226,12 @@ enum DaemonCmd {
     Restart,
     /// Para o daemon e remove a unidade systemd de usuário.
     Disable,
+    /// Início do daemon no boot, sem login (linger do systemd). Sem
+    /// subcomando, mostra o estado.
+    Boot {
+        #[command(subcommand)]
+        acao: Option<sessions::BootCmd>,
+    },
 }
 
 #[derive(clap::Args)]
@@ -942,6 +948,18 @@ const HELP_EN: &[(&str, &str)] = &[
     ("Apaga um segredo.", "Removes a secret."),
     ("Troca a senha do cofre.", "Changes the vault password."),
     (
+        "Início do daemon no boot, sem login (linger do systemd). Sem subcomando, mostra o estado.",
+        "Daemon start at boot, without a login (systemd linger). Without a subcommand, shows the state.",
+    ),
+    (
+        "Liga o linger do usuário: o daemon sobe no boot, sem login.",
+        "Turns on the user's linger: the daemon starts at boot, without a login.",
+    ),
+    (
+        "Desliga o linger do usuário.",
+        "Turns off the user's linger.",
+    ),
+    (
         "Grupo de abas mostrado (sem ele, o principal).",
         "Tab group shown (without it, the main one).",
     ),
@@ -1035,6 +1053,7 @@ fn dispatch(cmd: Cmd) -> Result<i32> {
             DaemonCmd::Stop => sessions::daemon_stop(),
             DaemonCmd::Restart => sessions::daemon_restart(),
             DaemonCmd::Disable => sessions::daemon_disable(),
+            DaemonCmd::Boot { acao } => sessions::daemon_boot(acao),
         },
         Cmd::Import(a) => cmd_import(a).map(|_| 0),
         Cmd::Update(a) => sessions::update(a.harness, a.yes, a.args),

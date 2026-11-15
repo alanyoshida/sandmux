@@ -39,6 +39,7 @@
 | `sandmux daemon stop` | Ends the harnesses and stops the daemon. Alive sessions come back at the next start |
 | `sandmux daemon restart` | Stops and starts with the installed binary; use it after updating sandmux |
 | `sandmux daemon disable` | Stops the daemon and removes the systemd unit |
+| `sandmux daemon boot [on\|off]` | Turns the [start at boot](#start-at-boot) on or off, without a login; without an argument, shows the state |
 
 States of a session: **alive**, **ended** (with the harness's exit code and, when there was an out-of-memory kill, the note "out of memory"), **stopped** (with the reason: missing `--pass-env` after a restore, work folder deleted, failure to relaunch) **waiting for vault** (restored with the `--pass-env` values stored in the [vault](vault.md), or the hermes gateway session or a chat tab with the vault created; starts when the vault is unlocked) and **restarting in N s** (the [hermes gateway](hermes.md) ended and comes back after the wait).
 
@@ -115,6 +116,22 @@ When a command needs the daemon and it does not answer:
 1. With systemd user, the client writes `~/.config/systemd/user/sandmuxd.service` (with `ExecStart` pointing to the installed `sandmuxd` and `XDG_DATA_HOME`, when set), enables it at login and starts it, warning the first time. If the binary moves, the unit is rewritten.
 2. Without systemd, or with `SANDMUX_DAEMON_START=direct`, the client starts `sandmuxd` as its own process, detached from the terminal, with the log in `$XDG_STATE_HOME/sandmux/sandmuxd.log` (or `~/.local/state/sandmux/sandmuxd.log`).
 
+### Start at boot
+
+With systemd's linger on for your user, the user's service manager starts at boot, and the daemon with it, without a login:
+
+- **Turning it on:** `sandmux daemon boot on` runs `loginctl enable-linger` (without sudo) and enables the unit. On some distros, polkit asks for authorization. If `loginctl` refuses, run `sudo loginctl enable-linger $USER` yourself.
+- **Turning it off:** `sandmux daemon boot off` runs `loginctl disable-linger`. The other systemd services of your user also stop starting at boot.
+- **State:** `sandmux daemon boot`, `sandmux daemon status` and `sandmux doctor` say whether the daemon starts at boot.
+
+At boot, with nobody logged in, no tab comes back:
+
+- The tabs that would come back stay **waiting for login** in `sandmux ls`, and `(login)` in the TUI. This state is saved: a daemon restart before the login does not lose them.
+- The daemon does not query the [keyring](vault.md#keyring), which is locked until the login.
+- At the first login (on screen or over SSH), the tabs come back by themselves. Then the daemon tries the keyring and notifies on the desktop the tabs still waiting for the vault.
+
+With someone logged in when the daemon starts, everything goes as before. The daemon learns about the login from logind (`/run/systemd/users/<uid>`); without logind, it counts as logged in.
+
 ## Socket and access
 
 - Socket: `$XDG_RUNTIME_DIR/sandmux/sandmuxd.sock`, or `/tmp/sandmux-<uid>/sandmuxd.sock` without `XDG_RUNTIME_DIR`. The folder has mode 700; a folder that already exists with another owner, another mode or as a symbolic link is refused.
@@ -131,7 +148,7 @@ Unix stream socket. Each frame has 4 bytes of length (big-endian, content only, 
 | 0 | Control message in JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Terminal bytes: client input or session output |
 
-The first message is the greeting (`hello`), with the protocol number, the version, the data directory, the configuration folder and the language of the client (the daemon answers in that language). This version uses protocol 30. Different numbers end the connection, and the client shows both versions and points to `sandmux daemon restart`. A different data directory or configuration folder is also refused, with both folders in the message.
+The first message is the greeting (`hello`), with the protocol number, the version, the data directory, the configuration folder and the language of the client (the daemon answers in that language). This version uses protocol 31. Different numbers end the connection, and the client shows both versions and points to `sandmux daemon restart`. A different data directory or configuration folder is also refused, with both folders in the message.
 
 Along with the session request, the client sends the daemon the options given to `run`, the named profile, the current folder, the variables of the safe list, `SHELL` and the `pass-env` values of the effective policy. The daemon resolves the configuration layers ([docs/config.md](config.md)) and composes the launch specification with the same function as the direct `run`.
 
@@ -170,5 +187,6 @@ When the daemon ends, by stop, restart or failure, no sandbox process keeps runn
 | `SANDMUX_START_MODE` | How the daemon says it was started (`systemd`, `direct`); filled in by the client and by the unit |
 | `SANDMUX_PROTOCOL_OVERRIDE` | The daemon announces another protocol number; only useful to test the refusal |
 | `SANDMUX_SECRET_SCAN_SECS` | Interval, in seconds, of the periodic scan for real keys in the synthetic HOMEs (60 by default) |
+| `SANDMUX_LOGIND_USER`, `SANDMUX_LINGER_DIR`, `SANDMUX_LOGINCTL` | The user state file in logind, the linger folder and the `loginctl` command, instead of the system ones; the tests simulate the boot and the login |
 | `SANDMUX_NOTIFY_BUS` | Bus address for the desktop notifications, instead of the session bus; the tests point it to a bus of their own |
 | `SANDMUX_SECRET_INOTIFY=0` | The real-key watcher does not use inotify, only the periodic scan; only useful to test it |
