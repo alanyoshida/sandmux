@@ -1,16 +1,17 @@
-sandmux 0.1.13, antes da v1: a pasta atual do shell no modal de comando.
+sandmux 0.1.14, antes da v1: a configuração do shell importada.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Pasta atual no modal de comando:** o modal de comando (Ctrl+b `g`) passa a mandar ao modelo a pasta em que o shell da aba está, e não mais a pasta em que a aba foi aberta. Depois de um `cd src/api`, vai `…/src/api`, e os comandos sugeridos acertam os caminhos relativos.
-  - A linha `pasta` do modal mostra o que vai ao modelo.
-  - Quando a pasta não pode ser lida (a aba parada, por exemplo), vai a pasta de trabalho da aba, como antes.
+- **Configuração do shell no preset `shell`:** o shell confinado pode trazer os seus aliases, funções e o framework do shell, como já acontecia com os harnesses. A primeira execução pergunta; depois, `sandmux import shell`.
+  - Entram só os arquivos do shell em uso: no `bash`, `.bashrc`, `.bash_aliases`, `.profile` e afins, com o oh-my-bash e o bash-it; no `zsh`, `.zshrc` e afins, `.p10k.zsh` e o oh-my-zsh; no `fish`, `.config/fish` (sem o `fish_variables`) e o oh-my-fish.
+  - Os frameworks vêm sem as pastas `.git`, `cache` e `log`. O `starship.toml` e os arquivos de outros programas ficam de fora.
+  - `export GITHUB_TOKEN=...` (e `set -gx` no fish) vira um valor falso; `sandmux vault import` liga o falso ao valor real.
+  - O arquivo importado ganha `[sandmux]` na frente do seu prompt.
+  - Sem terminal, o `shell` começa sem importar, como antes.
 
-Detalhes em [docs/chat.md](https://github.com/alanyoshida/sandmux/blob/main/docs/chat.md#modal-de-comando).
-
-Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 33).
+Se o HOME do `shell` já existe, rode `sandmux import shell --overwrite` para trocar o arquivo mínimo pela sua configuração. Detalhes em [docs/sessions.md](https://github.com/alanyoshida/sandmux/blob/main/docs/sessions.md#configuração-do-shell).
 
 ## Instalar
 
