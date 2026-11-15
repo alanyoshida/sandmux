@@ -133,6 +133,10 @@ pub enum Target {
     /// Relativo ao diretório `dirfd` do processo, com `RESOLVE_BENEATH` ou
     /// `RESOLVE_IN_ROOT` pedidos pelo próprio `openat2`.
     Beneath(i32, Vec<u8>),
+    /// O `uid_map`, `gid_map`, `projid_map` ou `setgroups` do próprio processo, pelo
+    /// `/proc` do host: aberto no user namespace pai do dele
+    /// ([`open_idmap`]), como o kernel exige para gravar o mapeamento.
+    IdMap(Vec<u8>),
     /// Recusado (links mágicos de outros processos).
     Refused,
 }
@@ -271,6 +275,11 @@ pub fn target(
             rest.to_vec()
         })),
         b"map_files" | b"task" => Ok(Target::Refused),
+        b"uid_map" | b"gid_map" | b"projid_map" | b"setgroups" if rest.is_empty() => {
+            let mut v = format!("/proc/{host_pid}").into_bytes();
+            v.extend_from_slice(&tail);
+            Ok(Target::IdMap(v))
+        }
         // O resto do `/proc` do processo: pelo `/proc` do sandbox, com o pid
         // do namespace (o `self` resolveria para o supervisor).
         _ => Ok(match ns_pid() {
@@ -671,9 +680,12 @@ fn open_proc(path: &str) -> io::Result<OwnedFd> {
 
 /// Abre o pedido como o processo abriria, dentro da raiz do sandbox.
 fn open_for(ctx: &Ctx, pid: u32, req: &Request, flags: i32) -> io::Result<OwnedFd> {
+    // O pid no namespace do sandbox, o do `/proc` montado lá dentro: o
+    // segundo do `NSpid` (o primeiro é o do supervisor). Um processo num pid
+    // namespace aninhado (o sandbox do Chrome) tem mais números depois.
     let ns_pid = || {
         status_field(pid, "NSpid:")
-            .and_then(|v| v.split_whitespace().last().and_then(|n| n.parse().ok()))
+            .and_then(|v| v.split_whitespace().nth(1).and_then(|n| n.parse().ok()))
     };
     let t = target(req, pid, ns_pid, |dirfd| {
         let link = if dirfd == libc::AT_FDCWD {
@@ -715,8 +727,123 @@ fn open_for(ctx: &Ctx, pid: u32, req: &Request, flags: i32) -> io::Result<OwnedF
             let dir = open_proc(&link)?;
             open_how(dir.as_fd(), &p, flags, req.mode, req.resolve)
         }
+        Target::IdMap(p) => open_idmap(pid, &p, flags),
         Target::Refused => Err(io::Error::from_raw_os_error(libc::EACCES)),
     }
+}
+
+/// `NS_GET_PARENT`: o user namespace pai, como descritor.
+const NS_GET_PARENT: libc::c_ulong = 0xb702;
+
+/// Abre o mapeamento de ids do processo `pid` (já traduzido para o `/proc`
+/// do host) a partir do user namespace pai do dele.
+///
+/// O kernel só aceita gravar no `uid_map` por um descritor aberto no
+/// namespace do processo ou no pai, e o supervisor está acima dos dois.
+/// Um processo auxiliar, filho do supervisor, entra no namespace pai (o
+/// supervisor é dono da cadeia, e tem as capabilities dela), abre o arquivo e
+/// devolve o descritor. As regras da gravação continuam as do kernel: o
+/// processo só mapeia ids que o namespace pai já tem, como faria sem o
+/// sandmux. Um processo que não criou namespace próprio continua recusado.
+fn open_idmap(pid: u32, path: &[u8], flags: i32) -> io::Result<OwnedFd> {
+    use std::os::unix::fs::MetadataExt;
+    let ns = File::open(format!("/proc/{pid}/ns/user"))?;
+    // SAFETY: ioctl sem argumento num descritor de namespace válido.
+    let raw = unsafe { libc::ioctl(ns.as_raw_fd(), NS_GET_PARENT as _) };
+    if raw < 0 {
+        return Err(io::Error::from_raw_os_error(libc::EPERM));
+    }
+    // SAFETY: descritor recém-devolvido pelo kernel, nosso.
+    let parent = unsafe { OwnedFd::from_raw_fd(raw) };
+    let own = std::fs::metadata("/proc/self/ns/user")?;
+    let par = File::from(parent.try_clone()?).metadata()?;
+    if (par.dev(), par.ino()) == (own.dev(), own.ino()) {
+        // O pai é o namespace do supervisor: o processo não criou um
+        // namespace próprio, e o kernel recusaria de qualquer jeito.
+        return Err(io::Error::from_raw_os_error(libc::EPERM));
+    }
+    let c = CString::new(path).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
+    let flags = (flags & !(libc::O_CREAT | libc::O_TMPFILE | libc::O_PATH)) | libc::O_CLOEXEC;
+    let (ours, theirs) = std::os::unix::net::UnixStream::pair()?;
+    // Tudo o que o filho usa fica pronto antes do fork: depois dele, num
+    // processo com várias threads, só chamadas de sistema.
+    let mut byte = [0u8; 1];
+    let mut iov = libc::iovec {
+        iov_base: byte.as_mut_ptr().cast(),
+        iov_len: 1,
+    };
+    // SAFETY: CMSG_SPACE só calcula.
+    let space = unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
+    let mut cbuf = vec![0u64; space.div_ceil(8)];
+    // SAFETY: msghdr zerada é válida.
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cbuf.as_mut_ptr().cast();
+    msg.msg_controllen = space as _;
+    // SAFETY: o buffer de controle tem espaço para um cabeçalho.
+    let cmsg = unsafe { libc::CMSG_FIRSTHDR(&msg) };
+    // SAFETY: `cmsg` aponta para dentro de `cbuf`.
+    let data = unsafe {
+        (*cmsg).cmsg_level = libc::SOL_SOCKET;
+        (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+        (*cmsg).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
+        libc::CMSG_DATA(cmsg) as *mut RawFd
+    };
+    let (pfd, sock) = (parent.as_raw_fd(), theirs.as_raw_fd());
+    // SAFETY: o filho só faz chamadas de sistema e termina com `_exit`.
+    let child = unsafe { libc::fork() };
+    if child < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if child == 0 {
+        // SAFETY: chamadas de sistema com ponteiros preparados antes do fork.
+        unsafe {
+            if libc::setns(pfd, libc::CLONE_NEWUSER) != 0 {
+                libc::_exit(*libc::__errno_location());
+            }
+            let fd = libc::open(c.as_ptr(), flags);
+            if fd < 0 {
+                libc::_exit(*libc::__errno_location());
+            }
+            *data = fd;
+            if libc::sendmsg(sock, &msg, libc::MSG_NOSIGNAL) < 0 {
+                libc::_exit(*libc::__errno_location());
+            }
+            libc::_exit(0);
+        }
+    }
+    drop(theirs);
+    let mut status = 0;
+    // SAFETY: espera o filho que acabamos de criar.
+    unsafe { libc::waitpid(child, &mut status, 0) };
+    let code = if libc::WIFEXITED(status) {
+        libc::WEXITSTATUS(status)
+    } else {
+        libc::EPERM
+    };
+    if code != 0 {
+        return Err(io::Error::from_raw_os_error(code));
+    }
+    let mut buf = [0u8; 1];
+    let mut cspace = nix::cmsg_space!(RawFd);
+    let mut iov = [io::IoSliceMut::new(&mut buf)];
+    let r = nix::sys::socket::recvmsg::<()>(
+        ours.as_raw_fd(),
+        &mut iov,
+        Some(&mut cspace),
+        nix::sys::socket::MsgFlags::MSG_CMSG_CLOEXEC,
+    )
+    .map_err(io::Error::from)?;
+    for c in r.cmsgs().map_err(io::Error::from)? {
+        if let nix::sys::socket::ControlMessageOwned::ScmRights(fds) = c
+            && let Some(&fd) = fds.first()
+        {
+            // SAFETY: descritor recebido agora, nosso.
+            return Ok(unsafe { OwnedFd::from_raw_fd(fd) });
+        }
+    }
+    Err(io::Error::from_raw_os_error(libc::EPERM))
 }
 
 /// (operação, origem (dirfd, caminho), destino (dirfd, caminho)).
@@ -1092,6 +1219,22 @@ mod tests {
             ir("/etc/x")
         );
         assert_eq!(t(&req(libc::AT_FDCWD, "/proc/self/fd")), ir("/proc/7/fd"));
+        let idmap = |p: &str| Target::IdMap(p.as_bytes().to_vec());
+        for name in ["uid_map", "gid_map", "projid_map", "setgroups"] {
+            assert_eq!(
+                t(&req(libc::AT_FDCWD, &format!("/proc/self/{name}"))),
+                idmap(&format!("/proc/900/{name}"))
+            );
+        }
+        assert_eq!(
+            t(&req(libc::AT_FDCWD, "/proc/7/uid_map")),
+            idmap("/proc/900/uid_map")
+        );
+        // De outro processo, o caminho comum (o kernel decide).
+        assert_eq!(
+            t(&req(libc::AT_FDCWD, "/proc/8/uid_map")),
+            ir("/proc/8/uid_map")
+        );
         assert_eq!(t(&req(libc::AT_FDCWD, "/proc/8/fd/3")), Target::Refused);
         assert_eq!(t(&req(libc::AT_FDCWD, "/proc/8/cwd/x")), Target::Refused);
         assert_eq!(

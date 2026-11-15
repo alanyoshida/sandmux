@@ -411,3 +411,38 @@ fn user_namespace_aninhado_e_criado_mas_nao_monta() {
     let v = probe(&["nested-userns-mount"]);
     assert!(!ok(&v), "montou dentro de namespace aninhado: {v}");
 }
+
+/// O mapeamento do próprio uid num user namespace aninhado (o que o sandbox
+/// do Chrome faz), e o `/proc/self` de um processo num pid namespace
+/// aninhado, que precisa ser o dele.
+#[test]
+fn mapeamento_e_proc_self_em_namespaces_aninhados() {
+    if !std::path::Path::new("/usr/bin/unshare").exists() {
+        return;
+    }
+    let sh = |script: &str| {
+        let out = run_spec(&base_spec(vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            script.into(),
+        ]));
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr)
+    };
+    let out = sh("unshare -Ur id -u; echo fim");
+    assert!(out.lines().any(|l| l.trim() == "0"), "{out}");
+    let uid = unsafe { libc::getuid() };
+    let out = sh(&format!(
+        "unshare -U --map-user={uid} --map-group={uid} id -u"
+    ));
+    assert!(out.lines().any(|l| l.trim() == uid.to_string()), "{out}");
+    // No pid namespace novo, o /proc/self do processo é o dele: dois
+    // níveis de pid (o do sandbox e o do namespace novo). Antes, ia parar
+    // no processo do sandbox com o pid do namespace interno.
+    let out = sh("unshare -Urpf sh -c 'exec grep NSpid /proc/self/status'");
+    let line = out.lines().find(|l| l.starts_with("NSpid:")).unwrap_or("");
+    let nums: Vec<&str> = line.split_whitespace().skip(1).collect();
+    assert_eq!(nums, [nums.first().copied().unwrap_or("?"), "1"], "{out}");
+    // Sem namespace próprio, gravar o mapeamento continua recusado.
+    let out = sh("echo '0 0 1' > /proc/self/uid_map && echo gravou || echo recusado");
+    assert!(out.contains("recusado"), "{out}");
+}
