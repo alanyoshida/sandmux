@@ -121,3 +121,40 @@ fn dividir_focar_ampliar_fechar_e_voltar() {
     t.write(b"\x02d");
     assert_eq!(t.wait_exit(), 0);
 }
+
+#[test]
+fn fechar_um_painel_mantem_o_foco_na_mesma_aba() {
+    let e = Env::new();
+    e.write_config("[tui]\npanel = false\n");
+    sessao(&e);
+    // Uma segunda aba, com outro texto na tela.
+    let mut t = term_in(&e, &e.work, &["run", "shell"]);
+    t.write(b"echo aba-$((1+1))-dois\r");
+    t.wait_text("aba-2-dois");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+
+    let mut t = term_in(&e, &e.work, &[]);
+    t.wait_text(&tab(2, "shell:app"));
+    t.write(b"\x021");
+    t.write(b"echo aba-$((0+1))-um\r");
+    t.wait_text("aba-1-um");
+    // Divide a aba 1 e fecha o painel novo, que está em foco.
+    t.write(b"\x02%");
+    t.wait_text("Nova aba");
+    t.write(b"\r");
+    t.wait_text("shell:app +1");
+    t.write(b"\x02x");
+    t.wait_text("s/n");
+    t.write(b"s");
+    wait_for(&t, "a aba 1 sem painéis", |s| {
+        !s.contains('│') && !s.contains(" +1")
+    });
+    // O foco ficou no painel que sobrou, na aba 1, e não na aba 2.
+    t.write(b"echo ficou-$((2+3))\r");
+    t.wait_text("ficou-5");
+    let s = t.screen();
+    assert!(s.contains("aba-1-um") && !s.contains("aba-2-dois"), "{s}");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}

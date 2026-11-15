@@ -312,9 +312,15 @@ fn take_instance_lock(path: &std::path::Path) -> Result<Option<File>> {
         .write(true)
         .open(path)
         .with_context(|| trf!("abrir {}", "open {}", path.display()))?;
+    // Um daemon anterior que acabou de parar pode ainda segurar a trava por
+    // um instante (as threads dele saindo): tenta por alguns segundos.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
     // SAFETY: flock sobre um descritor válido.
-    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Ok(None);
+    while unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        if std::time::Instant::now() >= deadline {
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
     f.set_len(0)?;
     writeln!(f, "{}", std::process::id())?;

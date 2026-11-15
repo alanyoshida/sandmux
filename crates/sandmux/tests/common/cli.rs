@@ -173,8 +173,18 @@ impl Env {
 }
 
 impl Drop for Env {
-    /// Para o daemon que o teste tenha subido.
+    /// Para o daemon que o teste tenha subido. Num teste que falhou, mostra o
+    /// registro do daemon, para entender falhas que não se repetem.
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            let log = std::fs::read_to_string(self.state.join("sandmux/sandmuxd.log"))
+                .unwrap_or_default();
+            let tail: Vec<&str> = log.lines().rev().take(60).collect();
+            eprintln!(
+                "--- registro do daemon (fim):\n{}",
+                tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+            );
+        }
         if let Some(pid) = self.daemon_pid() {
             let _ = self
                 .cmd(&self.work, &["daemon", "stop"])
