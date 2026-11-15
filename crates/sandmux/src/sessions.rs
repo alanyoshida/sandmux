@@ -71,6 +71,15 @@ fn list(conn: &mut Conn) -> Result<Vec<SessionInfo>> {
 
 /// Estado com a nota de memória esgotada.
 fn state_text(s: &SessionInfo) -> String {
+    let base = state_base(s);
+    if s.keys.any() {
+        format!("{base} · {}", s.keys)
+    } else {
+        base
+    }
+}
+
+fn state_base(s: &SessionInfo) -> String {
     match &s.state {
         sandmux_proto::SessionState::Encerrada { codigo } if s.oom_kills > 0 => {
             trf!(

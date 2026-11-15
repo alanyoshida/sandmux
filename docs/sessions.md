@@ -114,7 +114,7 @@ Socket Unix de fluxo. Cada quadro tem 4 bytes de tamanho (big-endian, só o cont
 | 0 | Mensagem de controle em JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Bytes de terminal: entrada do cliente ou saída da sessão |
 
-A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados, a pasta de configuração e o idioma do cliente (o daemon responde nesse idioma). Esta versão usa o protocolo 26. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
+A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados, a pasta de configuração e o idioma do cliente (o daemon responde nesse idioma). Esta versão usa o protocolo 27. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
 
 O cliente envia ao daemon, junto com o pedido de sessão, as opções dadas no `run`, o perfil nomeado, a pasta atual, as variáveis da lista segura, o `SHELL` e os valores de `pass-env` da política efetiva. O daemon resolve as camadas de configuração ([docs/config.md](config.md)) e compõe a especificação de lançamento com a mesma função do `run` direto.
 
@@ -152,3 +152,5 @@ Quando o daemon termina, por parada, reinício ou falha, nenhum processo de sand
 | `SANDMUX_DAEMON_START=direct` | O cliente nunca usa o systemd |
 | `SANDMUX_START_MODE` | Como o daemon diz ter sido iniciado (`systemd`, `direct`); preenchida pelo cliente e pela unidade |
 | `SANDMUX_PROTOCOL_OVERRIDE` | O daemon anuncia outro número de protocolo; só serve para testar a recusa |
+| `SANDMUX_SECRET_SCAN_SECS` | Intervalo, em segundos, da varredura periódica de chaves reais nos HOMEs sintéticos (60 por padrão) |
+| `SANDMUX_SECRET_INOTIFY=0` | O vigia de chaves reais não usa inotify, só a varredura periódica; só serve para testá-la |

@@ -131,6 +131,14 @@ A key pasted inside the harness, as in opencode's "Connect provider" or in herme
 - **`sandmux doctor --fix`:** moves those keys to the vault, with the domain discovered as above. The file is only rewritten with fake values after the vault accepts all of its keys; the real value does not stay in any file of the synthetic HOME.
 - **Afterwards:** restart the harness's tabs, which may have the old key in memory.
 
+#### Automatic move
+
+The daemon does the same as `doctor --fix` by itself, without asking:
+
+- **When:** right after the harness writes one of those files (the daemon watches their folders), at startup, every 60 seconds and right after the vault is opened.
+- **How:** with the vault open and each key's domain discovered as below, each key goes to the vault with a new fake, and only then is the file rewritten with the fakes. If the vault refuses a key, or if the harness rewrote the file during the scan, the file stays as it was. The daemon log has the harness, the file and the key names, never the values.
+- **Notices:** the harness's tab shows how many keys were moved since the launch, and asks you to restart the tab, because the harness still has the real one in memory. It also shows how many are waiting for the vault (locked or missing) and how many are waiting for a domain. Those waiting for the vault go when it is opened. Those without a domain are left for `sandmux doctor --fix`, which asks. The notices show up in `sandmux ls`, in the tab's `✱` mark, in the bar alerts and in the "real keys" line of the TUI panel ([tui.md](tui.md)).
+
 Without a vault, nothing swaps the fake for the real value, and the harness gets "invalid key" from the provider. That is why the import report and `sandmux doctor` remind you of `sandmux vault init` and `sandmux vault import`. The secret is named `<harness>:<file>:<provider>.<key>` (or `<harness>:<file>:<key>`, when there is no provider around it), linked to the fake value and, when the key's name indicates the provider (such as `OPENROUTER_API_KEY`), to its domain. After that, the harness uses the imported file as is, and the gateway swaps its fake for the real value. In hermes, which reads `.env` on top of the environment, this is how the imported key starts to apply.
 
 Each secret is linked to the domains where it may go: the gateway only swaps the fake for the real value in a request to one of them. That way, a tricked agent that sends the fake to another site sends only the fake. The command discovers the domain on its own, in this order:

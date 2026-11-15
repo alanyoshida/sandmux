@@ -227,6 +227,9 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .init(&password);
+                if r.is_ok() {
+                    shared.secrets.kick();
+                }
                 reply_unit(&mut stream, r)?;
             }
             Msg::VaultUnlock { password } => {
@@ -236,6 +239,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     .unwrap_or_else(|e| e.into_inner())
                     .unlock(&password);
                 if r.is_ok() {
+                    shared.secrets.kick();
                     super::session::vault_unlocked(shared);
                     let s = shared.clone();
                     std::thread::spawn(move || super::net::recompile_all(&s));

@@ -64,6 +64,8 @@ pub struct Session {
     pub cgroup: Option<std::path::PathBuf>,
     /// Mortes por falta de memória e recusas de processo do último lançamento.
     pub oom_kills: u64,
+    /// Chaves reais movidas ao cofre pelo vigia desde o lançamento.
+    pub keys_moved: u32,
     pub fork_refusals: u64,
     /// Socket do Docker privado do lançamento atual.
     pub docker: Option<super::docker::SessionSocket>,
@@ -130,6 +132,7 @@ impl Session {
             limits: None,
             cgroup: None,
             oom_kills: 0,
+            keys_moved: 0,
             fork_refusals: 0,
             docker: None,
             ssh_agent: None,
@@ -164,6 +167,10 @@ impl Session {
             usage: self.counters().map(|c| usage(&c)),
             oom_kills: self.oom_kills,
             started_at: self.started_at,
+            keys: sandmux_proto::msg::KeyNote {
+                moved: self.keys_moved,
+                ..Default::default()
+            },
         }
     }
 
@@ -995,6 +1002,7 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
             }
             s.cgroup = None;
             s.oom_kills = 0;
+            s.keys_moved = 0;
             s.fork_refusals = 0;
             s.reset_terminal(size);
             s.state = SessionState::Viva;
