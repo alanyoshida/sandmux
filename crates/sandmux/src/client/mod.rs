@@ -247,7 +247,13 @@ pub fn start_daemon() -> Result<()> {
 /// `--pass-env`. Uma variável pedida que não existe é erro.
 pub fn client_vars(pass_env: &[String]) -> Result<BTreeMap<String, String>> {
     let mut vars = BTreeMap::new();
-    for k in sandmux_policy::lists::SAFE_ENV.iter().chain(&["SHELL"]) {
+    // O Wayland do cliente, para a opção `window` (nunca entra no sandbox
+    // por si: a composição só copia a lista segura).
+    for k in sandmux_policy::lists::SAFE_ENV.iter().chain(&[
+        "SHELL",
+        "WAYLAND_DISPLAY",
+        "XDG_RUNTIME_DIR",
+    ]) {
         if let Ok(v) = std::env::var(k) {
             vars.insert(k.to_string(), v);
         }

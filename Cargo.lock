@@ -3110,6 +3110,8 @@ dependencies = [
  "toml_edit",
  "unicode-width",
  "vt100",
+ "wayland-client",
+ "wayland-protocols",
  "zbus",
  "zeroize",
 ]

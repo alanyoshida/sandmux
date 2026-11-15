@@ -102,6 +102,9 @@ fn check_op(op: &Op, host: &Host) -> Result<(), EditError> {
             "network" => {
                 super::NetworkMode::parse(v).map_err(refused)?;
             }
+            "window" => {
+                sandmux_spec::window::WindowMode::parse(v).map_err(refused)?;
+            }
             _ => {
                 return Err(refused(trf!(
                     "`{k}` não é um teto nem o modo de rede",
@@ -109,7 +112,7 @@ fn check_op(op: &Op, host: &Host) -> Result<(), EditError> {
                 )));
             }
         },
-        Op::Unset(k) if LIMIT_KEYS.contains(&k.as_str()) || k == "network" => {}
+        Op::Unset(k) if LIMIT_KEYS.contains(&k.as_str()) || k == "network" || k == "window" => {}
         Op::Set(k, _) | Op::Unset(k) => {
             if !BOOL_KEYS.contains(&k.as_str()) {
                 let hint = if LIST_KEYS.contains(&k.as_str()) {
@@ -369,6 +372,7 @@ pub fn apply(path: &Path, host: &Host, target: &Target, op: &Op) -> Result<Outco
             Op::SetLimit(k, v) => {
                 let new: toml_edit::Value = match (k.as_str(), ProcessLimit::parse(v)) {
                     ("processes", Ok(ProcessLimit::Count(n))) => (n as i64).into(),
+                    ("window", _) if v == "true" || v == "false" => (v == "true").into(),
                     _ => v.trim().into(),
                 };
                 if t.get(k)

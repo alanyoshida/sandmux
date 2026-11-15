@@ -95,7 +95,14 @@ pub fn run(cmd: ConfigCmd) -> Result<i32> {
         ConfigCmd::Show { workdir, profile } => show(&host, &path, workdir, profile),
         ConfigCmd::List => list(&path),
         ConfigCmd::Set { chave, valor, alvo } => {
-            let op = if config::LIMIT_KEYS.contains(&chave.as_str())
+            let op = if chave == config::WINDOW_KEY {
+                // `true`, `false` (ou sim, não) e `direct`.
+                let v = match edit::parse_bool(&valor) {
+                    Some(b) => b.to_string(),
+                    None => valor.trim().to_lowercase(),
+                };
+                edit::Op::SetLimit(chave, v)
+            } else if config::LIMIT_KEYS.contains(&chave.as_str())
                 || config::NET_KEYS.contains(&chave.as_str())
             {
                 edit::Op::SetLimit(chave, valor)
