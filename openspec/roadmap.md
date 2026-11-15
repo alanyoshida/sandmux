@@ -432,6 +432,8 @@ Release `v0.1.10` (2026-11-15), com os changes 52 e 53. Decisão do usuário (20
 
 Release `v0.1.11` (2026-11-15), com o change 54. Decisão do usuário (2026-11-15): publicar logo depois do histórico de tela em disco.
 
+Release `v0.1.12` (2026-11-15), com o change 55 e as correções do foco ao fechar painel e da troca do daemon. Decisão do usuário (2026-11-15): publicar depois de testar o build local.
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
