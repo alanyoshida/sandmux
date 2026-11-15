@@ -106,7 +106,7 @@ O backend de execução em Docker do hermes MUST NOT funcionar dentro do sandbox
 - **THEN** a execução falha por falta de acesso ao Docker, sem alcançar o Docker do host
 
 ### Requirement: Preset shell
-O preset `shell` MUST lançar um shell interativo confinado, sem harness, com HOME sintético próprio. Ele MUST usar o shell do usuário quando esse shell está nas pastas de sistema, e o `bash` caso contrário, com um arquivo de configuração mínimo gerado ao criar o HOME sintético. Os arquivos de configuração de shell do HOME real MUST NOT ser copiados.
+O preset `shell` MUST lançar um shell interativo confinado, sem harness, com HOME sintético próprio. Ele MUST usar o shell do usuário quando esse shell está nas pastas de sistema, e o `bash` caso contrário, com um arquivo de configuração mínimo gerado ao criar o HOME sintético. Os arquivos de configuração de shell do HOME real MUST entrar só pela importação, com os segredos trocados por valores falsos.
 
 #### Scenario: Início
 - **WHEN** o usuário roda `sandmux run shell`
@@ -114,7 +114,7 @@ O preset `shell` MUST lançar um shell interativo confinado, sem harness, com HO
 
 #### Scenario: Configuração real do shell
 - **WHEN** o `.bashrc` real do usuário exporta um token
-- **THEN** o token não existe dentro do shell confinado
+- **THEN** o token real não existe dentro do shell confinado: sem importação, a variável não existe; com importação, ela tem um valor falso
 
 #### Scenario: Shell fora do sistema
 - **WHEN** o shell do usuário está instalado dentro do HOME

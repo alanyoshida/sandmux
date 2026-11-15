@@ -59,8 +59,25 @@ pub enum Format {
     Json,
     Yaml,
     Env,
+    /// `set [-opções] NOME valor`, do fish.
+    Fish,
     Text,
 }
+
+/// Arquivos de inicialização do shell, lidos como atribuições de variável.
+const SHELL_RC: &[&str] = &[
+    ".bashrc",
+    ".bash_aliases",
+    ".bash_profile",
+    ".bash_login",
+    ".bash_logout",
+    ".profile",
+    ".zshrc",
+    ".zshenv",
+    ".zprofile",
+    ".zlogin",
+    ".zlogout",
+];
 
 pub fn format_of(name: &str) -> Format {
     let lower = name.to_ascii_lowercase();
@@ -68,8 +85,14 @@ pub fn format_of(name: &str) -> Format {
         Format::Json
     } else if lower.ends_with(".yaml") || lower.ends_with(".yml") {
         Format::Yaml
-    } else if lower == ".env" || lower.ends_with(".env") || lower.starts_with(".env.") {
+    } else if lower == ".env"
+        || lower.ends_with(".env")
+        || lower.starts_with(".env.")
+        || SHELL_RC.contains(&lower.as_str())
+    {
         Format::Env
+    } else if lower.ends_with(".fish") {
+        Format::Fish
     } else {
         Format::Text
     }
@@ -118,6 +141,10 @@ static YAML_LINE: LazyLock<Regex> = LazyLock::new(|| {
 
 static ENV_LINE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(\s*(?:#\s*)?(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)(=)(.*?)\s*$").unwrap()
+});
+
+static FISH_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(\s*set\s+(?:-[A-Za-z-]+\s+)*)([A-Za-z_][A-Za-z0-9_]*)(\s+)(.*?)\s*$").unwrap()
 });
 
 fn random_hex() -> String {
@@ -229,11 +256,11 @@ pub fn scrub(text: &str, format: Format) -> (String, Vec<Replacement>) {
                     })
                     .into_owned();
             }
-            Format::Yaml | Format::Env => {
-                let re = if format == Format::Yaml {
-                    &*YAML_LINE
-                } else {
-                    &*ENV_LINE
+            Format::Yaml | Format::Env | Format::Fish => {
+                let re = match format {
+                    Format::Yaml => &*YAML_LINE,
+                    Format::Fish => &*FISH_LINE,
+                    _ => &*ENV_LINE,
                 };
                 if let Some(c) = re.captures(&l) {
                     let (pre, k, sep, rest) = (&c[1], &c[2], &c[3], &c[4]);

@@ -64,11 +64,11 @@ fn import_pela_linha_de_comando_nao_mostra_valores() {
 }
 
 #[test]
-fn import_de_preset_sem_importacao_e_harness_sem_estado() {
+fn import_de_preset_desconhecido_e_harness_sem_estado() {
     let e = Env::new();
-    let out = e.run(&e.work, &["import", "shell"]);
+    let out = e.run(&e.work, &["import", "xyz"]);
     assert_eq!(out.status.code(), Some(1));
-    assert!(stderr(&out).contains("não tem importação"));
+    assert!(stderr(&out).contains("xyz"), "{}", stderr(&out));
     let out = e.run(&e.work, &["import", "opencode"]);
     assert!(out.status.success());
     assert!(stderr(&out).contains("não há configuração"));

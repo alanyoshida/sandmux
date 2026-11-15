@@ -102,7 +102,7 @@ pub fn write_shell_rc(shell: &Path, home: &Path) -> Result<(), PolicyError> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let header = "# Gerado pelo sandmux ao criar o HOME sintético do preset shell.\n# O .bashrc e o .zshrc reais não são copiados. Este arquivo pode ser editado.\n";
+    let header = "# Gerado pelo sandmux ao criar o HOME sintético do preset shell.\n# A configuração real do shell entra com `sandmux import shell --overwrite`. Este arquivo pode ser editado.\n";
     let (path, body): (PathBuf, String) = match name.as_str() {
         "zsh" => (
             home.join(".zshrc"),

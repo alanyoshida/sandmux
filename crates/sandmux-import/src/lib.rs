@@ -19,6 +19,13 @@ use crate::secrets::{format_of, normalize_fakes, scrub};
 /// Pastas que nunca são copiadas, em qualquer nível.
 const SKIP_DIRS: &[&str] = &["node_modules", "__pycache__", ".venv", "venv", ".cache"];
 
+/// Pastas que ficam de fora, em qualquer nível, das pastas de framework.
+const FRAMEWORK_SKIP: &[&str] = &[".git", "cache", "log"];
+
+/// Arquivos que nunca são copiados. O `fish_variables` guarda as variáveis
+/// universais do fish, inclusive as exportadas.
+const SKIP_FILES: &[&str] = &["fish_variables"];
+
 /// Um item da tabela, relativo ao HOME.
 #[derive(Debug, Clone, Copy)]
 enum Item {
@@ -26,6 +33,83 @@ enum Item {
     Dir(&'static str),
     /// Arquivos do primeiro nível da pasta cujo nome casa com um dos padrões.
     TopFiles(&'static str, &'static [&'static str]),
+    /// Pasta de framework (oh-my-zsh, oh-my-bash): copiada sem as pastas de
+    /// [`FRAMEWORK_SKIP`].
+    Framework(&'static str),
+}
+
+/// Nome do shell que o preset `shell` usa, pela regra do preset: o `SHELL`
+/// do usuário quando está nas pastas de sistema; senão, `bash`.
+pub fn shell_name() -> String {
+    let s = std::env::var_os("SHELL")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let in_system = ["/usr/", "/bin/"].iter().any(|p| s.starts_with(p));
+    if in_system && s.is_file() {
+        s.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "bash".into())
+    } else {
+        "bash".into()
+    }
+}
+
+/// O arquivo principal de inicialização do shell, que recebe a marca no
+/// prompt.
+fn shell_main_rc(shell: &str) -> Option<&'static str> {
+    match shell {
+        "bash" => Some(".bashrc"),
+        "zsh" => Some(".zshrc"),
+        "fish" => Some(".config/fish/config.fish"),
+        _ => None,
+    }
+}
+
+/// Trecho no fim do arquivo principal importado: `[sandmux]` na frente do
+/// prompt do usuário.
+fn prompt_mark(shell: &str) -> &'static str {
+    match shell {
+        "zsh" => "\n# sandmux: marca o prompt do shell confinado.\nPROMPT=\"[sandmux] $PROMPT\"\n",
+        "fish" => {
+            "\n# sandmux: marca o prompt do shell confinado.\nif functions -q fish_prompt\n    functions -c fish_prompt __sandmux_user_prompt\n    function fish_prompt\n        echo -n '[sandmux] '\n        __sandmux_user_prompt\n    end\nend\n"
+        }
+        _ => "\n# sandmux: marca o prompt do shell confinado.\nPS1=\"[sandmux] $PS1\"\n",
+    }
+}
+
+fn shell_table(shell: &str) -> &'static [Item] {
+    const BASH: &[Item] = &[
+        Item::File(".bashrc"),
+        Item::File(".bash_aliases"),
+        Item::File(".bash_profile"),
+        Item::File(".bash_login"),
+        Item::File(".bash_logout"),
+        Item::File(".profile"),
+        Item::File(".inputrc"),
+        Item::Framework(".oh-my-bash"),
+        Item::Framework(".bash_it"),
+    ];
+    const ZSH: &[Item] = &[
+        Item::File(".zshrc"),
+        Item::File(".zshenv"),
+        Item::File(".zprofile"),
+        Item::File(".zlogin"),
+        Item::File(".zlogout"),
+        Item::File(".p10k.zsh"),
+        Item::Framework(".oh-my-zsh"),
+    ];
+    const FISH: &[Item] = &[
+        Item::Framework(".config/fish"),
+        Item::Framework(".config/omf"),
+        Item::Framework(".local/share/omf"),
+    ];
+    const OTHER: &[Item] = &[Item::File(".profile")];
+    match shell {
+        "bash" => BASH,
+        "zsh" => ZSH,
+        "fish" => FISH,
+        _ => OTHER,
+    }
 }
 
 /// Pastas do estado real de cada harness, para listar o que ficou de fora.
@@ -108,6 +192,7 @@ fn table(harness: &str) -> Option<&'static [Item]> {
         "omp" => Some(OMP),
         "hermes" => Some(HERMES),
         "claude" => Some(CLAUDE),
+        "shell" => Some(shell_table(&shell_name())),
         _ => None,
     }
 }
@@ -270,7 +355,7 @@ pub fn watch_dirs(harness: &str, synthetic_home: &Path) -> Vec<PathBuf> {
             Item::TopFiles(rel, _) => {
                 dirs.insert(synthetic_home.join(rel));
             }
-            Item::Dir(_) => {}
+            Item::Dir(_) | Item::Framework(_) => {}
         }
     }
     for rel in files_to_copy(items, synthetic_home) {
@@ -337,7 +422,7 @@ fn matches_pattern(name: &str, pat: &str) -> bool {
     }
 }
 
-fn walk(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) {
+fn walk(dir: &Path, base: &Path, skip: &[&str], out: &mut Vec<PathBuf>) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     let mut entries: Vec<_> = rd.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
@@ -348,11 +433,14 @@ fn walk(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) {
             continue;
         }
         if ft.is_dir() {
-            if SKIP_DIRS.contains(&e.file_name().to_string_lossy().as_ref()) {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if SKIP_DIRS.contains(&name.as_ref()) || skip.contains(&name.as_ref()) {
                 continue;
             }
-            walk(&p, base, out);
+            walk(&p, base, skip, out);
         } else if ft.is_file()
+            && !SKIP_FILES.contains(&e.file_name().to_string_lossy().as_ref())
             && let Ok(rel) = p.strip_prefix(base)
         {
             out.push(rel.to_path_buf());
@@ -371,10 +459,14 @@ fn files_to_copy(items: &[Item], home: &Path) -> Vec<PathBuf> {
                     out.push(PathBuf::from(rel));
                 }
             }
-            Item::Dir(rel) => {
+            Item::Dir(rel) | Item::Framework(rel) => {
                 let p = home.join(rel);
+                let skip = match *item {
+                    Item::Framework(_) => FRAMEWORK_SKIP,
+                    _ => &[],
+                };
                 if p.is_dir() && !p.is_symlink() {
-                    walk(&p, home, &mut out);
+                    walk(&p, home, skip, &mut out);
                 }
             }
             Item::TopFiles(rel, pats) => {
@@ -458,13 +550,20 @@ pub fn import(
     use std::os::unix::fs::PermissionsExt;
     let items = table(harness).ok_or_else(|| ImportError::NotImportable(harness.into()))?;
     let files = files_to_copy(items, real_home);
+    let shell = (harness == "shell").then(shell_name);
+    let main_rc = shell.as_deref().and_then(shell_main_rc);
     let mut report = Report::default();
     let mut touched: BTreeSet<PathBuf> = BTreeSet::new();
 
     for rel in &files {
         let real = real_home.join(rel);
         let dest = synthetic_home.join(rel);
-        let (data, reps) = processed(&real, rel)?;
+        let (mut data, reps) = processed(&real, rel)?;
+        if let (Some(sh), Some(main)) = (shell.as_deref(), main_rc)
+            && rel == Path::new(main)
+        {
+            data.extend_from_slice(prompt_mark(sh).as_bytes());
+        }
         let mode = fs::metadata(&real)
             .map(|m| m.permissions().mode())
             .unwrap_or(0o600);
@@ -566,7 +665,7 @@ mod tests {
 
     fn all_text(dir: &Path) -> String {
         let mut files = Vec::new();
-        walk(dir, dir, &mut files);
+        walk(dir, dir, &[], &mut files);
         files
             .iter()
             .map(|f| fs::read_to_string(dir.join(f)).unwrap_or_default())
@@ -769,11 +868,99 @@ mod tests {
     }
 
     #[test]
-    fn preset_shell_nao_tem_importacao() {
+    fn preset_sem_importacao() {
         let d = tempfile::tempdir().unwrap();
         assert!(matches!(
-            import("shell", d.path(), d.path(), &d.path().join("m"), false),
+            import("chat", d.path(), d.path(), &d.path().join("m"), false),
             Err(ImportError::NotImportable(_))
         ));
+        assert!(importable("shell"));
+    }
+
+    fn write(home: &Path, rel: &str, s: &str) {
+        let p = home.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, s).unwrap();
+    }
+
+    fn rels(v: Vec<PathBuf>) -> Vec<String> {
+        v.into_iter().map(|p| p.display().to_string()).collect()
+    }
+
+    #[test]
+    fn tabela_do_shell_so_com_o_shell_em_uso() {
+        let d = tempfile::tempdir().unwrap();
+        let h = d.path();
+        write(h, ".bashrc", "alias ll='ls -l'\n");
+        write(h, ".profile", "PATH=$HOME/bin:$PATH\n");
+        write(h, ".zshrc", "alias zz=1\n");
+        write(h, ".config/starship.toml", "format = '$all'\n");
+        write(h, ".oh-my-bash/oh-my-bash.sh", "# omb\n");
+        write(h, ".oh-my-bash/themes/font/font.theme.sh", "# tema\n");
+        write(h, ".oh-my-bash/.git/HEAD", "ref\n");
+        write(h, ".oh-my-bash/cache/x", "x\n");
+        write(h, ".oh-my-bash/log/update.log", "x\n");
+        let bash = rels(files_to_copy(shell_table("bash"), h));
+        assert_eq!(
+            bash,
+            [
+                ".bashrc",
+                ".profile",
+                ".oh-my-bash/oh-my-bash.sh",
+                ".oh-my-bash/themes/font/font.theme.sh",
+            ]
+        );
+        write(h, ".oh-my-zsh/oh-my-zsh.sh", "# omz\n");
+        write(h, ".oh-my-zsh/.git/HEAD", "ref\n");
+        let zsh = rels(files_to_copy(shell_table("zsh"), h));
+        assert_eq!(zsh, [".zshrc", ".oh-my-zsh/oh-my-zsh.sh"]);
+        write(h, ".config/fish/config.fish", "alias g git\n");
+        write(h, ".config/fish/functions/x.fish", "function x; end\n");
+        write(h, ".config/fish/fish_variables", "SETUVAR --export K:v\n");
+        let fish = rels(files_to_copy(shell_table("fish"), h));
+        assert_eq!(
+            fish,
+            [".config/fish/config.fish", ".config/fish/functions/x.fish"]
+        );
+        assert_eq!(rels(files_to_copy(shell_table("dash"), h)), [".profile"]);
+    }
+
+    #[test]
+    fn rc_do_shell_tem_segredos_trocados_e_a_marca() {
+        let d = tempfile::tempdir().unwrap();
+        let h = d.path();
+        write(
+            h,
+            ".bashrc",
+            "export GITHUB_TOKEN=segredo-do-bashrc-123\nAPI_KEY='outro-segredo-456'\nexport EDITOR=vim\nexport T=$(pass show x)\n",
+        );
+        write(
+            h,
+            ".config/fish/config.fish",
+            "set -gx OPENAI_API_KEY segredo-do-fish-789\nset -gx EDITOR vim\n",
+        );
+        let (out, reps) = processed(&h.join(".bashrc"), Path::new(".bashrc")).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(reps.len(), 2, "{reps:?}");
+        assert!(!out.contains("segredo-do-bashrc-123") && !out.contains("outro-segredo-456"));
+        assert!(out.contains("export GITHUB_TOKEN=sandmux-fake-"), "{out}");
+        assert!(out.contains("API_KEY='sandmux-fake-"), "{out}");
+        assert!(
+            out.contains("export EDITOR=vim\nexport T=$(pass show x)\n"),
+            "{out}"
+        );
+        let rel = Path::new(".config/fish/config.fish");
+        let (out, reps) = processed(&h.join(rel), rel).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(reps.len(), 1, "{reps:?}");
+        assert!(
+            out.starts_with("set -gx OPENAI_API_KEY sandmux-fake-"),
+            "{out}"
+        );
+        assert!(out.contains("set -gx EDITOR vim"), "{out}");
+        assert_eq!(shell_main_rc("bash"), Some(".bashrc"));
+        assert!(prompt_mark("bash").contains("PS1=\"[sandmux] $PS1\""));
+        assert!(prompt_mark("zsh").contains("PROMPT=\"[sandmux] $PROMPT\""));
+        assert!(prompt_mark("fish").contains("functions -c fish_prompt"));
     }
 }

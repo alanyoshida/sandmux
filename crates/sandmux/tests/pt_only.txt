@@ -9,7 +9,7 @@ crates/sandmux-policy/src/config.rs	catálogo de exfiltração
 crates/sandmux-policy/src/config.rs	catálogo de inferência
 crates/sandmux-policy/src/config.rs	padrão
 crates/sandmux-policy/src/config/edit.rs	não
-crates/sandmux-policy/src/home.rs	# Gerado pelo sandmux ao criar o HOME sintético do preset shell.\n# O .bashrc e o .zshrc reais não são copiados. Este arquivo pode ser editado.\n
+crates/sandmux-policy/src/home.rs	# Gerado pelo sandmux ao criar o HOME sintético do preset shell.\n# A configuração real do shell entra com `sandmux import shell --overwrite`. Este arquivo pode ser editado.\n
 crates/sandmux-policy/src/netcatalog.rs	OAST e DNS de exfiltração
 crates/sandmux-policy/src/netcatalog.rs	catálogo comum ({group})
 crates/sandmux-policy/src/netcatalog.rs	catálogo de exfiltração

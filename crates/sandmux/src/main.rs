@@ -1249,6 +1249,10 @@ fn first_run(host: &Host, layout: &Layout, a: &RunArgs) -> Result<()> {
             "First run of {} in sandmux. Import the configuration you already have? Secrets are replaced with fake values and the original is not changed.",
             a.harness
         ))?
+    } else if a.harness == "shell" {
+        // O `shell` era usado em scripts antes de ter importação: sem
+        // terminal, começa sem importar.
+        false
     } else {
         bail!(trf!(
             "primeira execução do {} sem terminal interativo: passe --import para importar a configuração existente ou --no-import para começar vazio",
@@ -1259,7 +1263,9 @@ fn first_run(host: &Host, layout: &Layout, a: &RunArgs) -> Result<()> {
     let setup = home::ensure(host, layout, &a.harness)?;
     setup.warnings.iter().for_each(warn);
     if import {
-        do_import(host, layout, &a.harness, false)?;
+        // O HOME acabou de ser criado: no `shell`, a importação substitui o
+        // arquivo mínimo gerado.
+        do_import(host, layout, &a.harness, a.harness == "shell")?;
     }
     Ok(())
 }

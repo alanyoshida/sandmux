@@ -84,6 +84,25 @@ O shell conta nos tetos da aba alvo, e o que ele faz na rede e nos arquivos apar
 
 A aba de dentro termina quando o shell sai, ou quando o sandbox alvo termina. Depois de um reinício do daemon, ela volta parada, porque o sandbox alvo é outro; Ctrl+b `r` entra de novo. Uma aba de dentro não abre outra. Uma aba lançada por uma versão anterior do sandmux precisa ser reiniciada antes.
 
+## Configuração do shell
+
+O preset `shell` começa com um arquivo de configuração mínimo, gerado pelo sandmux, com `[sandmux]` no prompt. A importação traz a configuração que você já tem, como nos harnesses: na primeira execução, numa resposta à pergunta, ou depois, com `sandmux import shell`.
+
+Só entram os arquivos do shell que o preset usa (o seu, quando está nas pastas de sistema; senão, o `bash`):
+
+| Shell | Arquivos |
+|---|---|
+| `bash` | `.bashrc`, `.bash_aliases`, `.bash_profile`, `.bash_login`, `.bash_logout`, `.profile`, `.inputrc`, `.oh-my-bash`, `.bash_it` |
+| `zsh` | `.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.zlogout`, `.p10k.zsh`, `.oh-my-zsh` |
+| `fish` | `.config/fish` (sem o `fish_variables`), `.config/omf`, `.local/share/omf` |
+
+- **Frameworks:** as pastas do oh-my-bash, bash-it, oh-my-zsh e oh-my-fish vêm junto, sem as pastas `.git`, `cache` e `log`.
+- **De fora:** os arquivos dos outros shells e dos programas que o shell chama, como o `starship.toml`. Um programa que não existe no sandbox falha com a mensagem do próprio shell, e o resto do arquivo roda.
+- **Segredos:** nos arquivos de inicialização, `export GITHUB_TOKEN=...` (e `set -gx NOME valor` no fish) com nome de credencial vira um valor falso, que o `sandmux vault import` liga ao real. Nos arquivos dos frameworks, só os valores com formato de token são trocados. Valores como `$(pass show x)` ficam como estão.
+- **Prompt:** o `.bashrc`, o `.zshrc` ou o `config.fish` importado ganha no fim um trecho que põe `[sandmux]` na frente do seu prompt.
+- **Primeira execução:** a importação substitui o arquivo mínimo. Sem terminal (script, pipe), o `shell` começa sem importar, sem pedir `--import` ou `--no-import`; `--import` importa.
+- **HOME já criado:** `sandmux import shell` lista o arquivo mínimo como diferente; `sandmux import shell --overwrite` o substitui.
+
 ## Atualizar o harness
 
 O código do harness entra no sandbox em somente leitura, e a atualização automática fica desligada lá dentro. `sandmux update <harness>` roda o atualizador oficial no host, fora do sandbox e fora do daemon, em primeiro plano, no seu terminal:
