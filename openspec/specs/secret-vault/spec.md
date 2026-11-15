@@ -49,11 +49,15 @@ Com o cofre desbloqueado, `sandmux vault add <nome> [--domain <padrão>]... [--t
 - **THEN** só a senha nova desbloqueia o cofre
 
 ### Requirement: Leitura do manifesto da importação
-`sandmux vault import` MUST percorrer os manifestos gerados pela importação de cada harness e, para cada valor falso ainda sem segredo no cofre, mostrar o harness, o arquivo e a chave, e pedir o valor real (sem eco), que MUST ficar no cofre ligado ao valor falso. Uma resposta vazia MUST pular o item.
+`sandmux vault import` MUST percorrer os manifestos gerados pela importação de cada harness e, para cada valor falso ainda sem segredo no cofre, mostrar o harness, o arquivo, a chave e a linha do arquivo importado (com o falso como `<falso>`), e pedir o valor real, sem mostrá-lo: cada caractere digitado aparece como `•`, que MUST ficar no cofre ligado ao valor falso. Uma resposta vazia MUST pular o item.
 
 #### Scenario: Chave do opencode
 - **WHEN** a importação do opencode trocou a chave do OpenRouter em `auth.json` por um valor falso e o usuário roda `sandmux vault import`
 - **THEN** o comando pede o valor real dessa chave, e o cofre passa a ter um segredo ligado ao valor falso
+
+#### Scenario: Digitação visível sem o valor
+- **WHEN** o usuário cola uma chave de 43 caracteres na pergunta do `sandmux vault import`
+- **THEN** o terminal mostra 43 bolinhas, e o valor não aparece
 
 ### Requirement: Valores de pass-env guardados no cofre
 Quando uma sessão é criada ou reiniciada com `--pass-env` e o cofre está desbloqueado, os valores MUST ser guardados no cofre, ligados à sessão. Quando o cofre não existe ou está trancado, nada MUST ser guardado, e o cliente MUST avisar que, num reboot, a sessão fica parada. Os valores de uma sessão MUST sair do cofre quando a sessão é encerrada com `sandmux kill`.
@@ -79,3 +83,39 @@ As chaves SSH do cofre MUST NOT ter valor falso nem entrar na troca de tokens, n
 #### Scenario: Fora da troca
 - **WHEN** o cofre tem só a chave SSH `github` com o servidor `github.com`
 - **THEN** o `github.com` não entra na lista de decifração do TLS, e nenhuma sessão recebe valor falso dela
+
+### Requirement: Chaves reais nos HOMEs sintéticos
+`sandmux doctor` MUST procurar, nos arquivos da tabela de importação de cada harness dentro do HOME sintético, valores de credencial que não são falsos do sandmux, com as mesmas regras da importação, e listar cada um com o harness, o arquivo, o provedor (quando há), a chave e a linha, sem o valor. `sandmux doctor --fix` MUST, arquivo a arquivo, guardar cada chave no cofre com um valor falso novo e o domínio do provedor (ou perguntado), e só depois regravar o arquivo com os falsos. Se o cofre recusar uma chave, o arquivo MUST ficar como estava.
+
+#### Scenario: Chave colada no opencode do sandbox
+- **WHEN** o usuário conectou o OpenRouter pelo opencode dentro do sandbox, e o `auth.json` do HOME sintético tem a chave real
+- **THEN** o `sandmux doctor` lista `opencode: .local/share/opencode/auth.json`, provedor `openrouter`, chave `key`, sem mostrar o valor, e indica `sandmux doctor --fix`
+
+#### Scenario: Mover para o cofre
+- **WHEN** o usuário roda `sandmux doctor --fix` e confirma
+- **THEN** o cofre ganha o segredo com o domínio `openrouter.ai` e um valor falso, o `auth.json` passa a ter o falso, e o real não fica em nenhum arquivo do HOME sintético
+
+### Requirement: Cofre na página de configurações
+A página de configurações da TUI MUST ter a seção "Cofre", com o estado do cofre e a lista de segredos (nome, tipo e domínios, nunca o valor). Pela seção, o usuário MUST poder:
+- criar, desbloquear e trancar o cofre;
+- trocar a senha;
+- acrescentar um segredo (nome, valor e domínios) ou uma chave SSH (arquivo e servidores);
+- editar os domínios de um segredo;
+- apagar um segredo, depois de confirmar.
+
+Senhas e valores MUST aparecer só como `•` e MUST ser apagados da memória da TUI depois do envio.
+
+#### Scenario: Acrescentar pela TUI
+- **WHEN** com o cofre aberto, o usuário acrescenta `lmstudio` com o valor `abc` e o domínio `host.sandmux.internal`
+- **THEN** o segredo aparece na lista com o domínio, o valor nunca aparece na tela, e `sandmux vault list` mostra o segredo
+
+#### Scenario: Apagar com confirmação
+- **WHEN** o usuário escolhe um segredo, aperta `x` e confirma
+- **THEN** o segredo some da lista e do cofre
+
+### Requirement: Troca dos domínios de um segredo
+O daemon MUST aceitar a troca dos domínios de um segredo existente sem receber o valor de novo, com o cofre desbloqueado, e MUST validar cada domínio como na criação.
+
+#### Scenario: Editar domínios
+- **WHEN** o usuário troca os domínios de `lmstudio` para `host.sandmux.internal` e `localhost`
+- **THEN** o segredo fica com os dois domínios, e o valor continua o mesmo

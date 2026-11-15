@@ -17,11 +17,23 @@ Define a interface de terminal do sandmux: as abas, uma por sessão do daemon; a
 - **THEN** o comando termina com erro e nada é desenhado
 
 ### Requirement: Barra de abas
-A TUI MUST mostrar na primeira linha uma aba para cada sessão, com a posição (o número usado pelos atalhos de dígito), o nome e uma marca quando a sessão está encerrada ou parada, destacando a aba ativa. O identificador da sessão aparece na lista de abas. A área abaixo da barra, à esquerda do painel lateral quando ele está visível, MUST ser o terminal da aba ativa, e o tamanho dessa área MUST ser o tamanho do terminal da sessão.
+A TUI MUST mostrar, numa linha de barra, uma aba para cada sessão, com a posição (o número usado pelos atalhos de dígito), o nome e uma marca quando a sessão está encerrada ou parada, destacando a aba ativa. O identificador da sessão aparece na lista de abas. Por padrão, a barra MUST ficar na última linha, no estilo em blocos, só com caracteres que toda fonte tem: o `≡` do menu, o número de cada aba num bloco colorido, a aba ativa com outra cor e, à direita, o harness da aba ativa, a pasta dela num bloco de outra cor, o estado do cofre, os alertas de rede (só quando há) e o tempo de vida da aba ativa. `[tui]` MUST aceitar `style = "blocos"`, `"powerline"` (os mesmos blocos com separadores inclinados e ícones de uma Nerd Font) ou `"simples"` (a barra só com texto), e `bar = "bottom"` ou `"top"`. A área fora da barra, à esquerda do painel lateral quando ele está visível, MUST ser o terminal da aba ativa, e o tamanho dessa área MUST ser o tamanho do terminal da sessão.
 
 #### Scenario: Aba ativa
 - **WHEN** a aba 2 está ativa
 - **THEN** a barra destaca a aba 2, e a área do terminal mostra a tela da sessão 2, com uma linha a menos que o terminal do usuário
+
+#### Scenario: Qualquer fonte
+- **WHEN** a TUI abre sem `style` em `[tui]`
+- **THEN** a barra não tem nenhum caractere da área de uso privado do Unicode (os símbolos do Powerline e do Nerd Font)
+
+#### Scenario: Blocos da direita
+- **WHEN** a aba ativa é o opencode em `~/testesand`, viva há 1 hora e 20 minutos, o cofre está desbloqueado e uma aba teve um bloqueio de rede
+- **THEN** a direita da barra mostra `opencode` e `~/testesand` em blocos de cores diferentes, o cofre desbloqueado, `! 1` e `1h 20m`
+
+#### Scenario: Estilo simples no topo
+- **WHEN** `[tui]` tem `style = "simples"` e `bar = "top"`
+- **THEN** a barra fica na primeira linha, sem separadores do Powerline nem o `≡`, e um clique na linha 1 troca de aba
 
 ### Requirement: Emulação de terminal da aba
 Cada aba MUST emular o terminal da sua sessão, mostrando o texto, as cores (16, 256 e cor verdadeira), os atributos (negrito, itálico, sublinhado, inverso), a posição e a visibilidade do cursor e a tela alternativa. Trocar de aba MUST mostrar a tela atual da outra aba sem esperar o harness redesenhar.
@@ -93,7 +105,7 @@ O modal de renomear MUST trocar o nome da sessão da aba ativa pelo pedido de re
 - **THEN** a barra mostra `api`, e `sandmux ls` também
 
 ### Requirement: Aba encerrada ou parada
-Uma aba cuja sessão está encerrada MUST continuar aberta, com a última tela, o código de saída e as teclas de reiniciar (`r`) e fechar (`x`). Uma aba parada MUST mostrar o motivo. Reiniciar MUST relançar a sessão como `sandmux restart`, com as variáveis de `pass-env` do ambiente da TUI.
+Uma aba cuja sessão está encerrada MUST continuar aberta, com a última tela, o código de saída e as teclas de reiniciar (`r`) e fechar (`x`). Uma aba parada MUST mostrar o motivo. Reiniciar MUST relançar a sessão como `sandmux restart`, com as variáveis de `pass-env` do ambiente da TUI. Quando o harness de uma aba termina com a TUI aberta, a TUI MUST abrir um modal com o código de saída, na hora se a aba está ativa ou ao ativá-la, uma vez: Enter ou `r` reinicia, `x` fecha a aba e Esc mantém a aba encerrada. Abas que já estavam encerradas ao abrir a TUI MUST NOT abrir o modal.
 
 #### Scenario: Shell encerrado
 - **WHEN** o usuário digita `exit 3` no shell da aba ativa
@@ -103,12 +115,24 @@ Uma aba cuja sessão está encerrada MUST continuar aberta, com a última tela, 
 - **WHEN** a aba ativa está encerrada e o usuário digita Ctrl+b r
 - **THEN** a sessão volta viva na mesma aba
 
+#### Scenario: Modal ao terminar
+- **WHEN** o hermes da aba ativa termina o assistente de configuração e sai com código 0
+- **THEN** a TUI abre o modal com o código 0, e Enter relança o hermes na mesma aba
+
+#### Scenario: Aba em segundo plano
+- **WHEN** o shell da aba 2 sai enquanto a aba 1 está ativa, e o usuário ativa a aba 2
+- **THEN** o modal aparece ao ativar a aba 2, e Esc a deixa encerrada sem perguntar de novo
+
 ### Requirement: Fechar aba
-Fechar uma aba MUST pedir confirmação e encerrar a sessão como `sandmux kill`. A aba MUST sumir da barra, e a vizinha MUST ficar ativa.
+Fechar uma aba viva MUST pedir confirmação e encerrar a sessão como `sandmux kill`. Numa aba encerrada, o clique no ✕ da barra MUST fechá-la sem confirmação, porque não há processo a encerrar. A aba MUST sumir da barra, e a vizinha MUST ficar ativa.
 
 #### Scenario: Fechar com confirmação
 - **WHEN** o usuário digita Ctrl+b x e confirma
 - **THEN** a sessão é encerrada e a aba some
+
+#### Scenario: Clique no ✕ da aba encerrada
+- **WHEN** o harness da aba 2 terminou e o usuário clica no ✕ dela na barra
+- **THEN** a aba some da barra e a sessão sai de `sandmux ls`
 
 ### Requirement: Sair da TUI
 Sair (prefixo e `d`, fechar o terminal ou SIGTERM) MUST desanexar todas as abas, deixando as sessões vivas, e MUST restaurar o terminal do usuário.
@@ -118,7 +142,7 @@ Sair (prefixo e `d`, fechar o terminal ou SIGTERM) MUST desanexar todas as abas,
 - **THEN** as mesmas abas aparecem, com as telas atuais
 
 ### Requirement: Mouse
-A TUI MUST ligar o mouse no terminal do usuário. Um clique na barra MUST ativar a aba clicada. Na área do terminal, quando o harness da aba ativa ligou o mouse, os eventos MUST ir para a sessão, com as coordenadas relativas à área. Quando o harness não ligou o mouse, a roda MUST rolar o histórico da aba, e arrastar MUST selecionar texto, copiado ao soltar para o clipboard do terminal do usuário.
+A TUI MUST ligar o mouse no terminal do usuário. Um clique na barra MUST ativar a aba clicada. Na área do terminal, quando o harness da aba ativa ligou o mouse, os eventos MUST ir para a sessão, com as coordenadas relativas à área. Quando o harness não ligou o mouse, a roda MUST rolar o histórico da aba, e arrastar MUST selecionar texto, copiado ao soltar para o clipboard do terminal do usuário (OSC 52) e, quando há acesso, também para o clipboard do sistema (Wayland ou X11).
 
 #### Scenario: Clique na barra
 - **WHEN** o usuário clica no nome da aba 2
@@ -130,7 +154,7 @@ A TUI MUST ligar o mouse no terminal do usuário. Um clique na barra MUST ativar
 
 #### Scenario: Seleção no shell
 - **WHEN** o usuário arrasta sobre um texto no shell confinado
-- **THEN** ao soltar, o texto vai para o clipboard do terminal do usuário
+- **THEN** ao soltar, o texto vai para o clipboard do terminal do usuário e para o clipboard do sistema
 
 ### Requirement: Colar imagem
 O prefixo seguido de `v` MUST ler a imagem do clipboard do sistema, gravá-la como PNG na pasta de entrada e escrever na aba ativa, sem Enter, o caminho absoluto dela no sandbox, dentro de `~/inbox`. Sem imagem no clipboard, ou sem acesso ao clipboard, a TUI MUST avisar na barra, sem escrever nada na aba.
@@ -243,3 +267,54 @@ Quando o cofre existe e está trancado, a TUI MUST mostrar, ao abrir, um modal p
 #### Scenario: Senha na abertura
 - **WHEN** o cofre está trancado e o usuário abre a TUI, digita a senha certa e Enter
 - **THEN** o cofre fica desbloqueado, e as sessões aguardando o cofre sobem
+
+### Requirement: Cópia do harness pela TUI
+Quando a escrita no clipboard está liberada para a sessão, uma sequência OSC 52 de gravação vinda do harness da aba MUST chegar ao usuário pela TUI: a TUI MUST reemiti-la para o terminal do usuário e, quando há acesso, gravar o texto no clipboard do sistema. Com a escrita bloqueada, nada MUST mudar no clipboard.
+
+#### Scenario: opencode com o clipboard liberado
+- **WHEN** a sessão do opencode roda com `clipboard = true`, dentro do tmux, e o usuário copia um texto no opencode
+- **THEN** o texto vai para o clipboard do sistema e para o do terminal
+
+#### Scenario: Bloqueado por padrão
+- **WHEN** a sessão roda sem `clipboard = true` e o harness manda uma sequência OSC 52 de gravação
+- **THEN** o clipboard do sistema e o do terminal não mudam
+
+### Requirement: Menu de ações
+A tecla de prefixo seguida de `:`, ou um clique no `≡` do começo da barra, MUST abrir um menu com todas as ações da TUI e as teclas delas. As setas MUST mover a seleção, Enter MUST executar a ação, e Esc MUST fechar o menu. A ação MUST se chamar `menu` em `[tui.keys]`.
+
+#### Scenario: Abrir as configurações pelo menu
+- **WHEN** o usuário digita Ctrl+b `:`, desce até "configurações" e aperta Enter
+- **THEN** a página de configurações abre
+
+### Requirement: Página de configurações
+A tecla de prefixo seguida de `e` MUST abrir uma página de tela cheia com as opções do `config.toml`, em seções, cada uma com toggles, escolhas, textos ou listas, e o valor atual de cada opção. Um seletor MUST escolher se a mudança vale para `[global]` ou para o projeto da pasta da aba ativa. Cada mudança MUST ser gravada no `config.toml` na hora, pelo editor de configuração, que valida o arquivo inteiro; uma mudança recusada MUST mostrar o motivo e não gravar. A ação MUST se chamar `settings` em `[tui.keys]`.
+
+#### Scenario: Toggle gravado
+- **WHEN** na seção Sandbox o usuário liga `kvm` com o seletor em global
+- **THEN** o `config.toml` passa a ter `kvm = true` em `[global]`, e o item mostra `● ligado`
+
+#### Scenario: Valor recusado
+- **WHEN** o usuário escreve `abc` em memória
+- **THEN** a página mostra o motivo, e o `config.toml` não muda
+
+#### Scenario: Lista
+- **WHEN** na seção Rede o usuário acrescenta `8888` às portas do host
+- **THEN** o `config.toml` passa a ter `host-ports = [8888]`
+
+### Requirement: Temas prontos
+`[tui] theme` MUST aceitar `padrao`, `escuro`, `claro`, `catppuccin`, `rose-pine`, `tokyo-night`, `kanagawa`, `gruvbox` e `dracula`, e o tema MUST pintar a barra, os modais, o painel e a página de configurações. Na página, passar por um tema MUST mostrá-lo na hora, com amostras de cor, e gravá-lo em `[tui]`.
+
+#### Scenario: Trocar de tema
+- **WHEN** na seção Aparência o usuário passa o tema para `tokyo-night`
+- **THEN** a barra e a página mudam de cor na hora, e o `config.toml` tem `theme = "tokyo-night"`
+
+### Requirement: Seções do painel
+Cada seção do painel lateral (proteção, recursos, portas, rede e MCP) MUST começar por uma faixa com o título, um resumo e as setas `↑` e `↓`. Um clique no título MUST recolher ou expandir a seção, e um clique numa seta MUST movê-la uma posição. A ordem e as seções recolhidas MUST ser gravadas em `[tui]` (`panel-order` e `panel-collapsed`) e valer ao abrir a TUI; a ordem padrão e nenhuma seção recolhida MUST apagar as chaves.
+
+#### Scenario: Mudar a ordem
+- **WHEN** o usuário clica no `↓` da faixa de Proteção, a primeira
+- **THEN** Recursos passa ao topo, e o `config.toml` tem `panel-order = ["recursos", "protecao", "portas", "rede", "mcp"]`
+
+#### Scenario: Recolher
+- **WHEN** o usuário clica no título de Recursos e abre a TUI de novo
+- **THEN** a seção aparece recolhida, só com a faixa, e o `config.toml` tem `panel-collapsed = ["recursos"]`
