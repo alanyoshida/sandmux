@@ -651,6 +651,19 @@ fn vault_section() {
             }
         )
     );
+    if exists {
+        println!(
+            "  {}",
+            if sandmux::keyring::enabled(&host.data_dir) {
+                tr!(
+                    "Keyring: ligado (o daemon abre o cofre com a senha guardada nele)",
+                    "Keyring: on (the daemon opens the vault with the password stored in it)"
+                )
+            } else {
+                tr!("Keyring: desligado", "Keyring: off")
+            }
+        );
+    }
     if !exists && fakes > 0 {
         println!(
             "{}",

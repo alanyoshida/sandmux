@@ -171,7 +171,7 @@ Ctrl+b `i` in the TUI, or `sandmux chat "question"`, opens a chat tab with a mod
 
 ### Secret vault
 
-`sandmux vault init` creates a password-encrypted vault (Argon2id and XChaCha20-Poly1305) for API keys and tokens, outside the sandbox. The daemon starts with it locked; the TUI asks for the password when it opens, or `sandmux vault unlock` in the terminal. The `--pass-env` values go into the vault, and a session that uses them comes back on its own after a reboot, as soon as the vault is unlocked. `sandmux vault import` asks for the real values of the keys that the import replaced with fake ones. Details in [docs/en/vault.md](docs/en/vault.md).
+`sandmux vault init` creates a password-encrypted vault (Argon2id and XChaCha20-Poly1305) for API keys and tokens, outside the sandbox. The daemon starts with it locked; the TUI asks for the password when it opens, or `sandmux vault unlock` in the terminal. Optionally, `sandmux vault keyring on` stores the password in the system keyring, and the daemon opens the vault by itself. The `--pass-env` values go into the vault, and a session that uses them comes back on its own after a reboot, as soon as the vault is unlocked. `sandmux vault import` asks for the real values of the keys that the import replaced with fake ones. Details in [docs/en/vault.md](docs/en/vault.md).
 
 With the provider's key in the vault (`sandmux vault add openrouter --domain openrouter.ai`), an opencode or hermes session receives only a fake value; the gateway swaps the fake for the real one in the request to `openrouter.ai`, and the key never enters the sandbox. `--pass-env` is no longer needed for inference keys.
 

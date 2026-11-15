@@ -11,6 +11,7 @@ mod conn;
 mod db;
 mod docker;
 mod folders;
+mod keyring;
 mod net;
 mod secretwatch;
 mod session;
@@ -56,6 +57,10 @@ pub struct Shared {
     pub vault: Mutex<vault::VaultState>,
     /// Vigia das chaves reais nos HOMEs sintéticos.
     pub secrets: secretwatch::Watch,
+    /// Última tentativa de abrir o cofre pelo keyring.
+    pub keyring_last: Mutex<Option<std::time::Instant>>,
+    /// Última nota do keyring no registro.
+    pub keyring_note: Mutex<Option<String>>,
 }
 
 pub struct State {
@@ -346,6 +351,8 @@ fn run(history: usize) -> Result<()> {
         docker: docker::Engines::default(),
         vault: Mutex::new(vault::VaultState::new(&base_data)),
         secrets: secretwatch::Watch::default(),
+        keyring_last: Mutex::new(None),
+        keyring_note: Mutex::new(None),
     });
     eprintln!(
         "{}",
@@ -378,6 +385,10 @@ fn run(history: usize) -> Result<()> {
         .spawn(docker::stop_empty_slices);
     net::start_policy_watch(shared.clone());
     secretwatch::start(shared.clone());
+    // Antes de atender: o primeiro cliente já encontra o cofre aberto. Com
+    // o keyring desligado, não consulta nada; ligado, espera no máximo o
+    // limite do keyring.
+    keyring::try_unlock(&shared, true);
 
     // SAFETY: getuid não falha.
     let me = unsafe { libc::getuid() };

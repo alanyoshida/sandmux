@@ -171,7 +171,7 @@ Ctrl+b `i` na TUI, ou `sandmux chat "pergunta"`, abre uma aba de chat com um mod
 
 ### Cofre de segredos
 
-`sandmux vault init` cria um cofre cifrado com senha (Argon2id e XChaCha20-Poly1305) para chaves de API e tokens, fora do sandbox. O daemon sobe com ele trancado; a TUI pede a senha ao abrir, ou `sandmux vault unlock` no terminal. Os valores de `--pass-env` vão para o cofre, e uma sessão que os usa volta sozinha depois de um reboot, assim que o cofre é desbloqueado. `sandmux vault import` pede os valores reais das chaves que a importação trocou por falsas. Detalhes em [docs/vault.md](docs/vault.md).
+`sandmux vault init` cria um cofre cifrado com senha (Argon2id e XChaCha20-Poly1305) para chaves de API e tokens, fora do sandbox. O daemon sobe com ele trancado; a TUI pede a senha ao abrir, ou `sandmux vault unlock` no terminal. Opcionalmente, `sandmux vault keyring on` guarda a senha no keyring do sistema, e o daemon abre o cofre sozinho. Os valores de `--pass-env` vão para o cofre, e uma sessão que os usa volta sozinha depois de um reboot, assim que o cofre é desbloqueado. `sandmux vault import` pede os valores reais das chaves que a importação trocou por falsas. Detalhes em [docs/vault.md](docs/vault.md).
 
 Com a chave do provedor no cofre (`sandmux vault add openrouter --domain openrouter.ai`), uma sessão do opencode ou do hermes recebe só um valor falso; o gateway troca o falso pelo real no pedido ao `openrouter.ai`, e a chave nunca entra no sandbox. O `--pass-env` deixa de ser necessário para as chaves de inferência.
 

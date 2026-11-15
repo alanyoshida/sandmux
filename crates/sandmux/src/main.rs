@@ -926,6 +926,18 @@ const HELP_EN: &[(&str, &str)] = &[
     ("Apaga um segredo.", "Removes a secret."),
     ("Troca a senha do cofre.", "Changes the vault password."),
     (
+        "Senha do cofre no keyring do sistema, para o daemon abrir o cofre sozinho. Sem subcomando, mostra o estado.",
+        "Vault password in the system keyring, so the daemon opens the vault by itself. Without a subcommand, shows the state.",
+    ),
+    (
+        "Guarda a senha do cofre no keyring, depois de conferi-la.",
+        "Stores the vault password in the keyring, after checking it.",
+    ),
+    (
+        "Apaga a senha do cofre do keyring.",
+        "Deletes the vault password from the keyring.",
+    ),
+    (
         "Pede os valores reais das chaves que a importação trocou por valores falsos.",
         "Asks for the real values of the keys that the import replaced with fake values.",
     ),

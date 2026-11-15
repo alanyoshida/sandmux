@@ -212,6 +212,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 write_control(&mut stream, &reply)?;
             }
             Msg::VaultStatus => {
+                super::keyring::try_unlock(shared, false);
                 let v = shared.vault.lock().unwrap_or_else(|e| e.into_inner());
                 let reply = Msg::VaultInfo {
                     exists: v.exists(),
@@ -239,10 +240,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     .unwrap_or_else(|e| e.into_inner())
                     .unlock(&password);
                 if r.is_ok() {
-                    shared.secrets.kick();
-                    super::session::vault_unlocked(shared);
-                    let s = shared.clone();
-                    std::thread::spawn(move || super::net::recompile_all(&s));
+                    super::keyring::after_unlock(shared);
                 }
                 reply_unit(&mut stream, r)?;
             }
@@ -262,6 +260,18 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .passwd(&old, &new);
+                let r = r.and_then(|()| super::keyring::after_passwd(shared, &new));
+                reply_unit(&mut stream, r)?;
+            }
+            Msg::KeyringStatus => {
+                write_control(&mut stream, &super::keyring::status(shared))?;
+            }
+            Msg::KeyringOn { password } => {
+                let r = super::keyring::on(shared, &password);
+                reply_unit(&mut stream, r)?;
+            }
+            Msg::KeyringOff => {
+                let r = crate::keyring::clear(&shared.base.data_dir);
                 reply_unit(&mut stream, r)?;
             }
             Msg::VaultAdd {

@@ -18,8 +18,26 @@ The daemon starts at login with the vault locked. To unlock it:
 
 - **In the TUI:** when it opens, it shows a modal asking for the password, without showing what is typed. Enter unlocks; Esc leaves it locked.
 - **Outside it:** `sandmux vault unlock` asks for the password in the terminal, without echo.
+- **Through the system keyring:** optional; see [Keyring](#keyring).
 
 Without a terminal (in a script), the commands read the password and the values from standard input, one line per question.
+
+### Keyring
+
+The system keyring can hold the vault password, so the daemon opens the vault by itself. It works with any Secret Service keyring (`org.freedesktop.secrets`): gnome-keyring, KWallet, KeePassXC. It comes off.
+
+```bash
+sandmux vault keyring on    # asks for the password, checks it against the vault and stores it in the keyring
+sandmux vault keyring       # on or off, and, when on, whether the keyring answers
+sandmux vault keyring off   # deletes the password from the keyring
+```
+
+- **Only the password** goes to the keyring. The vault stays in the encrypted file, and the secrets never go through the keyring.
+- **When the daemon uses it:** at startup, before serving the first client, and when a client asks for the state of the locked vault (the TUI does this when it opens), at most every 5 seconds. Opening through the keyring has the effect of `vault unlock`: the tabs waiting for the vault come up. If the keyring does not answer in 3 seconds, does not have the password or has a password that no longer opens the vault, the vault stays locked and the password is asked for as before. The daemon log says why, without the password.
+- **When off,** sandmux does not query the keyring. The "on" marker is the `vault.keyring` file in the data folder, with nothing secret in it. In the keyring, the item has the service `sandmux` and the user equal to the data folder.
+- **Password change:** `sandmux vault passwd` rewrites the password in the keyring when it is on.
+- **The cost:** with the keyring on, any program of yours outside the sandbox can read the password while the session keyring is open. Without it, the password only exists in your head and in the daemon's memory. The sandbox does not reach D-Bus, so the agent cannot get to the keyring.
+- **Before login,** the user's keyring is closed, and the vault does not open by itself.
 
 ## Secrets
 
@@ -40,6 +58,7 @@ The Vault section of the settings page (Ctrl+b `e`) shows the vault state and th
 | `n` | Creates the vault (password and confirmation) |
 | `u` / `l` | Unlocks / locks |
 | `p` | Changes the password |
+| `k` | Turns the [keyring](#keyring) on, asking for the password, or off |
 | `a` | Adds a secret: name, value and comma-separated domains (`localhost` becomes `host.sandmux.internal`) |
 | `s` | Adds an SSH key: name, file, passphrase (empty if none) and servers |
 | `d` | Changes the domains of the chosen secret, without asking for the value again |
