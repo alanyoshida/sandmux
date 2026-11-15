@@ -578,6 +578,10 @@ pub enum Msg {
     },
     /// Apaga a senha do cofre do keyring.
     KeyringOff,
+    /// A pasta atual do processo em primeiro plano da sessão (protocolo 33).
+    Cwd {
+        id: u32,
+    },
     VaultPasswd {
         old: String,
         new: String,
@@ -718,6 +722,10 @@ pub enum Msg {
     },
     /// Resposta ao `KeyringStatus`: ligado pelo usuário, e se o keyring
     /// responde (com o erro, quando não).
+    /// Resposta ao `Cwd`: `None` quando não dá para ler.
+    CwdOf {
+        path: Option<PathBuf>,
+    },
     KeyringInfo {
         enabled: bool,
         available: bool,

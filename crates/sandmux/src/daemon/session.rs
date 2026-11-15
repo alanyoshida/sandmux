@@ -295,6 +295,18 @@ impl Session {
     }
 }
 
+/// A pasta atual do grupo de processos em primeiro plano do PTY, em geral o
+/// shell da aba. A pasta de trabalho entra no sandbox no mesmo caminho, e o
+/// caminho lido de fora é o mesmo que o processo vê.
+pub fn foreground_cwd(master: &File) -> Option<std::path::PathBuf> {
+    // SAFETY: tcgetpgrp sobre o descritor válido do mestre do PTY.
+    let pgid = unsafe { libc::tcgetpgrp(master.as_raw_fd()) };
+    if pgid <= 0 {
+        return None;
+    }
+    std::fs::read_link(format!("/proc/{pgid}/cwd")).ok()
+}
+
 pub fn set_winsize(fd: RawFd, size: Size) {
     let ws = libc::winsize {
         ws_row: size.rows.max(1),

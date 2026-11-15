@@ -1922,6 +1922,14 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
             let mut l = Vec::new();
             match c.stage {
                 CmdStage::Ask => {
+                    // A pasta que vai ao modelo, só para ver.
+                    l.push(Line::from(vec![
+                        Span::styled(
+                            format!("{:<10}", tr!("pasta", "folder")),
+                            Style::default().fg(muted),
+                        ),
+                        Span::styled(c.folder.clone(), Style::default().fg(muted)),
+                    ]));
                     l.push(bfield(
                         c.field == 0,
                         tr!("pergunta", "question"),

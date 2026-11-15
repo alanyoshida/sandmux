@@ -132,9 +132,11 @@ This is an exception to the screen history rule, which never goes to disk, and i
 Ctrl+b `g` opens the command modal over the active tab: a question like "compress the logs folder without the .tmp files" becomes a command written on the tab's line.
 
 1. **Question and model:** the model starts with `command-model` from `[assistant]` or, without it, with `chat-model`. Tab and the arrows work as in the chat modal.
-2. **Enter, or a click on the `⏎ Send` button, asks.** Only the question, the tab's work folder and the shell name go to the model (the user's `SHELL` when it is in the system folders; otherwise, `bash`), with a system prompt that asks for a single command, without explanation. Nothing from the tab's screen is sent, unless the **screen** field is on (see below). The TUI keeps responding while the modal shows "waiting for the model".
+2. **Enter, or a click on the `⏎ Send` button, asks.** Only the question, the folder the tab's shell is in (see below) and the shell name go to the model (the user's `SHELL` when it is in the system folders; otherwise, `bash`), with a system prompt that asks for a single command, without explanation. Nothing from the tab's screen is sent, unless the **screen** field is on (see below). The TUI keeps responding while the modal shows "waiting for the model".
 3. **The suggested command** appears in an editable field, without the code fences and without a leading `$ `. Tab goes back to the question.
 4. **Enter, or a click on the `⏎ Insert` button,** writes the command into the tab's input, without Enter: it only runs when the user presses Enter in the tab.
+
+**Folder:** the modal shows, on the `folder` line, the folder that goes to the model: the current folder of the tab's foreground process, usually the shell, read when the modal opens. After a `cd src/api`, `…/src/api` goes, not the folder the tab was opened in. If it cannot be read (a stopped tab, for example), the tab's work folder goes.
 
 **Screen field:** with Tab to it and Space, it turns on sending the tab's last 40 visible lines, without the scrolled history and without the trailing empty lines, along with the question. It is for asking for the command that fixes an error that just showed up. The field starts off every time the modal opens, and, when on, the modal warns that the screen goes to the provider.
 
