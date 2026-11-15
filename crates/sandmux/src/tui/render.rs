@@ -1980,6 +1980,11 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
             ];
             if let Some(q) = &n.question {
                 l.push(Line::raw(q.clone()));
+            } else if n.harness() == "chat" {
+                l.push(Line::raw(tr!(
+                    "chat: Enter abre o modal de chat, com o modelo e a mensagem (a pasta e o perfil não valem)",
+                    "chat: Enter opens the chat dialog, with the model and the message (folder and profile do not apply)"
+                )));
             } else {
                 l.push(Line::raw(tr!(
                     "Tab troca de campo · ← → harness · Enter cria · Esc cancela",

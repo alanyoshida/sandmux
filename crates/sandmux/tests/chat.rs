@@ -671,3 +671,24 @@ fn modais_do_assistente_seguem_o_tema() {
     t.write(b"\x02d");
     t.wait_exit();
 }
+
+#[test]
+fn chat_no_modal_de_nova_aba() {
+    let (e, _) = setup();
+    let mut cmd = e.cmd(&e.work, &[]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut t = Term::spawn_answering(cmd, 120, 30);
+    // Sem abas, o modal de nova aba abre sozinho, no shell; → chega ao chat.
+    t.wait_text("Nova aba");
+    t.write(b"\x1b[C");
+    t.wait_text("‹ chat ›");
+    t.wait_text("chat: Enter abre o modal de chat");
+    t.write(b"\r");
+    t.wait_text("≡ Chat");
+    t.wait_text("local/eco");
+    t.write(b"pela nova aba\r");
+    t.wait_text("eco: pela nova aba");
+    t.wait_text("chat:local/eco");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}

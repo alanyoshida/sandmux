@@ -277,7 +277,7 @@ An unknown theme, element or color makes the file invalid. The theme applies whe
 
 The modal asks for three things:
 
-- **harness:** with ← and →, among `opencode`, `hermes` and `shell`;
+- **harness:** with ← and →, among `opencode`, `hermes`, `claude`, `omp`, `shell` and `chat`. With `chat`, Enter opens the [chat dialog](chat.md#opening-a-conversation), with the model and the message, and folder and profile do not apply;
 - **work folder:** by default, the folder the TUI was opened from;
 - **named profile:** optional.
 
