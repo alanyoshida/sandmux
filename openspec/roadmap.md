@@ -403,6 +403,8 @@ Objetivo: fechar a última decisão em aberto e começar a lista "Depois da v1".
 
 Release `v0.1.2` (2026-11-15), com os changes 40 e 41. Decisão do usuário (2026-11-15): publicar agora; o próximo item depois da v1 é a tela da aba no modal de comando.
 
+Release `v0.1.3` (2026-11-15), com os changes 42, 43 e 44. Decisão do usuário (2026-11-15): publicar junto com os harnesses novos.
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.

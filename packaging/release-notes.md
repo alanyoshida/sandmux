@@ -1,17 +1,14 @@
-sandmux 0.1.2, antes da v1: shell dentro do sandbox de uma aba e proteção dos arquivos que o host executa.
+sandmux 0.1.3, antes da v1: Claude Code e oh-my-pi confinados, e a tela da aba como contexto do modal de comando.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Shell dentro da aba:** Ctrl+b `t` na TUI, ou `sandmux enter [id]`, abre um shell dentro do sandbox de uma aba viva. Ele vê exatamente o que o agente vê:
-  - os mesmos arquivos, a mesma rede, o mesmo Landlock e o mesmo seccomp;
-  - as mesmas regras de arquivos (um `.env` continua negado);
-  - os mesmos processos.
-- **Arquivos que o host executa:** a escrita em `~/.bashrc`, `~/.profile`, `~/.zshrc`, `~/.local/bin`, `~/.config/autostart`, `~/.config/systemd` e afins passa a ser recusada em `--rw`, na chave `rw`, na pasta de trabalho e nas pastas montadas ao vivo. Com escrita neles, o agente poderia plantar algo que roda fora do sandbox. `--ro` continua aceito.
-- **Teclas:** uma tecla escolhida em `[tui.keys]` vence a tecla padrão de outra ação. Assim uma ação nova não invalida a configuração.
+- **Claude Code:** o preset `claude` roda o Claude Code instalado no host (`~/.local/bin/claude`) dentro do sandbox, com o binário em somente leitura e a atualização automática desligada. O login da assinatura é feito dentro do sandbox, e os tokens dele ficam no cofre: o harness só vê valores falsos, e o gateway troca pelos reais no tráfego. A importação copia a configuração, sem o `.credentials.json`. Detalhes em [docs/claude.md](https://github.com/alanyoshida/sandmux/blob/main/docs/claude.md).
+- **oh-my-pi:** o preset `omp` roda o oh-my-pi do host (`~/.local/bin/omp`) dentro do sandbox. As chaves dos provedores vêm do cofre, como no opencode e no hermes. A importação copia `config.yml`, extensões, agentes, regras e skills de `~/.omp/agent`, sem o `agent.db` com as credenciais. Detalhes em [docs/omp.md](https://github.com/alanyoshida/sandmux/blob/main/docs/omp.md).
+- **Tela da aba no modal de comando:** no modal de comando da TUI, o campo **tela** (Tab até ele e Espaço) envia as últimas 40 linhas visíveis da aba junto com a pergunta, para pedir o comando que corrige um erro que acabou de aparecer. Começa desligado a cada abertura, e o modal avisa que a tela vai ao provedor.
 
-Depois de atualizar, rode `sandmux daemon restart`. As abas abertas por uma versão anterior precisam ser reiniciadas (Ctrl+b `r`) para aceitar o Ctrl+b `t`.
+Depois de atualizar, rode `sandmux daemon restart`.
 
 ## Instalar
 
