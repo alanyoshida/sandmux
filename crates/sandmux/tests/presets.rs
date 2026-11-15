@@ -390,3 +390,53 @@ fn omp_sem_os_bancos_e_com_a_chave_falsa() {
         stderr(&out)
     );
 }
+
+/// Atualizador falso: registra no HOME real como foi chamado.
+fn fake_updater(p: &Path, code: i32) {
+    exe(
+        p,
+        &format!(
+            "if [ \"$1\" = update ] || [ \"$1\" = upgrade ]; then echo \"$0 $*\" > \"$HOME/atualizou\"; exit {code}; fi; exec \"$@\""
+        ),
+    );
+}
+
+#[test]
+fn update_roda_o_atualizador_oficial_fora_do_sandbox() {
+    let e = Env::new();
+    let omp = e.home.join(".local/bin/omp");
+    fake_updater(&omp, 7);
+    let out = run(&e, &["update", "omp", "--", "--check"]);
+    assert_eq!(out.status.code(), Some(7), "{}", stderr(&out));
+    assert!(stderr(&out).contains("fora do sandbox"), "{}", stderr(&out));
+    let got = std::fs::read_to_string(e.home.join("atualizou")).unwrap();
+    assert_eq!(got.trim(), format!("{} update --check", omp.display()));
+
+    fake_updater(&e.home.join(".opencode/bin/opencode"), 0);
+    let out = run(&e, &["update", "opencode"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let got = std::fs::read_to_string(e.home.join("atualizou")).unwrap();
+    assert!(got.trim().ends_with("opencode upgrade"), "{got}");
+}
+
+#[test]
+fn update_recusa_sem_atualizador_e_sem_instalacao() {
+    let e = Env::new();
+    let out = run(&e, &["update", "shell"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("não tem atualizador"),
+        "{}",
+        stderr(&out)
+    );
+    let out = run(&e, &["update", "claude"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(
+        err.contains(".local/bin/claude") && err.contains("claude.ai/install.sh"),
+        "{err}"
+    );
+    let out = run(&e, &["update", "inexistente"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(!e.home.join("atualizou").exists());
+}

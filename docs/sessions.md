@@ -31,6 +31,7 @@ O `sandmuxd` é o processo de cada usuário que segura as sessões. Uma sessão 
 | `sandmux detach <id>` | Desanexa todos os terminais da sessão |
 | `sandmux kill <id>` | Pede ao harness que termine (SIGTERM e SIGHUP); depois de 5 segundos, encerra à força. A sessão sai da lista |
 | `sandmux restart <id>` | Relança uma sessão encerrada ou parada, com as mesmas opções e o mesmo perfil, resolvendo a configuração de novo. Os valores de `pass-env` vêm do terminal que pede |
+| `sandmux update <harness> [--yes] [-- args]` | Roda o atualizador oficial do harness no host, fora do sandbox ([detalhes](#atualizar-o-harness)) |
 | `sandmux daemon status` | Estado do daemon, sem iniciá-lo |
 | `sandmux daemon stop` | Encerra os harnesses e para o daemon. As sessões vivas voltam na próxima subida |
 | `sandmux daemon restart` | Para e sobe com o binário instalado; use depois de atualizar o sandmux |
@@ -66,6 +67,24 @@ Vários terminais podem se anexar à mesma sessão; todos recebem a saída e tod
 O shell conta nos tetos da aba alvo, e o que ele faz na rede e nos arquivos aparece nos registros dela.
 
 A aba de dentro termina quando o shell sai, ou quando o sandbox alvo termina. Depois de um reinício do daemon, ela volta parada, porque o sandbox alvo é outro; Ctrl+b `r` entra de novo. Uma aba de dentro não abre outra. Uma aba lançada por uma versão anterior do sandmux precisa ser reiniciada antes.
+
+## Atualizar o harness
+
+O código do harness entra no sandbox em somente leitura, e a atualização automática fica desligada lá dentro. `sandmux update <harness>` roda o atualizador oficial no host, fora do sandbox e fora do daemon, em primeiro plano, no seu terminal:
+
+| Harness | Atualizador |
+|---|---|
+| `opencode` | `~/.opencode/bin/opencode upgrade` |
+| `hermes` | `~/.local/bin/hermes update` |
+| `claude` | `~/.local/bin/claude update` |
+| `omp` | `~/.local/bin/omp update` |
+
+- O comando termina com o código de saída do atualizador.
+- Os argumentos depois de `--` vão para o atualizador: `sandmux update omp -- --check`.
+- O `shell` não tem atualizador. Um harness não instalado é recusado com a instrução de instalação, como no `run`: o sandmux não instala harness.
+- **Abas vivas:** se há abas vivas do harness, o comando as lista e pergunta antes, porque o atualizador troca arquivos que elas podem estar usando. `--yes` pula a pergunta; sem terminal e sem `--yes`, o comando recusa. Depois, ele diz quais abas reiniciar (Ctrl+b `r`, ou `sandmux restart <id>`) para usar a versão nova.
+
+O sandmux em si é atualizado pelo pacote ou pelo `install.sh` ([install.md](install.md)).
 
 ## Histórico e clipboard
 

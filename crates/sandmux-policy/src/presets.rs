@@ -342,9 +342,107 @@ pub fn plan(
     }
 }
 
+/// Atualizador oficial do harness, para rodar no host, fora do sandbox: o
+/// executável seguido do subcomando e dos argumentos extras. Recusa como o
+/// `run` recusaria (harness desconhecido ou não instalado) e recusa o preset
+/// sem atualizador.
+pub fn updater(name: &str, host: &Host, args: &[String]) -> Result<Vec<String>, PolicyError> {
+    // A mesma checagem de instalação do preset.
+    plan(name, host, &[], &[])?;
+    let (exe, sub) = match name {
+        "opencode" => (".opencode/bin/opencode", "upgrade"),
+        "hermes" => (".local/bin/hermes", "update"),
+        // O link, não a versão resolvida: o `claude update` troca o alvo.
+        "claude" => (".local/bin/claude", "update"),
+        "omp" => (".local/bin/omp", "update"),
+        other => return Err(PolicyError::NoUpdater(other.into())),
+    };
+    Ok(
+        [host.h(exe).to_string_lossy().into_owned(), sub.to_string()]
+            .into_iter()
+            .chain(args.iter().cloned())
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn host(home: &Path) -> Host {
+        Host {
+            home: home.into(),
+            uid: 1000,
+            gid: 1000,
+            user: "ana".into(),
+            group: "ana".into(),
+            user_shell: "/bin/bash".into(),
+            data_dir: home.join(".local/share/sandmux"),
+            config_dir: home.join(".config/sandmux"),
+            cwd: home.into(),
+            env: Default::default(),
+            sys_root: "/".into(),
+        }
+    }
+
+    fn exe(p: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn atualizador_de_cada_harness() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path();
+        let h = host(home);
+        exe(&home.join(".opencode/bin/opencode"));
+        std::fs::create_dir_all(home.join(".hermes/hermes-agent")).unwrap();
+        exe(&home.join(".local/bin/hermes"));
+        exe(&home.join(".local/share/claude/versions/1.0.0"));
+        std::os::unix::fs::symlink(
+            home.join(".local/share/claude/versions/1.0.0"),
+            home.join(".local/bin/claude"),
+        )
+        .unwrap();
+        exe(&home.join(".local/bin/omp"));
+        let s = |p: &str| home.join(p).to_string_lossy().into_owned();
+        assert_eq!(
+            updater("opencode", &h, &[]).unwrap(),
+            [s(".opencode/bin/opencode"), "upgrade".into()]
+        );
+        assert_eq!(
+            updater("hermes", &h, &[]).unwrap(),
+            [s(".local/bin/hermes"), "update".into()]
+        );
+        assert_eq!(
+            updater("claude", &h, &[]).unwrap(),
+            [s(".local/bin/claude"), "update".into()]
+        );
+        assert_eq!(
+            updater("omp", &h, &["--check".into()]).unwrap(),
+            [s(".local/bin/omp"), "update".into(), "--check".into()]
+        );
+        assert!(matches!(
+            updater("shell", &h, &[]),
+            Err(PolicyError::NoUpdater(_))
+        ));
+        assert!(matches!(
+            updater("x", &h, &[]),
+            Err(PolicyError::UnknownHarness(_))
+        ));
+    }
+
+    #[test]
+    fn atualizador_de_harness_ausente() {
+        let d = tempfile::tempdir().unwrap();
+        let h = host(d.path());
+        assert!(matches!(
+            updater("claude", &h, &[]),
+            Err(PolicyError::NotInstalled { .. })
+        ));
+    }
 
     #[test]
     fn ferramentas_pelos_dominios() {

@@ -10,7 +10,7 @@ sandmux run omp
 
 ## Instalação
 
-O sandmux usa o binário `~/.local/bin/omp` do host, em somente leitura: para atualizar, atualize fora do sandbox. Sem o binário, o `run` recusa e diz onde ele deveria estar. Na primeira execução, o oh-my-pi extrai a biblioteca nativa dele em `~/.omp/natives` do HOME sintético.
+O sandmux usa o binário `~/.local/bin/omp` do host, em somente leitura: para atualizar, rode `sandmux update omp`, que roda o `omp update` fora do sandbox ([sessions.md](sessions.md#atualizar-o-harness)). Sem o binário, o `run` recusa e diz onde ele deveria estar. Na primeira execução, o oh-my-pi extrai a biblioteca nativa dele em `~/.omp/natives` do HOME sintético.
 
 ## Chaves
 

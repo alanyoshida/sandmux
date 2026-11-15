@@ -85,6 +85,7 @@ sandmux setup
 | `sandmux daemon status`, `stop`, `restart`, `disable` | Daemon state; stop (live sessions come back on the next start); restart with the installed binary; stop and remove the systemd unit |
 | `sandmux config show`, `list`, `set`, `unset`, `add`, `remove` | Shows the effective policy with the origin of each value, lists the profiles and changes the configuration file (`~/.config/sandmux/config.toml`) |
 | `sandmux import <harness>` | Copies the harness's existing configuration into the synthetic HOME, replacing the secrets with fake values. Run again, it copies only what is new; `--overwrite` replaces |
+| `sandmux update <harness>` | Runs the harness's official updater on the host, outside the sandbox, and says which tabs to restart ([docs/en/sessions.md](docs/en/sessions.md#updating-the-harness)) |
 | `sandmux doctor --fix` | Moves into the vault the real keys written inside the sandbox (opencode's "Connect provider", for example), leaving fake values in their place |
 | `sandmux doctor` | Shows whether the machine has the required support and what is missing |
 
@@ -234,7 +235,7 @@ The development order, the decisions and the accepted risks are in the [roadmap]
 - Kernel 6.12 or newer (Landlock with abstract socket scoping), with unprivileged user namespaces and `/dev/net/tun`. overlayfs in a user namespace is optional: without it, the caches start empty and the toolchains stay read-only.
 - Tested and supported distros: Ubuntu 26.04, Debian 13, current Fedora and Arch (the last three in containers, with the test machine's kernel).
 - Binaries published only for `x86_64`; on another architecture, build with `cargo install`.
-- The harnesses (opencode, hermes) are installed by you, on the host. sandmux does not install or update harnesses.
+- The harnesses (opencode, hermes, Claude Code, oh-my-pi) are installed by you, on the host. sandmux does not install harnesses; `sandmux update <harness>` runs the official updater outside the sandbox.
 
 ## Architecture
 

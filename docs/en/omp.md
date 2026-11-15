@@ -10,7 +10,7 @@ sandmux run omp
 
 ## Installation
 
-sandmux uses the host's `~/.local/bin/omp` binary, read-only: to update, update it outside the sandbox. Without the binary, `run` refuses and says where it should be. On the first run, oh-my-pi extracts its native library into `~/.omp/natives` in the synthetic HOME.
+sandmux uses the host's `~/.local/bin/omp` binary, read-only: to update, run `sandmux update omp`, which runs `omp update` outside the sandbox ([sessions.md](sessions.md#updating-the-harness)). Without the binary, `run` refuses and says where it should be. On the first run, oh-my-pi extracts its native library into `~/.omp/natives` in the synthetic HOME.
 
 ## Keys
 

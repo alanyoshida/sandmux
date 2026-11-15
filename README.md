@@ -85,6 +85,7 @@ O `setup` instala o perfil do AppArmor do lançador quando a distro restringe us
 | `sandmux daemon status`, `stop`, `restart`, `disable` | Estado do daemon; parar (as sessões vivas voltam na próxima subida); reiniciar com o binário instalado; parar e remover a unidade systemd |
 | `sandmux config show`, `list`, `set`, `unset`, `add`, `remove` | Mostra a política efetiva com a origem de cada valor, lista os perfis e altera o arquivo de configuração (`~/.config/sandmux/config.toml`) |
 | `sandmux import <harness>` | Copia a configuração existente do harness para o HOME sintético, trocando os segredos por valores falsos. Rodado de novo, copia só o que é novo; `--overwrite` substitui |
+| `sandmux update <harness>` | Roda o atualizador oficial do harness no host, fora do sandbox, e diz quais abas reiniciar ([docs/sessions.md](docs/sessions.md#atualizar-o-harness)) |
 | `sandmux doctor --fix` | Leva para o cofre as chaves reais gravadas dentro do sandbox (o "Connect provider" do opencode, por exemplo), deixando valores falsos no lugar |
 | `sandmux doctor` | Mostra se a máquina tem o suporte necessário e o que falta |
 
@@ -234,7 +235,7 @@ A ordem de desenvolvimento, as decisões e os riscos aceitos estão no [roadmap]
 - Kernel 6.12 ou mais novo (Landlock com escopo de sockets abstratos), com user namespaces sem privilégio e o `/dev/net/tun`. O overlayfs em user namespace é opcional: sem ele, os caches começam vazios e as toolchains ficam em somente leitura.
 - Distros testadas e suportadas: Ubuntu 26.04, Debian 13, Fedora atual e Arch (as três últimas em contêineres, com o kernel da máquina de teste).
 - Binários publicados só para `x86_64`; em outra arquitetura, compile com `cargo install`.
-- Os harnesses (opencode, hermes) são instalados por você, no host. O sandmux não instala nem atualiza harness.
+- Os harnesses (opencode, hermes, Claude Code, oh-my-pi) são instalados por você, no host. O sandmux não instala harness; `sandmux update <harness>` roda o atualizador oficial fora do sandbox.
 
 ## Arquitetura
 
