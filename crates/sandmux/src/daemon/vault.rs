@@ -22,6 +22,17 @@ fn err(e: VaultError) -> String {
     e.to_string()
 }
 
+/// Falso de um token capturado: o prefixo do real até o último `-` dos 15
+/// primeiros caracteres (como `sk-ant-oat01-`), mais `sandmux` e letras
+/// aleatórias, para passar pelas conferências de formato do cliente.
+pub fn capture_fake(real: &str) -> String {
+    let head: String = real.chars().take(15).collect();
+    let prefix = head.rfind('-').map(|i| &head[..=i]).unwrap_or("");
+    let rand = sandmux_vault::new_fake();
+    let tail: String = rand.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    format!("{prefix}sandmux{tail}")
+}
+
 fn locked() -> &'static str {
     tr!(
         "o cofre está trancado; rode `sandmux vault unlock`",
@@ -401,6 +412,49 @@ impl VaultState {
         self.save()
     }
 
+    /// Guarda um token capturado numa resposta de login (`role`: `access`,
+    /// `refresh` ou `api-key`) como `claude:<role>`, e devolve o falso dele:
+    /// o mesmo de antes quando o segredo já existe, senão um novo com o
+    /// prefixo do real.
+    pub fn capture(&mut self, role: &str, real: &str) -> Result<String, String> {
+        let domains: &[&str] = match role {
+            "access" => &["api.anthropic.com", "claude.ai", "platform.claude.com"],
+            "refresh" => &["platform.claude.com"],
+            "api-key" => &["api.anthropic.com"],
+            other => {
+                return Err(trf!(
+                    "papel de token desconhecido: {other}",
+                    "unknown token role: {other}"
+                ));
+            }
+        };
+        let name = format!("claude:{role}");
+        let o = self.opened()?;
+        let fake = match o.contents.secrets.iter_mut().find(|s| s.name == name) {
+            Some(s) => {
+                s.value = real.to_string();
+                s.fake.clone().unwrap_or_default()
+            }
+            None => String::new(),
+        };
+        let fake = if fake.is_empty() {
+            let fake = capture_fake(real);
+            o.put(Secret {
+                name,
+                value: real.to_string(),
+                domains: domains.iter().map(|d| d.to_string()).collect(),
+                fake: Some(fake.clone()),
+                tools: Vec::new(),
+                kind: String::new(),
+            });
+            fake
+        } else {
+            fake
+        };
+        self.save()?;
+        Ok(fake)
+    }
+
     pub fn list(&mut self) -> Result<Vec<VaultEntry>, String> {
         Ok(self
             .opened()?
@@ -634,5 +688,28 @@ mod tests {
         assert!(v.ssh_keys(&names(&["*"])).is_empty());
         assert!(v.ssh_servers(&names(&["*"])).is_empty());
         assert_eq!(v.unknown_ssh(&names(&["outra"])), None);
+    }
+
+    #[test]
+    fn tokens_capturados_com_falso_estavel() {
+        let d = tempfile::tempdir().unwrap();
+        let mut v = VaultState::new(d.path());
+        // Trancado: recusa.
+        assert!(v.capture("access", "sk-ant-oat01-REAL1").is_err());
+        v.init("s").unwrap();
+        let f1 = v.capture("access", "sk-ant-oat01-REAL1").unwrap();
+        assert!(f1.starts_with("sk-ant-oat01-sandmux"), "{f1}");
+        assert!(!f1.contains("REAL"));
+        // A renovação troca o valor e mantém o falso.
+        let f2 = v.capture("access", "sk-ant-oat01-REAL2").unwrap();
+        assert_eq!(f1, f2);
+        let inj = v.injections();
+        let a = inj.iter().find(|i| i.name == "claude:access").unwrap();
+        assert_eq!(a.value, "sk-ant-oat01-REAL2");
+        assert!(a.domains.iter().any(|d| d == "api.anthropic.com"));
+        let r = v.capture("refresh", "sk-ant-ort01-R").unwrap();
+        assert!(r.starts_with("sk-ant-ort01-sandmux"));
+        assert!(v.capture("outro", "x").is_err());
+        assert!(capture_fake("semhifen").starts_with("sandmux"));
     }
 }

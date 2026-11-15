@@ -121,6 +121,8 @@ pub const COMMON: &[(&str, &[&str])] = &[
 pub const INFERENCE: &[&str] = &[
     "openrouter.ai",
     "api.anthropic.com",
+    // Renovação do login por assinatura do Claude Code.
+    "platform.claude.com",
     "api.openai.com",
     "generativelanguage.googleapis.com",
     "api.deepseek.com",

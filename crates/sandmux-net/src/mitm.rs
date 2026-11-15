@@ -170,6 +170,202 @@ pub struct Ctx {
     pub port: u16,
     /// Segredos deste domínio, só na memória desta conexão.
     pub injections: Vec<sandmux_proto::msg::Injection>,
+    /// Acesso ao cofre do daemon, para guardar os tokens capturados.
+    pub vault: Option<sandmux_spec::VaultAccess>,
+    /// Etiqueta do lançamento.
+    pub tag: String,
+}
+
+/// Os tokens reais de uma resposta de login: (papel, valor) dos campos de
+/// primeiro nível conhecidos.
+pub fn captured_tokens(body: &[u8]) -> Vec<(String, String)> {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    sandmux_spec::net::CAPTURE_FIELDS
+        .iter()
+        .filter_map(|(field, role)| {
+            v.get(*field)
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| (role.to_string(), s.to_string()))
+        })
+        .collect()
+}
+
+/// A resposta com cada token real trocado pelo falso dele.
+pub fn with_fakes(body: &[u8], reals: &[(String, String)], fakes: &[String]) -> Option<Vec<u8>> {
+    let mut text = std::str::from_utf8(body).ok()?.to_string();
+    for ((_, real), fake) in reals.iter().zip(fakes) {
+        text = text.replace(real.as_str(), fake);
+    }
+    Some(text.into_bytes())
+}
+
+/// O corpo do pedido com os falsos dos segredos do host trocados pelos
+/// reais; e o nome do primeiro segredo usado.
+pub fn body_with_reals(
+    body: &[u8],
+    list: &[sandmux_proto::msg::Injection],
+) -> (Vec<u8>, Option<String>) {
+    let Ok(text) = std::str::from_utf8(body) else {
+        return (body.to_vec(), None);
+    };
+    let mut out = text.to_string();
+    let mut used = None;
+    for i in list {
+        if !i.fake.is_empty() && out.contains(&i.fake) {
+            out = out.replace(&i.fake, &i.value);
+            used.get_or_insert_with(|| i.name.clone());
+        }
+    }
+    (out.into_bytes(), used)
+}
+
+fn full(b: impl Into<Bytes>) -> Boxed {
+    http_body_util::Full::new(b.into())
+        .map_err(|n| match n {})
+        .boxed()
+}
+
+/// Resposta do gateway ao sandbox.
+fn refuse(status: u16, msg: &str) -> hyper::Response<Boxed> {
+    let mut r = hyper::Response::new(full(format!("{msg}\n")));
+    *r.status_mut() = hyper::StatusCode::from_u16(status).unwrap_or(hyper::StatusCode::BAD_GATEWAY);
+    r
+}
+
+/// Um pedido a um endpoint de login: o corpo vai com os reais, e a resposta
+/// volta com os tokens trocados pelos falsos, guardados no cofre. Sem cofre
+/// que aceite, a resposta é recusada: o token real nunca chega ao sandbox.
+async fn capture_exchange(
+    req: hyper::Request<Incoming>,
+    sender: Arc<tokio::sync::Mutex<hyper::client::conn::http1::SendRequest<Boxed>>>,
+    ctx: Arc<Ctx>,
+) -> Result<hyper::Response<Boxed>, hyper::Error> {
+    use hyper::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, TRANSFER_ENCODING};
+    let t0 = Instant::now();
+    let method = req.method().to_string();
+    let path = path_of(req.uri());
+    let log = |status: u16, up: u64, down: u64, secret: Option<&str>| {
+        ctx.log.write_http(
+            ctx.proto,
+            &ctx.domain,
+            &ctx.ip,
+            ctx.port,
+            up,
+            down,
+            t0.elapsed().as_millis() as u64,
+            crate::log::Http {
+                method: &method,
+                path: &path,
+                status,
+                secret,
+            },
+        );
+    };
+    let (mut parts, body) = req.into_parts();
+    let Ok(collected) = http_body_util::Limited::new(body, 64 * 1024)
+        .collect()
+        .await
+    else {
+        log(413, 0, 0, None);
+        return Ok(refuse(
+            413,
+            sandmux_spec::tr!(
+                "sandmux: pedido de login grande demais",
+                "sandmux: login request too large"
+            ),
+        ));
+    };
+    let raw = collected.to_bytes();
+    let (sent, body_secret) = body_with_reals(&raw, &ctx.injections);
+    parts.headers.remove(ACCEPT_ENCODING);
+    parts.headers.remove(TRANSFER_ENCODING);
+    parts.headers.insert(CONTENT_LENGTH, sent.len().into());
+    let up = sent.len() as u64;
+    let mut out = hyper::Request::from_parts(parts, full(sent));
+    let secret = rewrite(&mut out, &ctx.injections).or(body_secret);
+    let resp = {
+        let mut s = sender.lock().await;
+        match s.ready().await {
+            Ok(()) => s.send_request(out).await,
+            Err(e) => Err(e),
+        }
+    };
+    let Ok(resp) = resp else {
+        log(502, up, 0, secret.as_deref());
+        return Ok(refuse(502, "sandmux: o destino falhou"));
+    };
+    let status = resp.status();
+    let (mut rparts, rbody) = resp.into_parts();
+    let Ok(rcollected) = http_body_util::Limited::new(rbody, 1 << 20).collect().await else {
+        log(502, up, 0, secret.as_deref());
+        return Ok(refuse(
+            502,
+            sandmux_spec::tr!(
+                "sandmux: resposta de login grande demais",
+                "sandmux: login answer too large"
+            ),
+        ));
+    };
+    let rbytes = rcollected.to_bytes();
+    let encoded = rparts
+        .headers
+        .get(CONTENT_ENCODING)
+        .is_some_and(|v| !v.as_bytes().eq_ignore_ascii_case(b"identity"));
+    let body = if !status.is_success() {
+        rbytes.to_vec()
+    } else if encoded {
+        // Sem ler, não dá para tirar os tokens: não passa nada.
+        log(502, up, rbytes.len() as u64, secret.as_deref());
+        return Ok(refuse(
+            502,
+            sandmux_spec::tr!(
+                "sandmux: resposta de login comprimida recusada",
+                "sandmux: compressed login answer refused"
+            ),
+        ));
+    } else {
+        let found = captured_tokens(&rbytes);
+        if found.is_empty() {
+            rbytes.to_vec()
+        } else {
+            let Some(access) = ctx.vault.clone() else {
+                log(502, up, rbytes.len() as u64, secret.as_deref());
+                return Ok(refuse(
+                    502,
+                    sandmux_spec::tr!(
+                        "sandmux: sem cofre para guardar o token de login",
+                        "sandmux: no vault to store the login token"
+                    ),
+                ));
+            };
+            let tag = ctx.tag.clone();
+            let items = found.clone();
+            let fakes =
+                tokio::task::spawn_blocking(move || crate::inject::capture(&access, &tag, items))
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+            match fakes.ok().and_then(|f| with_fakes(&rbytes, &found, &f)) {
+                Some(b) => b,
+                None => {
+                    log(502, up, rbytes.len() as u64, secret.as_deref());
+                    return Ok(refuse(
+                        502,
+                        sandmux_spec::tr!(
+                            "sandmux: o cofre não guardou o token de login; desbloqueie o cofre (sandmux vault unlock) e entre de novo",
+                            "sandmux: the vault did not store the login token; unlock the vault (sandmux vault unlock) and log in again"
+                        ),
+                    ));
+                }
+            }
+        }
+    };
+    rparts.headers.remove(TRANSFER_ENCODING);
+    rparts.headers.insert(CONTENT_LENGTH, body.len().into());
+    log(status.as_u16(), up, body.len() as u64, secret.as_deref());
+    Ok(hyper::Response::from_parts(rparts, full(body)))
 }
 
 /// Abre TLS até o destino, verificando o certificado pelo SNI.
@@ -230,6 +426,11 @@ where
         let sender = sender.clone();
         let ctx = ctx.clone();
         async move {
+            if req.method() == hyper::Method::POST
+                && sandmux_spec::net::is_capture(&ctx.domain, &path_of(req.uri()))
+            {
+                return capture_exchange(req, sender, ctx).await;
+            }
             let t0 = Instant::now();
             let method = req.method().to_string();
             let path = path_of(req.uri());
@@ -421,5 +622,183 @@ mod tests {
         p.read_to_string(&mut s).await.unwrap();
         assert_eq!(s, "ola mundo");
         assert_eq!(p.read.load(Ordering::Relaxed), 9);
+    }
+
+    fn inj(name: &str, fake: &str, value: &str) -> sandmux_proto::msg::Injection {
+        sandmux_proto::msg::Injection {
+            name: name.into(),
+            domains: vec!["platform.claude.com".into()],
+            fake: fake.into(),
+            value: value.into(),
+        }
+    }
+
+    #[test]
+    fn tokens_da_resposta_e_troca() {
+        let body = br#"{"token_type":"Bearer","access_token":"sk-ant-oat01-REALA","refresh_token":"sk-ant-ort01-REALR","expires_in":28800}"#;
+        let found = captured_tokens(body);
+        assert_eq!(
+            found,
+            vec![
+                ("access".to_string(), "sk-ant-oat01-REALA".to_string()),
+                ("refresh".to_string(), "sk-ant-ort01-REALR".to_string())
+            ]
+        );
+        let out = with_fakes(body, &found, &["FA".into(), "FR".into()]).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(
+            s.contains("\"FA\"") && s.contains("\"FR\"") && !s.contains("REAL"),
+            "{s}"
+        );
+        assert!(captured_tokens(b"nao e json").is_empty());
+        // O pedido de renovação leva o real no corpo.
+        let (b, used) = body_with_reals(
+            br#"{"grant_type":"refresh_token","refresh_token":"FR"}"#,
+            &[inj("claude:refresh", "FR", "sk-ant-ort01-REALR")],
+        );
+        assert!(String::from_utf8(b).unwrap().contains("REALR"));
+        assert_eq!(used.as_deref(), Some("claude:refresh"));
+    }
+
+    /// Um servidor de login falso e o proxy no meio: sem cofre, a resposta
+    /// com tokens é recusada e o real não chega ao sandbox; com o "daemon",
+    /// chegam os falsos, e o destino recebe o real do corpo.
+    async fn exchange(vault: Option<sandmux_spec::VaultAccess>) -> (String, String) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut guest, guest_side) = tokio::io::duplex(1 << 16);
+        let (up_side, mut upstream) = tokio::io::duplex(1 << 16);
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(Ctx {
+            log: Arc::new(crate::log::Log::new(dir.path(), "t", dir.path())),
+            proto: "https",
+            domain: "platform.claude.com".into(),
+            ip: "1.2.3.4".into(),
+            port: 443,
+            injections: vec![inj("claude:refresh", "FR", "sk-ant-ort01-REALR")],
+            vault,
+            tag: "t".into(),
+        });
+        tokio::spawn(serve_http(guest_side, up_side, ctx));
+        // O "destino": lê o pedido e responde com tokens novos.
+        let server = tokio::spawn(async move {
+            let mut buf = vec![0u8; 8192];
+            let mut got = Vec::new();
+            loop {
+                let n = upstream.read(&mut buf).await.unwrap();
+                got.extend_from_slice(&buf[..n]);
+                let s = String::from_utf8_lossy(&got).to_string();
+                if let Some(i) = s.find("\r\n\r\n") {
+                    let len: usize = s[..i]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if got.len() >= i + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let body =
+                r#"{"access_token":"sk-ant-oat01-NEWA","refresh_token":"sk-ant-ort01-NEWR"}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            upstream.write_all(resp.as_bytes()).await.unwrap();
+            String::from_utf8_lossy(&got).to_string()
+        });
+        let req_body = r#"{"grant_type":"refresh_token","refresh_token":"FR"}"#;
+        let req = format!(
+            "POST /v1/oauth/token HTTP/1.1\r\nhost: platform.claude.com\r\ncontent-type: application/json\r\naccept-encoding: gzip\r\ncontent-length: {}\r\n\r\n{req_body}",
+            req_body.len()
+        );
+        guest.write_all(req.as_bytes()).await.unwrap();
+        let mut out = Vec::new();
+        let mut buf = vec![0u8; 8192];
+        loop {
+            let n = tokio::time::timeout(std::time::Duration::from_secs(5), guest.read(&mut buf))
+                .await
+                .unwrap()
+                .unwrap();
+            out.extend_from_slice(&buf[..n]);
+            let s = String::from_utf8_lossy(&out);
+            if let Some(i) = s.find("\r\n\r\n") {
+                let len: usize = s[..i]
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse().unwrap())
+                    })
+                    .unwrap_or(0);
+                if out.len() >= i + 4 + len {
+                    break;
+                }
+            }
+        }
+        let seen = server.await.unwrap();
+        (String::from_utf8_lossy(&out).to_string(), seen)
+    }
+
+    #[tokio::test]
+    async fn sem_cofre_o_token_nao_chega() {
+        let (resp, seen) = exchange(None).await;
+        assert!(seen.contains("sk-ant-ort01-REALR"), "{seen}");
+        assert!(
+            !seen.to_ascii_lowercase().contains("accept-encoding"),
+            "{seen}"
+        );
+        assert!(resp.starts_with("HTTP/1.1 502"), "{resp}");
+        assert!(!resp.contains("NEWA") && !resp.contains("NEWR"), "{resp}");
+    }
+
+    #[tokio::test]
+    async fn com_cofre_chegam_os_falsos() {
+        use sandmux_proto::{Frame, Msg, read_frame, write_control};
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("d.sock");
+        let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        // O "daemon": saúda e devolve um falso por item.
+        let daemon = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let _ = read_frame(&mut s).unwrap();
+            write_control(
+                &mut s,
+                &Msg::Welcome {
+                    protocol: sandmux_proto::PROTOCOL,
+                    version: "t".into(),
+                    pid: 1,
+                    start_mode: "t".into(),
+                },
+            )
+            .unwrap();
+            let Some(Frame::Control(Msg::VaultCapture { items, .. })) = read_frame(&mut s).unwrap()
+            else {
+                panic!("sem pedido de captura");
+            };
+            let fakes = items.iter().map(|(r, _)| format!("FAKE-{r}")).collect();
+            write_control(&mut s, &Msg::Captured { fakes }).unwrap();
+            items
+        });
+        let access = sandmux_spec::VaultAccess {
+            socket: sock,
+            data_dir: dir.path().into(),
+            config_dir: dir.path().into(),
+        };
+        let (resp, _) = exchange(Some(access)).await;
+        assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+        assert!(
+            resp.contains("FAKE-access") && resp.contains("FAKE-refresh"),
+            "{resp}"
+        );
+        assert!(!resp.contains("NEWA") && !resp.contains("NEWR"), "{resp}");
+        let items = daemon.join().unwrap();
+        assert_eq!(
+            items[0],
+            ("access".to_string(), "sk-ant-oat01-NEWA".to_string())
+        );
     }
 }

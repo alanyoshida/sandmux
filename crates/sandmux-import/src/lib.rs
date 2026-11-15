@@ -33,6 +33,8 @@ fn state_roots(harness: &str) -> &'static [&'static str] {
     match harness {
         "opencode" => &[".config/opencode", ".local/share/opencode"],
         "hermes" => &[".hermes"],
+        "claude" => &[".claude", ".claude.json"],
+        "omp" => &[".omp"],
         _ => &[],
     }
 }
@@ -77,9 +79,35 @@ fn table(harness: &str) -> Option<&'static [Item]> {
         Item::Dir(".hermes/plugins"),
         Item::Dir(".hermes/hooks"),
     ];
+    // Sem `.credentials.json` (o login é feito no sandmux, e o token fica no
+    // cofre), sem conversas, histórico e caches.
+    const CLAUDE: &[Item] = &[
+        Item::File(".claude.json"),
+        Item::File(".claude/settings.json"),
+        Item::File(".claude/CLAUDE.md"),
+        Item::Dir(".claude/agents"),
+        Item::Dir(".claude/commands"),
+        Item::Dir(".claude/skills"),
+        Item::Dir(".claude/hooks"),
+        Item::Dir(".claude/plugins"),
+        Item::Dir(".claude/output-styles"),
+    ];
+    // Sem o `agent.db` (credenciais) nem os outros bancos, sessões e caches.
+    const OMP: &[Item] = &[
+        Item::File(".omp/agent/config.yml"),
+        Item::Dir(".omp/agent/extensions"),
+        Item::Dir(".omp/agent/agents"),
+        Item::Dir(".omp/agent/rules"),
+        Item::Dir(".omp/agent/managed-skills"),
+        Item::Dir(".omp/agent/skills"),
+        Item::Dir(".omp/agent/commands"),
+        Item::Dir(".omp/agent/prompts"),
+    ];
     match harness {
         "opencode" => Some(OPENCODE),
+        "omp" => Some(OMP),
         "hermes" => Some(HERMES),
+        "claude" => Some(CLAUDE),
         _ => None,
     }
 }

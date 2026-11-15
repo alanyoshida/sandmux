@@ -500,6 +500,31 @@ pub fn strictest(list: &[Option<NetPolicy>]) -> NetPolicy {
     }
 }
 
+/// Endpoints de login cujas respostas trazem tokens reais: o gateway os
+/// guarda no cofre e entrega falsos ao sandbox (host e caminho exatos, POST).
+pub const CAPTURE_ENDPOINTS: &[(&str, &str)] = &[
+    ("platform.claude.com", "/v1/oauth/token"),
+    ("api.anthropic.com", "/api/oauth/claude_cli/create_api_key"),
+];
+
+/// Campos de primeiro nível da resposta que levam token, e o papel de cada
+/// um no cofre (`claude:<papel>`).
+pub const CAPTURE_FIELDS: &[(&str, &str)] = &[
+    ("access_token", "access"),
+    ("refresh_token", "refresh"),
+    ("raw_key", "api-key"),
+];
+
+/// Hosts que a aba do Claude Code sempre decifra, para a captura.
+pub const CLAUDE_HOSTS: &[&str] = &["platform.claude.com", "api.anthropic.com"];
+
+/// O endpoint de captura de `host` e `path`, se for um.
+pub fn is_capture(host: &str, path: &str) -> bool {
+    CAPTURE_ENDPOINTS
+        .iter()
+        .any(|(h, p)| host.eq_ignore_ascii_case(h) && path == *p)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

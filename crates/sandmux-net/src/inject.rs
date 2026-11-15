@@ -43,6 +43,51 @@ pub fn fetch(access: &VaultAccess, tag: &str) -> Vec<Injection> {
     }
 }
 
+/// Manda ao daemon os tokens reais capturados numa resposta de login (papel
+/// e valor) e recebe os falsos, na mesma ordem. Erro quando o daemon não
+/// guarda (cofre trancado, sem cofre, daemon fora).
+pub fn capture(
+    access: &VaultAccess,
+    tag: &str,
+    items: Vec<(String, String)>,
+) -> Result<Vec<String>, String> {
+    let mut s = UnixStream::connect(&access.socket).map_err(|e| e.to_string())?;
+    let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = s.set_write_timeout(Some(Duration::from_secs(5)));
+    let hello = Msg::Hello {
+        protocol: PROTOCOL,
+        version: env!("CARGO_PKG_VERSION").into(),
+        data_dir: access.data_dir.clone(),
+        config_dir: access.config_dir.clone(),
+        lang: String::new(),
+    };
+    write_control(&mut s, &hello).map_err(|e| e.to_string())?;
+    if !matches!(
+        read_frame(&mut s),
+        Ok(Some(Frame::Control(Msg::Welcome { .. })))
+    ) {
+        return Err(sandmux_spec::tr!("o daemon não aceitou", "the daemon refused").into());
+    }
+    let n = items.len();
+    write_control(
+        &mut s,
+        &Msg::VaultCapture {
+            tag: tag.into(),
+            items,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    match read_frame(&mut s) {
+        Ok(Some(Frame::Control(Msg::Captured { fakes }))) if fakes.len() == n => Ok(fakes),
+        Ok(Some(Frame::Control(Msg::Error { message }))) => Err(message),
+        _ => Err(sandmux_spec::tr!(
+            "resposta inesperada do daemon",
+            "unexpected answer from the daemon"
+        )
+        .into()),
+    }
+}
+
 /// Só os segredos cujo domínio dono casa com `host`.
 pub fn for_host(list: Vec<Injection>, host: &str) -> Vec<Injection> {
     list.into_iter()

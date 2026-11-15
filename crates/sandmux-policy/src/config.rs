@@ -2252,6 +2252,17 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
         project: project.map(|(p, _)| p.clone()),
     };
     eff.net_rules = net_rules(&layers);
+    // A aba do Claude Code decifra os hosts da Anthropic: o login e a
+    // renovação passam pela captura dos tokens.
+    if req.harness == "claude" {
+        for h in sandmux_spec::net::CLAUDE_HOSTS {
+            if let Ok(p) = h.parse::<Pattern>()
+                && !eff.decrypt.contains(&p)
+            {
+                eff.decrypt.push(p);
+            }
+        }
+    }
     for (l, _) in &layers {
         for p in &l.decrypt {
             if !eff.decrypt.contains(p) {

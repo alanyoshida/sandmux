@@ -103,6 +103,8 @@ fn serve(
                             ip: ip.clone(),
                             port,
                             injections,
+                            vault: None,
+                            tag: String::new(),
                         });
                         crate::mitm::serve_http(c, up, ctx).await;
                         let ms = t0.elapsed().as_millis() as u64;

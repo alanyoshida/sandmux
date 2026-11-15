@@ -657,7 +657,7 @@ fn config_show_e_add_das_regras_de_rede() {
         "{show}"
     );
     assert!(
-        show.contains("exfiltração 50/51, inferência 8/8, comuns: npm"),
+        show.contains("exfiltração 50/51, inferência 9/9, comuns: npm"),
         "{show}"
     );
 }
