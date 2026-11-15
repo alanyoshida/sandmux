@@ -130,9 +130,11 @@ Esta é uma exceção à regra do histórico de tela, que nunca vai para o disco
 Ctrl+b `g` abre, sobre a aba ativa, o modal de comando: uma pergunta como "comprimir a pasta logs sem os .tmp" vira um comando escrito na linha da aba.
 
 1. **Pergunta e modelo:** o modelo começa com `command-model` de `[assistant]` ou, sem ele, com `chat-model`. Tab e as setas funcionam como no modal de chat.
-2. **Enter, ou o clique no botão `⏎ Enviar`, pergunta.** Vão ao modelo só a pergunta, a pasta de trabalho da aba e o nome do shell (o `SHELL` do usuário quando está nas pastas de sistema; senão, `bash`), com um texto de sistema que pede um único comando, sem explicação. Nada da tela da aba é enviado, a não ser que o campo **tela** esteja ligado (veja abaixo). A TUI continua respondendo enquanto o modal mostra "esperando o modelo".
+2. **Enter, ou o clique no botão `⏎ Enviar`, pergunta.** Vão ao modelo só a pergunta, a pasta em que o shell da aba está (veja abaixo) e o nome do shell (o `SHELL` do usuário quando está nas pastas de sistema; senão, `bash`), com um texto de sistema que pede um único comando, sem explicação. Nada da tela da aba é enviado, a não ser que o campo **tela** esteja ligado (veja abaixo). A TUI continua respondendo enquanto o modal mostra "esperando o modelo".
 3. **O comando sugerido** aparece num campo editável, sem as cercas de código e sem um `$ ` no começo. Tab volta à pergunta.
 4. **Enter, ou o clique no botão `⏎ Inserir`,** escreve o comando na entrada da aba, sem Enter: ele só roda quando o usuário apertar Enter na aba.
+
+**Pasta:** o modal mostra, na linha `pasta`, a pasta que vai ao modelo: a pasta atual do processo em primeiro plano da aba, em geral o shell, lida quando o modal abre. Depois de um `cd src/api`, vai `…/src/api`, e não a pasta em que a aba foi aberta. Se ela não puder ser lida (a aba parada, por exemplo), vai a pasta de trabalho da aba.
 
 **Campo tela:** com Tab até ele e Espaço, liga o envio das últimas 40 linhas visíveis da aba, sem o histórico rolado e sem as linhas vazias do fim, junto com a pergunta. Serve para pedir o comando que corrige um erro que acabou de aparecer. O campo começa desligado a cada abertura do modal, e, ligado, o modal avisa que a tela vai ao provedor.
 

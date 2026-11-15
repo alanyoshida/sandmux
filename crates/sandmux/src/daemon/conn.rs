@@ -312,6 +312,15 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 }
                 write_control(&mut stream, &Msg::Ok)?;
             }
+            Msg::Cwd { id } => {
+                let master = shared
+                    .lock()
+                    .sessions
+                    .get(&id)
+                    .and_then(|s| s.live.as_ref().map(|l| l.master.clone()));
+                let path = master.and_then(|m| super::session::foreground_cwd(&m));
+                write_control(&mut stream, &Msg::CwdOf { path })?;
+            }
             Msg::KeyringStatus => {
                 write_control(&mut stream, &super::keyring::status(shared))?;
             }

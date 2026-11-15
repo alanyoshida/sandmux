@@ -278,6 +278,9 @@ pub struct CommandModal {
     pub token: u64,
     /// Aba sob o modal.
     pub tab: u32,
+    /// A pasta que vai ao modelo: a atual do processo da aba, ou a de
+    /// trabalho (protocolo 33).
+    pub folder: String,
 }
 
 /// O que espera o desbloqueio do cofre.
@@ -1340,6 +1343,16 @@ impl App {
         if let Ok(c) = Config::load(&sandmux_policy::config::path(&self.host)) {
             self.assistant = c.assistant;
         }
+        // A pasta em que o shell da aba está agora; sem ela, a de trabalho.
+        let folder = match self.call(&Msg::Cwd { id: tab }) {
+            Ok(Msg::CwdOf { path: Some(p) }) => p.display().to_string(),
+            _ => self
+                .tabs
+                .iter()
+                .find(|t| t.id == tab)
+                .map(|t| t.workdir.display().to_string())
+                .unwrap_or_default(),
+        };
         self.modal = Some(Modal::Command(Box::new(CommandModal {
             stage: CmdStage::Ask,
             field: 0,
@@ -1351,6 +1364,7 @@ impl App {
             token: 0,
             tab,
             screen: false,
+            folder,
         })));
     }
 
@@ -1359,11 +1373,12 @@ impl App {
         let Some(Modal::Command(c)) = &self.modal else {
             return;
         };
-        let (question, model, tab, screen) = (
+        let (question, model, tab, screen, folder) = (
             c.question.trim().to_string(),
             c.model.trim().to_string(),
             c.tab,
             c.screen,
+            c.folder.clone(),
         );
         let fail = |app: &mut App, e: String| {
             if let Some(Modal::Command(c)) = &mut app.modal {
@@ -1396,12 +1411,6 @@ impl App {
             }
             Ok(crate::chatcmd::Check::Ok) => {}
         }
-        let folder = self
-            .tabs
-            .iter()
-            .find(|t| t.id == tab)
-            .map(|t| t.workdir.display().to_string())
-            .unwrap_or_default();
         let shell = presets::system_shell(&self.host)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

@@ -736,3 +736,31 @@ fn aba_de_chat_em_cartoes_com_o_tema() {
     t.write(b"\x02d");
     t.wait_exit();
 }
+
+#[test]
+fn modal_de_comando_manda_a_pasta_atual_do_shell() {
+    let (e, _, bodies) = setup_with_bodies();
+    let mut cmd = e.cmd(&e.work, &["run", "shell"]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut t = Term::spawn_answering(cmd, 120, 30);
+    t.write(b"mkdir -p sub/dir && cd sub/dir && echo ok-$((1+1))\r");
+    t.wait_text("ok-2");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+
+    let mut cmd = e.cmd(&e.work, &[]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut t = Term::spawn_answering(cmd, 120, 30);
+    t.wait_text(&tab(1, "shell:app"));
+    t.write(b"\x02g");
+    // O modal mostra a pasta em que o shell está, não a da aba.
+    let sub = e.work.join("sub/dir").display().to_string();
+    t.wait_text(&sub);
+    t.write(b"listar\r");
+    t.wait_text("Inserir");
+    let body = bodies.lock().unwrap().last().cloned().unwrap();
+    assert!(body.contains(&sub), "{body}");
+    t.write(b"\x1b");
+    t.write(b"\x02d");
+    t.wait_exit();
+}
