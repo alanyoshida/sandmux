@@ -429,6 +429,8 @@ Release `v0.1.9` (2026-11-15), com o change 51. Decisão do usuário (2026-11-15
 
 Release `v0.1.10` (2026-11-15), com os changes 52 e 53. Decisão do usuário (2026-11-15): publicar depois de testar um build local instalado por cima da versão anterior.
 
+Release `v0.1.11` (2026-11-15), com o change 54. Decisão do usuário (2026-11-15): publicar logo depois do histórico de tela em disco.
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.

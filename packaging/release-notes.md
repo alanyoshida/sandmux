@@ -1,19 +1,18 @@
-sandmux 0.1.10, antes da v1: aba de chat em cartões, com o tema.
+sandmux 0.1.11, antes da v1: histórico de tela cifrado em disco.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Aba de chat em cartões:** a aba de chat com o modelo segue as cores do tema ativo.
-  - Cada mensagem fica num cartão de borda arredondada: as suas na segunda cor de destaque, as do modelo na cor de destaque, com o tempo de resposta no canto.
-  - O campo da mensagem é um cartão com as dicas no rodapé e o botão `⏎ Enviar` em dois tons, como nos modais.
-  - O seletor de `/modelo` também segue o tema.
-  - As respostas guardam o tempo que levaram; as conversas de antes abrem sem ele.
-- **Chat no modal de nova aba:** o modal de nova aba (Ctrl+b `c`) passa a oferecer `chat` depois dos harnesses. Enter abre o modal de chat, com o modelo e a mensagem.
+- **Histórico de tela em disco, opcional e cifrado:** com `screen-history = true` em `[global]`, ou o item Histórico em disco na seção Geral das configurações, a saída das abas sobrevive ao reinício do daemon e a uma queda.
+  - Vai para o disco a cada 2 segundos, cifrada com XChaCha20-Poly1305 e uma chave aleatória guardada no cofre. Sem cofre, nada é gravado.
+  - Com o cofre trancado, a saída espera na memória (até 2 MiB por aba) e é gravada quando o cofre abre.
+  - A aba relançada recebe o histórico de volta, com a linha "sandmux: a aba voltou". Com o cofre trancado, ele volta no desbloqueio.
+  - Fechar a aba apaga o arquivo dela, e desligar a opção apaga todos.
 
-Detalhes em [docs/chat.md](https://github.com/alanyoshida/sandmux/blob/main/docs/chat.md).
+  Vem desligado: a saída pode mostrar segredos que o agente imprimiu, e por padrão nada dela vai para o disco. Detalhes em [docs/sessions.md](https://github.com/alanyoshida/sandmux/blob/main/docs/sessions.md#histórico-em-disco).
 
-Depois de atualizar, rode `sandmux daemon restart`: a aba de chat é desenhada pelo programa que o daemon lança.
+Depois de atualizar, rode `sandmux daemon restart`.
 
 ## Instalar
 
