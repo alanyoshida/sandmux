@@ -1106,6 +1106,21 @@ fn process_alive(pid: u32) -> bool {
     }
 }
 
+/// A trava de instância do daemon está livre (nenhum daemon a segura).
+fn instance_lock_free() -> bool {
+    use std::os::fd::AsRawFd;
+    let Ok(f) = std::fs::File::open(paths::lock_path()) else {
+        return true;
+    };
+    // SAFETY: flock sobre um descritor válido; o desbloqueio vem logo depois.
+    let ok = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+    if ok {
+        // SAFETY: idem.
+        unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_UN) };
+    }
+    ok
+}
+
 /// O PID do daemon pela trava, quando o processo é mesmo um `sandmuxd`.
 fn locked_daemon_pid() -> Option<u32> {
     let pid: u32 = std::fs::read_to_string(paths::lock_path())
@@ -1148,7 +1163,9 @@ fn stop_daemon() -> Result<bool> {
         }
     };
     let deadline = Instant::now() + Duration::from_secs(20);
-    while paths::socket_path().exists() || process_alive(pid) {
+    // O processo aparece como zumbi antes de as outras threads dele soltarem
+    // os arquivos; a trava de instância livre é o sinal de que ele acabou.
+    while paths::socket_path().exists() || process_alive(pid) || !instance_lock_free() {
         if Instant::now() >= deadline {
             bail!(trf!(
                 "o daemon (PID {pid}) não parou",

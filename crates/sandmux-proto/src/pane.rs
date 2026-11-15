@@ -106,6 +106,19 @@ impl Pane {
         }
     }
 
+    /// O painel que fica com o espaço quando a folha `id` sai: a primeira
+    /// folha da outra parte da divisão dela.
+    pub fn sibling(&self, id: u32) -> Option<u32> {
+        match self {
+            Pane::Leaf { .. } => None,
+            Pane::Split { a, b, .. } => match (a.as_ref(), b.as_ref()) {
+                (Pane::Leaf { id: x }, other) if *x == id => Some(other.first()),
+                (other, Pane::Leaf { id: x }) if *x == id => Some(other.first()),
+                _ => a.sibling(id).or_else(|| b.sibling(id)),
+            },
+        }
+    }
+
     /// Tira a folha `id`, colapsando a divisão dela. `None` quando não sobra
     /// nada.
     pub fn remove(self, id: u32) -> Option<Pane> {
@@ -338,6 +351,11 @@ mod tests {
                 h: 24
             }
         );
+        // Quem fica com o espaço: a outra parte da divisão de cada folha.
+        assert_eq!(p.sibling(3), Some(2));
+        assert_eq!(p.sibling(2), Some(3));
+        assert_eq!(p.sibling(1), Some(2));
+        assert_eq!(p.sibling(9), None);
         // Tirar a folha 2 colapsa a divisão de baixo.
         let p = p.remove(2).unwrap();
         assert_eq!(p.leaves(), vec![1, 3]);

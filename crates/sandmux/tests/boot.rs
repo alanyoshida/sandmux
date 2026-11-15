@@ -59,7 +59,12 @@ fn run(e: &Env, b: &Boot, args: &[&str]) -> Output {
 
 fn ls(e: &Env, b: &Boot) -> String {
     let o = run(e, b, &["ls"]);
-    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(
+        o.status.success(),
+        "{}\n--- registro do daemon:\n{}",
+        stderr(&o),
+        std::fs::read_to_string(e.state.join("sandmux/sandmuxd.log")).unwrap_or_default()
+    );
     stdout(&o)
 }
 

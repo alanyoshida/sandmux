@@ -920,6 +920,8 @@ impl App {
         let Some(id) = self.tabs.get(i).map(|t| t.id) else {
             return;
         };
+        // Um painel: quem fica com o espaço recebe o foco, na mesma aba.
+        let stay = self.layout_of(id).and_then(|l| l.sibling(id));
         match self.call(&Msg::Kill { id }) {
             Ok(_) => {
                 if matches!(self.modal, Some(Modal::Ended(m, _)) if m == id) {
@@ -933,6 +935,24 @@ impl App {
                     self.active = self.active.saturating_sub(1);
                 }
                 self.active = self.active.min(self.tabs.len().saturating_sub(1));
+                // O layout sem o painel fechado, já, sem esperar o `sync`.
+                let layouts = std::mem::take(&mut self.layouts);
+                self.layouts = layouts
+                    .into_iter()
+                    .filter_map(|l| {
+                        if l.contains(id) {
+                            l.remove(id)
+                        } else {
+                            Some(l)
+                        }
+                    })
+                    .filter(|l| l.leaves().len() > 1)
+                    .collect();
+                if let Some(j) = stay.and_then(|s| self.index_of(s)) {
+                    self.zoom = false;
+                    self.set_active(j);
+                }
+                self.resize_all();
                 self.say(trf!("aba {id} fechada", "tab {id} closed"));
             }
             Err(e) => self.say(trf!("fechar: {e:#}", "close: {e:#}")),
