@@ -347,3 +347,58 @@ fn shell_dentro_do_sandbox_da_aba() {
         "{ls}"
     );
 }
+
+#[test]
+fn update_com_aba_viva_pede_yes_e_avisa_o_reinicio() {
+    let e = Env::new();
+    let oc = e.home.join(".opencode/bin/opencode");
+    std::fs::create_dir_all(oc.parent().unwrap()).unwrap();
+    std::fs::write(
+        &oc,
+        "#!/bin/sh\nif [ \"$1\" = upgrade ]; then echo \"$*\" > \"$HOME/atualizou\"; exit 0; fi\nexec \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&oc, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let mut t = term(
+        &e,
+        &[
+            "run",
+            "opencode",
+            "--no-import",
+            "--",
+            "sh",
+            "-c",
+            "echo pronta-$((2+2)); sleep 300",
+        ],
+        100,
+        30,
+    );
+    t.wait_text("pronta-4");
+    t.write(b"\x02d");
+    t.wait_exit();
+
+    // Sem terminal e sem --yes: recusa e não roda o atualizador.
+    let out = e.run(&e.work, &["update", "opencode"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("abas vivas") && err.contains("1 (") && err.contains("--yes"),
+        "{err}"
+    );
+    assert!(!e.home.join("atualizou").exists());
+
+    let out = e.run(&e.work, &["update", "opencode", "--yes"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("reinicie as abas 1"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(
+        std::fs::read_to_string(e.home.join("atualizou"))
+            .unwrap()
+            .trim(),
+        "upgrade"
+    );
+    let _ = e.run(&e.work, &["kill", "1"]);
+}

@@ -86,6 +86,9 @@ enum Cmd {
     Daemon(DaemonCmd),
     /// Copia a configuração existente de um harness para o HOME sintético.
     Import(ImportArgs),
+    /// Atualiza um harness no host, fora do sandbox, com o atualizador oficial
+    /// dele. O sandmux em si é atualizado pelo pacote ou pelo install.sh.
+    Update(UpdateArgs),
     /// Mostra e altera o arquivo de configuração (perfis e ajustes).
     #[command(subcommand)]
     Config(configcmd::ConfigCmd),
@@ -323,8 +326,20 @@ struct RunArgs {
 }
 
 #[derive(clap::Args)]
+struct UpdateArgs {
+    /// Harness: opencode, hermes, claude ou omp.
+    harness: String,
+    /// Não pergunta quando há abas vivas do harness.
+    #[arg(long)]
+    yes: bool,
+    /// Argumentos repassados ao atualizador (depois de `--`).
+    #[arg(last = true, value_name = "ARGUMENTOS")]
+    args: Vec<String>,
+}
+
+#[derive(clap::Args)]
 struct ImportArgs {
-    /// Harness: opencode ou hermes.
+    /// Harness: opencode, hermes, claude ou omp.
     harness: String,
     /// Substitui os arquivos que já existem no HOME sintético.
     #[arg(long)]
@@ -517,6 +532,10 @@ const HELP_EN: &[(&str, &str)] = &[
     (
         "Copia a configuração existente de um harness para o HOME sintético.",
         "Copies a harness's existing configuration into the synthetic HOME.",
+    ),
+    (
+        "Atualiza um harness no host, fora do sandbox, com o atualizador oficial dele. O sandmux em si é atualizado pelo pacote ou pelo install.sh.",
+        "Updates a harness on the host, outside the sandbox, with its official updater. sandmux itself is updated by the package or by install.sh.",
     ),
     (
         "Mostra e altera o arquivo de configuração (perfis e ajustes).",
@@ -773,10 +792,18 @@ const HELP_EN: &[(&str, &str)] = &[
         "Argumentos repassados ao harness (depois de `--`).",
         "Arguments passed to the harness (after `--`).",
     ),
-    // ImportArgs
+    // ImportArgs e UpdateArgs
     (
-        "Harness: opencode ou hermes.",
-        "Harness: opencode or hermes.",
+        "Harness: opencode, hermes, claude ou omp.",
+        "Harness: opencode, hermes, claude or omp.",
+    ),
+    (
+        "Não pergunta quando há abas vivas do harness.",
+        "Does not ask when the harness has live tabs.",
+    ),
+    (
+        "Argumentos repassados ao atualizador (depois de `--`).",
+        "Arguments passed to the updater (after `--`).",
     ),
     (
         "Substitui os arquivos que já existem no HOME sintético.",
@@ -953,6 +980,7 @@ fn dispatch(cmd: Cmd) -> Result<i32> {
             DaemonCmd::Disable => sessions::daemon_disable(),
         },
         Cmd::Import(a) => cmd_import(a).map(|_| 0),
+        Cmd::Update(a) => sessions::update(a.harness, a.yes, a.args),
         Cmd::Config(c) => configcmd::run(c),
         Cmd::Vault(c) => vaultcmd::run(c),
         Cmd::Chat { model, texto } => chatcmd::run(model, texto),

@@ -33,6 +33,7 @@
 | `sandmux detach <id>` | Detaches all terminals from the session |
 | `sandmux kill <id>` | Asks the harness to end (SIGTERM and SIGHUP); after 5 seconds, it ends it by force. The session leaves the list |
 | `sandmux restart <id>` | Relaunches an ended or stopped session, with the same options and the same profile, resolving the configuration again. The `pass-env` values come from the terminal that asks |
+| `sandmux update <harness> [--yes] [-- args]` | Runs the harness's official updater on the host, outside the sandbox ([details](#updating-the-harness)) |
 | `sandmux daemon status` | State of the daemon, without starting it |
 | `sandmux daemon stop` | Ends the harnesses and stops the daemon. Alive sessions come back at the next start |
 | `sandmux daemon restart` | Stops and starts with the installed binary; use it after updating sandmux |
@@ -68,6 +69,24 @@ Several terminals can attach to the same session; all of them get the output and
 The shell counts against the target tab's caps, and what it does on the network and with files shows up in that tab's logs.
 
 The inside tab ends when the shell exits, or when the target sandbox ends. After a daemon restart, it comes back stopped, because the target sandbox is a different one; Ctrl+b `r` enters again. An inside tab does not open another one. A tab launched by an older sandmux version must be restarted first.
+
+## Updating the harness
+
+The harness code goes into the sandbox read-only, and auto-update is turned off in there. `sandmux update <harness>` runs the official updater on the host, outside the sandbox and outside the daemon, in the foreground, in your terminal:
+
+| Harness | Updater |
+|---|---|
+| `opencode` | `~/.opencode/bin/opencode upgrade` |
+| `hermes` | `~/.local/bin/hermes update` |
+| `claude` | `~/.local/bin/claude update` |
+| `omp` | `~/.local/bin/omp update` |
+
+- The command exits with the updater's exit code.
+- The arguments after `--` go to the updater: `sandmux update omp -- --check`.
+- `shell` has no updater. A harness that is not installed is refused with the installation instructions, as in `run`: sandmux does not install harnesses.
+- **Live tabs:** if the harness has live tabs, the command lists them and asks first, because the updater replaces files they may be using. `--yes` skips the question; without a terminal and without `--yes`, the command refuses. Afterwards, it says which tabs to restart (Ctrl+b `r`, or `sandmux restart <id>`) to use the new version.
+
+sandmux itself is updated by the package or by `install.sh` ([install.md](install.md)).
 
 ## History and clipboard
 

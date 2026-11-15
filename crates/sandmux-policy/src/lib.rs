@@ -28,6 +28,8 @@ pub use layout::Layout;
 #[derive(Debug)]
 pub enum PolicyError {
     UnknownHarness(String),
+    /// O preset não tem atualizador (`sandmux update`).
+    NoUpdater(String),
     NotInstalled {
         harness: String,
         searched: Vec<PathBuf>,
@@ -52,6 +54,10 @@ impl std::fmt::Display for PolicyError {
                 "harness desconhecido: {h}. Presets disponíveis: {}",
                 "unknown harness: {h}. Available presets: {}",
                 presets::PRESETS.join(", ")
+            ),
+            PolicyError::NoUpdater(h) => trf!(
+                "{h} não tem atualizador. Harnesses com atualizador: opencode, hermes, claude, omp",
+                "{h} has no updater. Harnesses with an updater: opencode, hermes, claude, omp"
             ),
             PolicyError::NotInstalled {
                 harness,

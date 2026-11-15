@@ -89,6 +89,103 @@ fn of_max(cur: String, max: Option<String>) -> String {
     )
 }
 
+/// `sandmux update`: roda o atualizador oficial do harness no host, fora do
+/// sandbox e fora do daemon, em primeiro plano, com o terminal do usuário.
+pub fn update(harness: String, yes: bool, args: Vec<String>) -> Result<i32> {
+    use std::io::{BufRead, Write};
+    let host = sandmux_policy::Host::detect()?;
+    let cmd = sandmux_policy::presets::updater(&harness, &host, &args)?;
+    // Só pergunta ao daemon que já está rodando: sem daemon, não há abas.
+    let live: Vec<SessionInfo> = match Conn::connect()? {
+        Some(mut c) => list(&mut c)?
+            .into_iter()
+            .filter(|s| {
+                s.harness == harness
+                    && matches!(
+                        s.state,
+                        sandmux_proto::SessionState::Viva
+                            | sandmux_proto::SessionState::Reiniciando { .. }
+                    )
+            })
+            .collect(),
+        None => vec![],
+    };
+    let tabs = live
+        .iter()
+        .map(|s| format!("{} ({})", s.id, s.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if !live.is_empty() {
+        eprintln!(
+            "{}",
+            trf!(
+                "sandmux: abas vivas do {harness}: {tabs}. O atualizador troca arquivos que elas podem estar usando.",
+                "sandmux: live {harness} tabs: {tabs}. The updater replaces files they may be using."
+            )
+        );
+        if !yes {
+            if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+                bail!(trf!(
+                    "há abas vivas do {harness}; sem terminal, rode de novo com --yes para atualizar mesmo assim",
+                    "there are live {harness} tabs; without a terminal, run again with --yes to update anyway"
+                ));
+            }
+            eprint!(
+                "{} {} ",
+                tr!("Atualizar mesmo assim?", "Update anyway?"),
+                tr!("[s/N]", "[y/N]")
+            );
+            std::io::stderr().flush().ok();
+            let mut line = String::new();
+            std::io::stdin().lock().read_line(&mut line)?;
+            let t = line.trim().to_lowercase();
+            if !matches!(t.as_str(), "s" | "sim" | "y" | "yes") {
+                eprintln!(
+                    "{}",
+                    tr!(
+                        "sandmux: nada foi atualizado",
+                        "sandmux: nothing was updated"
+                    )
+                );
+                return Ok(1);
+            }
+        }
+    }
+    eprintln!(
+        "{}",
+        trf!(
+            "sandmux: rodando fora do sandbox: {}",
+            "sandmux: running outside the sandbox: {}",
+            cmd.join(" ")
+        )
+    );
+    let status = std::process::Command::new(&cmd[0])
+        .args(&cmd[1..])
+        .status()
+        .map_err(|e| anyhow!("{}: {e}", cmd[0]))?;
+    let code = {
+        use std::os::unix::process::ExitStatusExt;
+        status
+            .code()
+            .unwrap_or_else(|| 128 + status.signal().unwrap_or(1))
+    };
+    if status.success() && !live.is_empty() {
+        let ids = live
+            .iter()
+            .map(|s| s.id.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "{}",
+            trf!(
+                "sandmux: reinicie as abas {ids} para usar a versão nova (Ctrl+b r na TUI, ou sandmux restart <id>)",
+                "sandmux: restart tabs {ids} to use the new version (Ctrl+b r in the TUI, or sandmux restart <id>)"
+            )
+        );
+    }
+    Ok(code)
+}
+
 pub fn ls() -> Result<i32> {
     let mut conn = client::connect_or_start()?;
     let sessions = list(&mut conn)?;

@@ -16,7 +16,7 @@ O sandmux usa a instalação nativa do host: o link `~/.local/bin/claude`, que a
 curl -fsSL https://claude.ai/install.sh | bash
 ```
 
-A instalação entra em somente leitura, e a atualização automática fica desligada (`DISABLE_AUTOUPDATER=1`). Para atualizar, rode `claude update` fora do sandbox.
+A instalação entra em somente leitura, e a atualização automática fica desligada (`DISABLE_AUTOUPDATER=1`). Para atualizar, rode `sandmux update claude`, que roda o `claude update` fora do sandbox ([sessions.md](sessions.md#atualizar-o-harness)).
 
 ## Importação
 
