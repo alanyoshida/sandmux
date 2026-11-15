@@ -287,6 +287,18 @@ pub fn chat_env(host: &Host, keys: &[(String, String)]) -> Vec<(String, String)>
         PROVIDERS_ENV.to_string(),
         serde_json::to_string(&providers).unwrap_or_default(),
     ));
+    // As cores do tema ativo: a configuração não entra no sandbox.
+    let theme: std::collections::BTreeMap<&str, String> = cfg
+        .tui
+        .theme
+        .colors
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.to_text()))
+        .collect();
+    env.push((
+        crate::chat::THEME_ENV.to_string(),
+        serde_json::to_string(&theme).unwrap_or_default(),
+    ));
     env
 }
 

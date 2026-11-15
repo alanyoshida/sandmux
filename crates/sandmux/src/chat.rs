@@ -35,7 +35,15 @@ pub enum Papel {
 pub struct Mensagem {
     pub papel: Papel,
     pub texto: String,
+    /// Tempo da resposta do modelo, em milissegundos (as conversas antigas
+    /// não têm).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms: Option<u64>,
 }
+
+/// Variável com as cores do tema ativo para a aba de chat, um objeto JSON de
+/// elemento para cor (`#rrggbb`, um índice ou um nome).
+pub const THEME_ENV: &str = "SANDMUX_THEME";
 
 /// A conversa de uma aba de chat.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +67,7 @@ impl Conversa {
                 .map(|t| Mensagem {
                     papel: Papel::User,
                     texto: t.to_string(),
+                    ms: None,
                 })
                 .into_iter()
                 .collect(),
@@ -687,6 +696,7 @@ mod tests {
         c.mensagens.push(Mensagem {
             papel: Papel::Assistant,
             texto: "olá".into(),
+            ms: Some(1200),
         });
         c.save(d.path()).unwrap();
         let l = Conversa::load(d.path()).unwrap().unwrap();
@@ -864,5 +874,24 @@ mod tests {
             complete_blocking(&t, &msgs, true, &AtomicBool::new(false), &mut |_| {}).unwrap_err();
         assert!(e.contains("401") && e.contains("chave inválida"), "{e}");
         h.join().unwrap();
+    }
+
+    #[test]
+    fn conversa_antiga_sem_tempo_abre() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join(FILE),
+            "{\"versao\":1,\"modelo\":\"a/b\",\"mensagens\":[{\"papel\":\"user\",\"texto\":\"oi\"},{\"papel\":\"assistant\",\"texto\":\"olá\"}]}",
+        )
+        .unwrap();
+        let c = Conversa::load(d.path()).unwrap().unwrap();
+        assert_eq!(c.mensagens[1].ms, None);
+        // O tempo, quando há, vai para o arquivo; sem ele, a chave não aparece.
+        let mut c = c;
+        c.mensagens[1].ms = Some(1200);
+        c.save(d.path()).unwrap();
+        let text = std::fs::read_to_string(d.path().join(FILE)).unwrap();
+        assert!(text.contains("\"ms\": 1200"), "{text}");
+        assert_eq!(text.matches("\"ms\"").count(), 1, "{text}");
     }
 }

@@ -410,6 +410,15 @@ pub fn color_formats() -> &'static str {
 }
 
 impl ThemeColor {
+    /// O texto que [`ThemeColor::parse`] lê de volta.
+    pub fn to_text(&self) -> String {
+        match self {
+            ThemeColor::Default => "default".into(),
+            ThemeColor::Indexed(i) => i.to_string(),
+            ThemeColor::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        }
+    }
+
     pub fn parse(s: &str) -> Option<ThemeColor> {
         let s = s.trim();
         if s == "default" {
