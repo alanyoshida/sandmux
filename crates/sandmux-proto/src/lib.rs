@@ -7,6 +7,7 @@
 
 pub mod frame;
 pub mod msg;
+pub mod pane;
 pub mod term;
 
 pub use frame::{Decoder, Frame, MAX_FRAME, read_frame, write_control, write_data};
@@ -14,7 +15,7 @@ pub use msg::{LaunchOptions, Msg, SessionInfo, SessionState, Size};
 
 /// Versão do protocolo. Muda a cada alteração incompatível; cliente e daemon
 /// exigem igualdade exata.
-pub const PROTOCOL: u32 = 31;
+pub const PROTOCOL: u32 = 32;
 
 /// Erros de leitura e escrita do protocolo.
 #[derive(Debug, thiserror::Error)]

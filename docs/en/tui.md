@@ -56,6 +56,10 @@ All of them start with the prefix key, Ctrl+b by default:
 | `w` | Tab list (arrows, Enter, Esc) |
 | `(` / `)` | Previous / next tab group ([groups](#tab-groups)) |
 | `G` | Group list: switch, create, rename, move the tab |
+| `%` / `"` | Splits the active pane side by side / top and bottom ([panes](#panes)) |
+| ← → ↑ ↓ | Focus on the neighboring pane |
+| `z` | Zooms the active pane to the whole tab, or goes back to the layout |
+| `<` / `>` | Shrinks / grows the active pane |
 | `,` | Rename the tab |
 | `r` | Restart the ended or stopped tab |
 | `x` | Close the tab (ends the session, with confirmation) |
@@ -89,7 +93,7 @@ new = "t"
 close = "q"
 ```
 
-- **Actions:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings`, `enter`, `group-prev`, `group-next` and `groups`.
+- **Actions:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings`, `enter`, `group-prev`, `group-next`, `groups`, `split-side`, `split-stack`, `zoom`, `pane-grow` and `pane-shrink`. The arrows after the prefix, which move the focus between panes, are fixed.
 - **Keys:** a visible character that is not a digit, because digits lead to the tabs.
 - **Two actions on the same key** chosen in `[tui.keys]` make the file invalid. A chosen key that is another action's default wins, and the other action is left without a key (it shows as `—` in the help and stays in the menu). This way a new action in a new version never makes the file invalid.
 - **`[tui]` is not a policy layer:** it changes nothing in the sandboxes.
@@ -319,6 +323,20 @@ Input goes raw to the active tab: the harness gets the keys as in a direct termi
 With a modal open, the TUI turns those modes off to understand the keys.
 
 Focus events are the exception: the TUI always turns them on, for the [desktop notifications](#desktop-notifications). The tab only gets them when its harness asked for them.
+
+## Panes
+
+A tab can have several panes, each with its own session, like tmux split windows.
+
+- **Splitting:** Ctrl+b `%` splits the active pane side by side, and Ctrl+b `"` top and bottom. The [new tab modal](#new-tab) opens with the active pane's folder, and the session created (a harness, the shell or the [chat](chat.md)) takes the new part. Esc in the modal cancels the split.
+- **Focus:** Ctrl+b with the arrows goes to the neighboring pane, and a click on a pane also focuses it. The keyboard only goes to the focused pane, and the tab actions (restart, close, rename, the side panel, the network, files and MCP screens) apply to it.
+- **Zoom:** Ctrl+b `z` shows only the active pane on the whole tab; again, it goes back to the layout.
+- **Size:** Ctrl+b `<` and `>` shrink and grow the active pane by 5%, between 10% and 90% of the split. Each session gets the size of its pane.
+- **Closing:** Ctrl+b `x` closes the active pane (ends its session), and the neighbor takes the space. With a single pane left, the tab goes back to being a regular one.
+- **Bar:** one entry per tab, with the first pane's name and `+N` for the others. The numbers of Ctrl+b `1`..`9`, `n` and `p` count tabs.
+- **Separators:** `│` and `─` in the secondary color, and those of the active pane in the accent color.
+
+The layout lives in the daemon, with the sessions. It comes back when the TUI is reopened, shows the same in another window, and survives a daemon restart and a reboot ([sessions.md](sessions.md)). Moving a tab to another group (`m` in the group list) moves all of its panes.
 
 ## Tab groups
 

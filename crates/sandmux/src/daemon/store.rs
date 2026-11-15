@@ -40,6 +40,9 @@ pub struct Saved {
     pub version: u32,
     pub next_id: u32,
     pub sessions: Vec<SavedSession>,
+    /// Layouts de painéis das abas (protocolo 32).
+    #[serde(default)]
+    pub layouts: Vec<sandmux_proto::pane::Pane>,
 }
 
 impl Default for Saved {
@@ -48,6 +51,7 @@ impl Default for Saved {
             version: VERSION,
             next_id: 1,
             sessions: vec![],
+            layouts: vec![],
         }
     }
 }
@@ -159,6 +163,11 @@ mod tests {
                 vault_env: true,
                 group: "estudos".into(),
             }],
+            layouts: vec![{
+                let mut l = sandmux_proto::pane::Pane::leaf(2);
+                l.split(2, sandmux_proto::pane::Dir::Side, 5);
+                l
+            }],
         };
         save(&p, &s).unwrap();
         save(&p, &s).unwrap();
@@ -241,6 +250,7 @@ mod tests {
                 vault_env: false,
                 group: sandmux_proto::msg::main_group(),
             }],
+            layouts: vec![],
         };
         save(&p, &s).unwrap();
         let text = std::fs::read_to_string(&p).unwrap();

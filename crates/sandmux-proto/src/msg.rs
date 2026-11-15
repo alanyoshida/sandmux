@@ -521,6 +521,11 @@ pub enum Msg {
         id: u32,
         name: String,
     },
+    /// Troca o layout de painéis da aba das folhas dele; um layout de uma
+    /// folha só desfaz a divisão (protocolo 32).
+    SetLayout {
+        pane: crate::pane::Pane,
+    },
     /// Leva a sessão para outro grupo (protocolo 30).
     SetGroup {
         id: u32,
@@ -668,6 +673,9 @@ pub enum Msg {
     },
     Sessions {
         sessions: Vec<SessionInfo>,
+        /// Os layouts de painéis das abas (protocolo 32).
+        #[serde(default)]
+        layouts: Vec<crate::pane::Pane>,
     },
     Attached {
         id: u32,

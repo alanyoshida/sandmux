@@ -107,8 +107,15 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
         let Frame::Control(msg) = frame else { continue };
         match msg {
             Msg::List => {
-                let sessions = shared.list(&shared.lock());
-                write_control(&mut stream, &Msg::Sessions { sessions })?;
+                let (sessions, layouts) = {
+                    let st = shared.lock();
+                    (shared.list(&st), st.layouts.clone())
+                };
+                write_control(&mut stream, &Msg::Sessions { sessions, layouts })?;
+            }
+            Msg::SetLayout { pane } => {
+                let r = shared.set_layout(pane);
+                reply_unit(&mut stream, r)?;
             }
             Msg::Status => {
                 let sessions = shared.lock().sessions.len();
@@ -194,7 +201,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     match st.sessions.get_mut(&id) {
                         Some(s) => {
                             s.group = group;
-                            shared.persist(&st);
+                            shared.persist(&mut st);
                             Ok(())
                         }
                         None => Err(trf!(
@@ -219,7 +226,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                             "group {from:?} does not exist"
                         ));
                     }
-                    shared.persist(&st);
+                    shared.persist(&mut st);
                     Ok(())
                 });
                 reply_unit(&mut stream, r)?;
@@ -233,7 +240,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                         match st.sessions.get_mut(&id) {
                             Some(s) => {
                                 s.name = name.trim().to_string();
-                                shared.persist(&st);
+                                shared.persist(&mut st);
                                 Msg::Ok
                             }
                             None => Msg::Error {
@@ -686,7 +693,7 @@ fn kill(shared: &Arc<Shared>, id: u32) -> Result<(), String> {
                 if let Some(s) = st.sessions.remove(&id) {
                     session::remove_chat_dir(&s.opts);
                 }
-                shared.persist(&st);
+                shared.persist(&mut st);
                 drop(st);
                 shared.changed.notify_all();
                 return Ok(());

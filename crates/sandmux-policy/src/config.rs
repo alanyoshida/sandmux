@@ -377,6 +377,11 @@ pub const TUI_ACTIONS: &[(&str, char)] = &[
     ("group-prev", '('),
     ("group-next", ')'),
     ("groups", 'G'),
+    ("split-side", '%'),
+    ("split-stack", '"'),
+    ("zoom", 'z'),
+    ("pane-grow", '>'),
+    ("pane-shrink", '<'),
 ];
 
 /// Uma cor do tema da TUI.

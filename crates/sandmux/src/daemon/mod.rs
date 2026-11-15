@@ -71,6 +71,8 @@ pub struct Shared {
 
 pub struct State {
     pub sessions: BTreeMap<u32, Session>,
+    /// Layouts de painéis das abas; cada um com ao menos duas sessões.
+    pub layouts: Vec<sandmux_proto::pane::Pane>,
     pub next_id: u32,
     pub next_client: u64,
     pub stopping: bool,
@@ -86,10 +88,12 @@ impl Shared {
     }
 
     /// Grava a lista de sessões. Erros vão para o log; a sessão segue.
-    pub fn persist(&self, st: &State) {
+    pub fn persist(&self, st: &mut State) {
+        prune_layouts(st);
         let saved = store::Saved {
             version: store::VERSION,
             next_id: st.next_id,
+            layouts: st.layouts.clone(),
             sessions: st
                 .sessions
                 .values()
@@ -117,6 +121,29 @@ impl Shared {
         }
     }
 
+    /// Valida e grava o layout de uma aba: troca os que têm alguma folha
+    /// dele.
+    pub fn set_layout(&self, pane: sandmux_proto::pane::Pane) -> Result<(), String> {
+        let mut st = self.lock();
+        let leaves = pane.leaves();
+        if leaves.len() > 1 {
+            pane.check()?;
+            if let Some(id) = leaves.iter().find(|i| !st.sessions.contains_key(i)) {
+                return Err(trf!(
+                    "não existe a sessão {id}",
+                    "session {id} does not exist"
+                ));
+            }
+        }
+        st.layouts
+            .retain(|l| !l.leaves().iter().any(|i| leaves.contains(i)));
+        if leaves.len() > 1 {
+            st.layouts.push(pane);
+        }
+        self.persist(&mut st);
+        Ok(())
+    }
+
     pub fn list(&self, st: &State) -> Vec<SessionInfo> {
         st.sessions
             .values()
@@ -136,7 +163,7 @@ impl Shared {
         let pids: Vec<i32> = {
             let mut st = self.lock();
             st.stopping = true;
-            self.persist(&st);
+            self.persist(&mut st);
             st.sessions.values().filter_map(|s| s.pid()).collect()
         };
         eprintln!(
@@ -167,7 +194,7 @@ impl Shared {
                 st.sessions.values().all(|s| s.pid().is_none())
             });
         }
-        self.persist(&self.lock());
+        self.persist(&mut self.lock());
         let _ = std::fs::remove_file(&self.socket);
         // Deixa as filas dos clientes escoarem o aviso de parada.
         std::thread::sleep(Duration::from_millis(200));
@@ -234,6 +261,25 @@ fn peer_uid(s: &UnixStream) -> Option<u32> {
         )
     };
     (r == 0).then_some(cred.uid)
+}
+
+/// Tira dos layouts as sessões que não existem mais; um layout de uma folha
+/// só deixa de existir.
+fn prune_layouts(st: &mut State) {
+    let ids: Vec<u32> = st.sessions.keys().copied().collect();
+    let layouts = std::mem::take(&mut st.layouts);
+    st.layouts = layouts
+        .into_iter()
+        .filter_map(|l| {
+            let gone: Vec<u32> = l
+                .leaves()
+                .into_iter()
+                .filter(|i| !ids.contains(i))
+                .collect();
+            gone.into_iter().try_fold(l, |l, id| l.remove(id))
+        })
+        .filter(|l| l.leaves().len() > 1)
+        .collect();
 }
 
 /// PID do processo do outro lado do socket.
@@ -364,6 +410,7 @@ fn run(history: usize) -> Result<()> {
     let shared = Arc::new(Shared {
         state: Mutex::new(State {
             sessions: BTreeMap::new(),
+            layouts: Vec::new(),
             next_id: 1,
             next_client: 1,
             stopping: false,
@@ -524,6 +571,7 @@ fn restore(shared: &Arc<Shared>, logged_in: bool) {
     {
         let mut st = shared.lock();
         st.next_id = saved.next_id.max(1);
+        st.layouts = saved.layouts.clone();
         for s in saved.sessions {
             let mut state = s.state.clone();
             // Gravada esperando o login: vale como viva.
@@ -584,7 +632,7 @@ fn restore(shared: &Arc<Shared>, logged_in: bool) {
             sess.vault_env = s.vault_env;
             st.sessions.insert(s.id, sess);
         }
-        shared.persist(&st);
+        shared.persist(&mut st);
     }
     relaunch_all(shared, relaunch);
 }
@@ -614,7 +662,7 @@ fn relaunch_all(shared: &Arc<Shared>, relaunch: Vec<u32>) {
                 };
             }
         }
-        shared.persist(&st);
+        shared.persist(&mut st);
     }
 }
 
@@ -667,7 +715,7 @@ fn resume_after_login(shared: &Arc<Shared>) {
                 }
             }
         }
-        shared.persist(&st);
+        shared.persist(&mut st);
     }
     eprintln!(
         "{}",

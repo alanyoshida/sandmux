@@ -237,3 +237,10 @@ Quando o daemon sobe sem nenhuma sessão de login do usuário, as sessões que s
 #### Scenario: Reinício antes do login
 - **WHEN** o daemon reinicia de novo antes do login
 - **THEN** as abas continuam aguardando o login, e voltam no primeiro login
+
+### Requirement: Layouts de painéis guardados
+O daemon MUST guardar os layouts de painéis (a árvore de divisões, com as sessões nas folhas) na lista de sessões e devolvê-los com a listagem. Um layout recebido MUST ter só sessões que existem, sem repetição, e MUST ser recusado com a mensagem do problema quando não tem. Uma sessão encerrada MUST sair do layout, e um layout com uma sessão só MUST deixar de existir. Os layouts MUST voltar na restauração.
+
+#### Scenario: Depois de reiniciar o daemon
+- **WHEN** a aba tem dois painéis e o daemon reinicia
+- **THEN** a TUI aberta de novo mostra a aba com os mesmos dois painéis

@@ -156,13 +156,13 @@ Socket Unix de fluxo. Cada quadro tem 4 bytes de tamanho (big-endian, só o cont
 | 0 | Mensagem de controle em JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Bytes de terminal: entrada do cliente ou saída da sessão |
 
-A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados, a pasta de configuração e o idioma do cliente (o daemon responde nesse idioma). Esta versão usa o protocolo 31. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
+A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados, a pasta de configuração e o idioma do cliente (o daemon responde nesse idioma). Esta versão usa o protocolo 32. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
 
 O cliente envia ao daemon, junto com o pedido de sessão, as opções dadas no `run`, o perfil nomeado, a pasta atual, as variáveis da lista segura, o `SHELL` e os valores de `pass-env` da política efetiva. O daemon resolve as camadas de configuração ([docs/config.md](config.md)) e compõe a especificação de lançamento com a mesma função do `run` direto.
 
 ## Lista de sessões e restauração
 
-O daemon grava `sessions.json` no diretório de dados (modo 600, de forma atômica) a cada mudança. Para cada sessão: identificador, nome, harness, pasta, opções dadas no `run`, perfil nomeado, nomes das variáveis de `pass-env` do último lançamento e estado. Nunca os valores das variáveis, nunca a política resolvida, nunca a saída. O arquivo tem `"version": 2`; a lista sem versão, gravada pelo change anterior, é lida e convertida.
+O daemon grava `sessions.json` no diretório de dados (modo 600, de forma atômica) a cada mudança. Para cada sessão: identificador, nome, harness, pasta, opções dadas no `run`, perfil nomeado, nomes das variáveis de `pass-env` do último lançamento, estado e grupo. O arquivo guarda também os layouts de [painéis](tui.md#painéis) das abas, com as sessões nas folhas; uma sessão encerrada sai do layout. Nunca os valores das variáveis, nunca a política resolvida, nunca a saída. O arquivo tem `"version": 2`; a lista sem versão, gravada pelo change anterior, é lida e convertida.
 
 Ao subir, o daemon lê a lista:
 

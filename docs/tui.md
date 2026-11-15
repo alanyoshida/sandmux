@@ -54,6 +54,10 @@ Todos começam pela tecla de prefixo, Ctrl+b por padrão:
 | `w` | Lista de abas (setas, Enter, Esc) |
 | `(` / `)` | Grupo de abas anterior / próximo ([grupos](#grupos-de-abas)) |
 | `G` | Lista de grupos: trocar, criar, renomear, levar a aba |
+| `%` / `"` | Divide o painel ativo lado a lado / em cima e embaixo ([painéis](#painéis)) |
+| ← → ↑ ↓ | Foco no painel vizinho |
+| `z` | Amplia o painel ativo para a aba inteira, ou volta ao layout |
+| `<` / `>` | Diminui / aumenta o painel ativo |
 | `,` | Renomear a aba |
 | `r` | Reiniciar a aba encerrada ou parada |
 | `x` | Fechar a aba (encerra a sessão, com confirmação) |
@@ -87,7 +91,7 @@ new = "t"
 close = "q"
 ```
 
-- **Ações:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings`, `enter`, `group-prev`, `group-next` e `groups`.
+- **Ações:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings`, `enter`, `group-prev`, `group-next`, `groups`, `split-side`, `split-stack`, `zoom`, `pane-grow` e `pane-shrink`. As setas depois do prefixo, que movem o foco entre os painéis, são fixas.
 - **Teclas:** um caractere visível, que não seja dígito, porque os dígitos levam às abas.
 - **Duas ações na mesma tecla** escolhidas em `[tui.keys]` tornam o arquivo inválido. Uma tecla escolhida que é a padrão de outra ação vence, e a outra ação fica sem tecla (aparece com `—` na ajuda e continua no menu). Assim uma ação nova numa versão nova nunca invalida o arquivo.
 - **`[tui]` não é camada de política:** não muda nada nos sandboxes.
@@ -317,6 +321,20 @@ A entrada vai crua para a aba ativa: o harness recebe as teclas como num termina
 Com um modal aberto, a TUI desliga esses modos para entender as teclas.
 
 Os eventos de foco são a exceção: a TUI os liga sempre, para as [notificações do desktop](#notificações-do-desktop). A aba só os recebe quando o harness dela pediu.
+
+## Painéis
+
+Uma aba pode ter vários painéis, cada um com a sua sessão, como as janelas divididas do tmux.
+
+- **Dividir:** Ctrl+b `%` divide o painel ativo lado a lado, e Ctrl+b `"` em cima e embaixo. O [modal de nova aba](#nova-aba) abre com a pasta do painel ativo, e a sessão criada (um harness, o shell ou o [chat](chat.md)) ocupa a parte nova. Esc no modal cancela a divisão.
+- **Foco:** Ctrl+b com as setas vai ao painel vizinho, e um clique num painel também põe o foco nele. O teclado vai só ao painel em foco, e as ações da aba (reiniciar, fechar, renomear, o painel lateral, as telas de rede, arquivos e MCP) valem para ele.
+- **Ampliar:** Ctrl+b `z` mostra só o painel ativo na aba inteira; de novo, volta ao layout.
+- **Tamanho:** Ctrl+b `<` e `>` diminuem e aumentam o painel ativo em 5%, entre 10% e 90% da divisão. Cada sessão recebe o tamanho do seu painel.
+- **Fechar:** Ctrl+b `x` fecha o painel ativo (encerra a sessão dele), e o vizinho fica com o espaço. Com um painel só, a aba volta a ser comum.
+- **Barra:** uma entrada por aba, com o nome do primeiro painel e `+N` para os outros. Os números de Ctrl+b `1`..`9`, `n` e `p` contam as abas.
+- **Separadores:** `│` e `─` na cor secundária, e os do painel ativo na cor de destaque.
+
+O layout fica no daemon, com as sessões. Ele volta ao reabrir a TUI, aparece igual em outra janela e sobrevive ao reinício do daemon e ao reboot ([sessions.md](sessions.md)). Levar uma aba para outro grupo (`m` na lista de grupos) leva todos os painéis dela.
 
 ## Grupos de abas
 

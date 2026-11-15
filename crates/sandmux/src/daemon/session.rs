@@ -1051,7 +1051,7 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
                 master: master.clone(),
             });
         }
-        shared.persist(&st);
+        shared.persist(&mut st);
     }
     // O Docker da pasta passa a considerar a política desta sessão.
     let wd = shared
@@ -1262,7 +1262,7 @@ fn reader(shared: Arc<Shared>, id: u32, pid: i32, master: Arc<File>, mut child: 
         workdir = Some(s.opts.workdir.clone());
     }
     if !stopping {
-        shared.persist(&st);
+        shared.persist(&mut st);
     }
     let unused = workdir.clone().filter(|w| {
         !stopping
@@ -1408,7 +1408,7 @@ fn restart_gateway(shared: Arc<Shared>, id: u32, delay: u64) {
                 ),
             };
         }
-        shared.persist(&st);
+        shared.persist(&mut st);
         shared.changed.notify_all();
     }
 }
@@ -1419,7 +1419,7 @@ pub fn reserve(shared: &Arc<Shared>) -> u32 {
     let mut st = shared.lock();
     let id = st.next_id;
     st.next_id += 1;
-    shared.persist(&st);
+    shared.persist(&mut st);
     id
 }
 
@@ -1474,7 +1474,7 @@ pub fn store_pass_env(
         if let Some(s) = st.sessions.get_mut(&id) {
             s.vault_env = stored;
         }
-        shared.persist(&st);
+        shared.persist(&mut st);
     }
     (!values.is_empty() && !stored).then(|| {
         tr!(
@@ -1532,7 +1532,7 @@ pub fn vault_unlocked(shared: &Arc<Shared>) {
                         ),
                     };
                 }
-                shared.persist(&st);
+                shared.persist(&mut st);
                 return;
             };
             let mut vars = shared.default_vars();
@@ -1544,7 +1544,7 @@ pub fn vault_unlocked(shared: &Arc<Shared>) {
                         motivo: trf!("falhou ao restaurar: {e:#}", "restore failed: {e:#}"),
                     };
                 }
-                shared.persist(&st);
+                shared.persist(&mut st);
             }
         });
     }
