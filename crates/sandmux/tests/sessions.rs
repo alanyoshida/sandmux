@@ -298,3 +298,52 @@ fn saida_da_sessao_nunca_vai_para_o_disco() {
         "o log do daemon existe e foi verificado"
     );
 }
+
+// ---- shell dentro do sandbox de uma aba ----
+
+#[test]
+fn shell_dentro_do_sandbox_da_aba() {
+    let e = Env::new();
+    std::fs::write(e.work.join(".env"), "SEGREDO=1\n").unwrap();
+    // A aba alvo: um shell com um processo marcado rodando.
+    let mut cmd = e.cmd(&e.work, &["run", "shell"]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut t = Term::spawn(cmd, 100, 30);
+    t.write(b"sleep 4321 & echo pronto-$((1+1))\r");
+    t.wait_text("pronto-2");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+
+    let mut cmd = e.cmd(&e.work, &["enter", "1"]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut s = Term::spawn(cmd, 100, 30);
+    // A mesma pasta, os mesmos processos (pid namespace) e o mesmo confinamento.
+    s.write(b"pwd; echo P=$(cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -c 'sleep 4321')\r");
+    s.wait_text(&format!("{}", e.work.display()));
+    s.wait_for("processo da aba", |t| t.contains("P=1"));
+    // O shell tem o terminal como controle (controle de tarefas).
+    s.with_screen(|sc| {
+        let c = sc.contents();
+        assert!(
+            !c.contains("controle de trabalho") && !c.contains("job control"),
+            "{c}"
+        );
+    });
+    // O .env existe na visão, mas a política de segredos nega a leitura.
+    s.write(b"test -e .env && echo EXISTE-$((1+1)); cat .env; echo RC1=$?; touch /etc/x 2>/dev/null; echo RC2=$?\r");
+    s.wait_for("bloqueios", |t| {
+        t.contains("EXISTE-2") && t.contains("RC1=1") && t.contains("RC2=1")
+    });
+    s.with_screen(|sc| assert!(!sc.contents().contains("SEGREDO=1"), "{}", sc.contents()));
+    // O shell termina, e a aba de dentro também.
+    s.write(b"exit 7\r");
+    s.wait_exit();
+    let ls = stdout(&e.run(&e.work, &["ls"]));
+    assert!(ls.contains("dentro:"), "{ls}");
+    // A aba alvo continua viva.
+    assert!(
+        ls.lines()
+            .any(|l| l.contains("shell:") && l.contains("viva")),
+        "{ls}"
+    );
+}

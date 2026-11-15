@@ -433,6 +433,9 @@ pub fn spawn(
     vars: &BTreeMap<String, String>,
     size: Size,
 ) -> Result<Spawned> {
+    if opts.harness == launch::ENTER {
+        return spawn_enter(shared, id, launch, opts, size);
+    }
     let host = host_for(shared, opts, vars);
     let chat = opts.harness == sandmux_policy::assistant::HARNESS;
     // A aba de chat não tem Docker privado.
@@ -646,6 +649,148 @@ pub fn spawn(
         tag,
         policy_file,
         net_policy,
+    })
+}
+
+/// A aba alvo de um shell de dentro: o número e a pasta. Sem número, a única
+/// aba viva que não é ela mesma um shell de dentro.
+pub fn enter_target(shared: &Arc<Shared>, arg: Option<&str>) -> Result<(u32, std::path::PathBuf)> {
+    let st = shared.lock();
+    let alive = |s: &Session| {
+        s.live.is_some() && s.state == SessionState::Viva && s.opts.harness != launch::ENTER
+    };
+    let s = match arg.filter(|a| !a.is_empty()) {
+        Some(a) => {
+            let id: u32 = a
+                .parse()
+                .map_err(|_| anyhow!(trf!("aba inválida: {a}", "invalid tab: {a}")))?;
+            st.sessions.get(&id).ok_or_else(|| {
+                anyhow!(trf!(
+                    "não existe a sessão {id}",
+                    "session {id} does not exist"
+                ))
+            })?
+        }
+        None => {
+            let live: Vec<&Session> = st.sessions.values().filter(|s| alive(s)).collect();
+            match live.as_slice() {
+                [only] => *only,
+                [] => bail!(tr!("não há sessão viva", "there is no live session")),
+                _ => bail!(tr!(
+                    "há mais de uma sessão viva; escolha uma com `sandmux enter <id>`",
+                    "there is more than one live session; pick one with `sandmux enter <id>`"
+                )),
+            }
+        }
+    };
+    if s.opts.harness == launch::ENTER {
+        bail!(tr!(
+            "essa aba já é um shell de dentro de outra",
+            "that tab is already a shell inside another one"
+        ));
+    }
+    if !alive(s) {
+        bail!(trf!(
+            "a aba {} não está viva: o sandbox dela não existe agora",
+            "tab {} is not alive: its sandbox does not exist now",
+            s.id
+        ));
+    }
+    Ok((s.id, s.opts.workdir.clone()))
+}
+
+/// Um shell dentro do sandbox da aba `opts.args[0]`: `sandmux-run --enter`
+/// manda o terminal ao supervisor dela, que abre o shell com o mesmo
+/// confinamento do agente.
+fn spawn_enter(
+    shared: &Arc<Shared>,
+    id: u32,
+    launch: u32,
+    opts: &LaunchOptions,
+    size: Size,
+) -> Result<Spawned> {
+    let (target, _) = enter_target(shared, opts.args.first().map(String::as_str))?;
+    let (tag, policy) = {
+        let st = shared.lock();
+        let s = st.sessions.get(&target);
+        (
+            s.and_then(|s| s.tags.last().cloned()),
+            s.and_then(|s| s.policy.clone()),
+        )
+    };
+    let (Some(target_tag), Some(policy)) = (tag, policy) else {
+        bail!(trf!(
+            "a aba {target} não tem sandbox vivo",
+            "tab {target} has no live sandbox"
+        ));
+    };
+    let socket = launch::control_socket_path(&target_tag).with_extension("enter");
+    if !socket.exists() {
+        bail!(trf!(
+            "o sandbox da aba {target} não aceita entrar (aba lançada por uma versão anterior? reinicie-a com Ctrl+b r)",
+            "tab {target}'s sandbox does not accept entering (tab launched by an older version? restart it with Ctrl+b r)"
+        ));
+    }
+    let ws = nix::pty::Winsize {
+        ws_row: size.rows.max(1),
+        ws_col: size.cols.max(1),
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let pty = nix::pty::openpty(Some(&ws), None).context(tr!("abrir o PTY", "open the PTY"))?;
+    set_cloexec(pty.master.as_raw_fd());
+    set_cloexec(pty.slave.as_raw_fd());
+    let slave: OwnedFd = pty.slave;
+    let runner = launch::runner_path();
+    let mut cmd = std::process::Command::new(&runner);
+    cmd.arg("--enter")
+        .arg(&socket)
+        .env(sandmux_spec::lang::ENV, sandmux_spec::lang::get().code())
+        .stdin(Stdio::from(slave.try_clone()?))
+        .stdout(Stdio::from(slave.try_clone()?))
+        .stderr(Stdio::from(slave));
+    let (tx, rx) = mpsc::channel();
+    shared
+        .launcher
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .send(LaunchJob {
+            cmd,
+            inherit: Vec::new(),
+            reply: tx,
+        })
+        .map_err(|_| {
+            anyhow!(tr!(
+                "a thread de lançamento parou",
+                "the launch thread stopped"
+            ))
+        })?;
+    let child = rx
+        .recv()
+        .map_err(|_| {
+            anyhow!(tr!(
+                "a thread de lançamento parou",
+                "the launch thread stopped"
+            ))
+        })?
+        .with_context(|| trf!("executar {}", "run {}", runner.display()))?;
+    // Etiqueta própria: o fim desta aba não apaga os arquivos da alvo.
+    let tag = format!("s{id}-{launch}");
+    Ok(Spawned {
+        child,
+        master: Arc::new(File::from(pty.master)),
+        warnings: Vec::new(),
+        clipboard: false,
+        pass_env: Vec::new(),
+        limits: None,
+        docker: None,
+        ssh_agent: None,
+        db: None,
+        policy,
+        launch,
+        policy_file: super::net::policy_path(&tag),
+        tag,
+        net_policy: None,
     })
 }
 

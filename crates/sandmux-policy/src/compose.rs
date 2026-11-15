@@ -237,8 +237,85 @@ pub fn check_dangerous(host: &Host, p: &Path, writable: bool) -> Result<(), Poli
             )
             .into(),
         }),
-        None => Ok(()),
+        None => check_host_exec(host, p, writable),
     }
+}
+
+/// Arquivos e pastas do HOME que o host executa fora do sandbox: com
+/// escrita neles, o agente plantaria algo que roda no próximo terminal ou
+/// login.
+pub const HOST_EXEC: &[&str] = &[
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".bash_logout",
+    ".profile",
+    ".zshrc",
+    ".zprofile",
+    ".zshenv",
+    ".zlogin",
+    ".zlogout",
+    ".xprofile",
+    ".xinitrc",
+    ".xsession",
+    ".xsessionrc",
+    ".pam_environment",
+    ".bashrc.d",
+    ".oh-my-zsh",
+    ".local/bin",
+    ".local/share/applications",
+    ".config/autostart",
+    ".config/systemd",
+    ".config/environment.d",
+    ".config/fish",
+    ".config/plasma-workspace",
+];
+
+/// Recusa a escrita num caminho que o host executa, dentro de um ou numa
+/// pasta que contém um.
+fn check_host_exec(host: &Host, p: &Path, writable: bool) -> Result<(), PolicyError> {
+    if !writable {
+        return Ok(());
+    }
+    let Some(hit) = HOST_EXEC
+        .iter()
+        .map(|c| host.h(c))
+        .find(|c| p == c || p.starts_with(c) || c.starts_with(p))
+    else {
+        return Ok(());
+    };
+    let shown = hit
+        .strip_prefix(&host.home)
+        .map(|r| format!("~/{}", r.display()))
+        .unwrap_or_else(|_| hit.display().to_string());
+    let reason = if p == hit {
+        trf!(
+            "o host executa {shown} fora do sandbox",
+            "the host runs {shown} outside the sandbox"
+        )
+    } else if p.starts_with(&hit) {
+        trf!(
+            "fica dentro de {shown}, que o host executa fora do sandbox",
+            "it is inside {shown}, which the host runs outside the sandbox"
+        )
+    } else {
+        trf!(
+            "contém {shown}, que o host executa fora do sandbox",
+            "it contains {shown}, which the host runs outside the sandbox"
+        )
+    };
+    Err(PolicyError::Dangerous {
+        path: p.to_path_buf(),
+        reason: trf!(
+            "{reason}; com escrita, o agente poderia plantar algo que roda no próximo terminal ou login",
+            "{reason}; with write access, the agent could plant something that runs on the next terminal or login"
+        ),
+        hint: tr!(
+            "Monte em somente leitura (--ro) ou escolha outra pasta",
+            "Mount it read-only (--ro) or choose another folder"
+        )
+        .into(),
+    })
 }
 
 fn canonical(p: &Path, base: &Path) -> Result<PathBuf, PolicyError> {
@@ -1874,5 +1951,40 @@ mod docker_view_tests {
             sandmux_spec::NetMode::None
         );
         assert_eq!(c.spec.env_value("SANDMUX_HOST"), None);
+    }
+
+    #[test]
+    fn escrita_em_caminho_que_o_host_executa() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().to_path_buf();
+        let h = Host {
+            home: home.clone(),
+            uid: 1000,
+            gid: 1000,
+            user: "ana".into(),
+            group: "ana".into(),
+            user_shell: "/bin/bash".into(),
+            data_dir: home.join(".local/share/sandmux"),
+            config_dir: home.join(".config/sandmux"),
+            cwd: home.clone(),
+            env: Default::default(),
+            sys_root: "/".into(),
+        };
+        for (p, w, ok) in [
+            (".bashrc", true, false),
+            (".bashrc", false, true),
+            (".local/bin", true, false),
+            (".local/bin/x", true, false),
+            (".config/systemd/user", true, false),
+            (".config/fish", false, true),
+            ("projetos/app", true, true),
+        ] {
+            let r = check_dangerous(&h, &h.h(p), w);
+            assert_eq!(r.is_ok(), ok, "{p} {w}: {r:?}");
+        }
+        let e = check_dangerous(&h, &h.h(".bashrc"), true)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("~/.bashrc") && e.contains("--ro"), "{e}");
     }
 }

@@ -152,6 +152,15 @@ O sandbox nunca recebe a pasta de configuração com escrita. São recusados com
 
 Em somente leitura ela pode entrar (`--ro ~/.config`), porque não guarda segredo.
 
+## Caminhos que o host executa
+
+Também são recusados com escrita, em `--rw`, na chave `rw`, como pasta de trabalho e nas pastas montadas ao vivo, os caminhos do HOME que o host executa fora do sandbox. Com escrita neles, o agente poderia plantar algo que roda no próximo terminal ou login:
+
+- arquivos de inicialização de shell e de sessão: `.bashrc`, `.bash_profile`, `.bash_login`, `.bash_logout`, `.profile`, `.zshrc`, `.zprofile`, `.zshenv`, `.zlogin`, `.zlogout`, `.xprofile`, `.xinitrc`, `.xsession`, `.xsessionrc` e `.pam_environment`;
+- pastas: `.bashrc.d`, `.oh-my-zsh`, `.local/bin`, `.local/share/applications`, `.config/autostart`, `.config/systemd`, `.config/environment.d`, `.config/fish` e `.config/plasma-workspace`.
+
+Vale para o caminho, para o que está dentro dele e para uma pasta que o contém. Em somente leitura, todos podem entrar (`--ro ~/.local/bin`).
+
 ## Quando uma mudança vale
 
 A política é resolvida a cada lançamento, com o arquivo daquele momento. A lista de sessões guarda as opções dadas no `run` e o nome do perfil, e não a política resolvida.

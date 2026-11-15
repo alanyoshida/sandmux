@@ -36,6 +36,12 @@ fn main() {
         print!("{}", sandmux_launcher::support::check().to_wire());
         exit(0);
     }
+    // Shell dentro do sandbox de uma aba: o terminal vai ao supervisor dela.
+    if let [flag, path] = args.as_slice()
+        && flag == "--enter"
+    {
+        exit(sandmux_launcher::enter::client(std::path::Path::new(path)));
+    }
     if let [flag, path] = args.as_slice()
         && flag == "--view-file"
     {

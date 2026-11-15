@@ -54,6 +54,19 @@ Fechar o terminal, ou mandar SIGTERM ao cliente, só desanexa. Ao desanexar, o c
 
 Vários terminais podem se anexar à mesma sessão; todos recebem a saída e todos digitam. A tela da sessão tem o menor número de colunas e de linhas entre os terminais anexados.
 
+## Shell dentro do sandbox de uma aba
+
+`sandmux enter [id]` (sem identificador, a única sessão viva), ou Ctrl+b `t` na TUI, abre uma sessão nova, `dentro:<pasta>`, com um shell dentro do sandbox da aba alvo. O shell vê exatamente o que o agente vê:
+
+- **arquivos:** a mesma visão, a mesma pasta inicial, o mesmo Landlock;
+- **regras de arquivos:** as aberturas passam pelas mesmas regras e entram no mesmo registro (um `.env` continua negado);
+- **rede e restrições:** a mesma rede e o mesmo seccomp;
+- **processos:** os mesmos, porque o shell está no mesmo pid namespace (`ps` mostra o agente).
+
+O shell conta nos tetos da aba alvo, e o que ele faz na rede e nos arquivos aparece nos registros dela.
+
+A aba de dentro termina quando o shell sai, ou quando o sandbox alvo termina. Depois de um reinício do daemon, ela volta parada, porque o sandbox alvo é outro; Ctrl+b `r` entra de novo. Uma aba de dentro não abre outra. Uma aba lançada por uma versão anterior do sandmux precisa ser reiniciada antes.
+
 ## Histórico e clipboard
 
 - Cada sessão guarda as últimas 10.000 linhas que saíram da tela principal, só em memória (`sandmuxd --history-lines N` muda o limite). Nada da saída das sessões é gravado em disco, nem no log do daemon.

@@ -52,6 +52,10 @@ pub fn localize_summary(s: &str) -> String {
     s.to_string()
 }
 
+/// "Harness" das abas de shell dentro do sandbox de outra aba (Ctrl+b t,
+/// `sandmux enter`): o primeiro argumento é o número da aba alvo.
+pub const ENTER: &str = "dentro";
+
 pub fn sibling(name: &str) -> PathBuf {
     std::env::current_exe()
         .ok()

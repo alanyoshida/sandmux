@@ -76,6 +76,7 @@ O `setup` instala o perfil do AppArmor do lançador quando a distro restringe us
 | `sandmux run <harness>` | Sobe o harness confinado na pasta atual. Harnesses: `opencode`, `hermes` e `shell` (um shell confinado, sem agente). Na primeira execução, pergunta se deve importar a configuração que você já tem. Num terminal, cria uma sessão no daemon e anexa a ela; sem terminal (script, pipe, CI), roda direto, em primeiro plano, sem daemon |
 | `sandmux ls` | Lista as sessões: identificador, nome, estado (viva, encerrada com o código, parada com o motivo), terminais anexados e pasta |
 | `sandmux attach [id]` | Anexa este terminal a uma sessão. Sem identificador, à única sessão viva |
+| `sandmux enter [id]` | Abre um shell dentro do sandbox de uma sessão viva, com o que o agente vê (Ctrl+b `t` na TUI; [docs/sessions.md](docs/sessions.md#shell-dentro-do-sandbox-de-uma-aba)) |
 | `sandmux detach <id>` | Desanexa todos os terminais de uma sessão, sem encerrá-la |
 | `sandmux kill <id>` | Encerra a sessão e a tira da lista |
 | `sandmux rename <id> <nome>` | Troca o nome de uma sessão (o nome da aba) |
@@ -92,7 +93,7 @@ Opções de `run`:
 | Opção | Efeito |
 |---|---|
 | `--workdir <pasta>` | Usa outra pasta de trabalho no lugar da pasta atual |
-| `--ro <caminho>`, `--rw <caminho>` | Acrescenta um caminho do host em somente leitura ou com escrita. Montar uma credencial conhecida (`~/.kube`, `~/.aws`) gera aviso |
+| `--ro <caminho>`, `--rw <caminho>` | Acrescenta um caminho do host em somente leitura ou com escrita. Montar uma credencial conhecida (`~/.kube`, `~/.aws`) gera aviso; escrita em caminhos que o host executa (`~/.bashrc`, `~/.local/bin`) é recusada ([docs/config.md](docs/config.md#caminhos-que-o-host-executa)) |
 | `--pass-env <NOME>` | Passa uma variável do seu ambiente para dentro, com aviso. Para chaves de API e tokens, prefira o cofre, que entrega só um valor falso |
 | `--ssh-key <NOME>` | Deixa o agente SSH da sessão usar a chave SSH do cofre com esse nome (`*` para todas) |
 | `--import`, `--no-import` | Responde à pergunta da primeira execução sem terminal interativo |

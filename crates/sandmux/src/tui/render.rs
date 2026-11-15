@@ -587,6 +587,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
+/// A tecla de uma ação na ajuda e no menu; sem tecla, um travessão.
+fn key_label(c: char) -> String {
+    if c == '\0' {
+        "—".into()
+    } else {
+        c.to_string()
+    }
+}
+
 /// Escreve uma linha numa posição, cortada na largura.
 pub(super) fn put(f: &mut Frame, x: u16, y: u16, w: u16, line: Line, style: Style) {
     let area = f.area();
@@ -2219,7 +2228,7 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
                 .iter()
                 .enumerate()
                 .map(|(i, (action, label))| {
-                    let row = format!(" {p} {}   {label} ", app.cfg.key(action));
+                    let row = format!(" {p} {}   {label} ", key_label(app.cfg.key(action)));
                     if i == *sel {
                         Line::styled(row, selected)
                     } else {
@@ -2245,7 +2254,7 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
                 let label = super::help_label(item);
                 l.push(Line::raw(format!(
                     "  {p} {}   {label}",
-                    app.cfg.key(item.0)
+                    key_label(app.cfg.key(item.0))
                 )));
             }
             l.push(Line::raw(trf!(

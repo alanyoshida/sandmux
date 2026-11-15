@@ -169,7 +169,9 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
     };
     // O auxiliar de nomes também: entra nos namespaces antes da liberação.
     // SAFETY: o lançador ainda tem uma única thread.
-    let namer = unsafe { crate::namer::spawn(child, &spec.landlock) }.ok();
+    let namer = unsafe { crate::namer::spawn(child, &spec.landlock) }
+        .ok()
+        .map(|n| std::sync::Arc::new(std::sync::Mutex::new(n)));
     // E o de montagem, nas sessões com socket de controle (pastas ao vivo).
     let control = spec.files.as_ref().and_then(|f| f.control_socket.clone());
     let mounter = if control.is_some() {
@@ -177,6 +179,16 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
         unsafe { crate::mounter::spawn(child) }.ok()
     } else {
         None
+    };
+    // E o de entrada (shell dentro do sandbox, Ctrl+b t), também só nas
+    // sessões do daemon. As aberturas do shell voltam por `enter_files`.
+    let (enter_files, enterer) = match (&control, net::pair()) {
+        (Some(_), Ok((r, w))) => {
+            // SAFETY: o lançador ainda tem uma única thread.
+            let e = unsafe { crate::enter::spawn(child, spec, w) }.ok();
+            (Some(r), e)
+        }
+        _ => (None, None),
     };
     let mut sync_w = fs::File::from(sync_w);
     let _ = sync_w.write_all(b"1");
@@ -192,9 +204,15 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
                 if let Ok(Some(listener)) = net::recv_fd(&files_r) {
                     // A raiz está pronta: o auxiliar de nomes aplica o Landlock.
                     if let Some(n) = &namer {
-                        n.ready();
+                        n.lock().unwrap_or_else(|e| e.into_inner()).ready();
                     }
-                    let _ = crate::files::spawn(listener, &spec, namer);
+                    let _ = crate::files::spawn(listener, &spec, namer.clone());
+                }
+                // As aberturas de cada shell de entrada, com o mesmo auxiliar.
+                if let Some(r) = enter_files {
+                    while let Ok(Some(listener)) = net::recv_fd(&r) {
+                        let _ = crate::files::spawn(listener, &spec, namer.clone());
+                    }
                 }
             });
     }
@@ -226,6 +244,27 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
                             serde_json::to_string(&crate::mounter::Reply { error: reply.err() })
                                 .unwrap_or_default();
                         let _ = (&c).write_all(format!("{out}\n").as_bytes());
+                    }
+                });
+        }
+    }
+
+    // Entrada: quem pede manda o terminal pelo socket `<controle>.enter` e
+    // recebe o código de saída do shell pela mesma conexão.
+    let enter_path = control.as_ref().map(|p| p.with_extension("enter"));
+    if let (Some(path), Some(en)) = (enter_path.clone(), enterer) {
+        let _ = std::fs::remove_file(&path);
+        if let Ok(l) = std::os::unix::net::UnixListener::bind(&path) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+            let _ = std::thread::Builder::new()
+                .name("sandmux-enter".into())
+                .spawn(move || {
+                    for c in l.incoming().flatten() {
+                        let c = OwnedFd::from(c);
+                        if let Ok(Some(pty)) = net::recv_fd(&c) {
+                            let _ = en.call(&c, &pty);
+                        }
                     }
                 });
         }
@@ -272,6 +311,9 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
 
     let code = supervise(child, &mask);
     if let Some(p) = &control {
+        let _ = fs::remove_file(p);
+    }
+    if let Some(p) = &enter_path {
         let _ = fs::remove_file(p);
     }
     // As conexões que ainda estavam abertas gravam a linha delas.

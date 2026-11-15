@@ -76,6 +76,7 @@ sandmux setup
 | `sandmux run <harness>` | Starts the harness confined in the current folder. Harnesses: `opencode`, `hermes` and `shell` (a confined shell, without an agent). On the first run, asks whether to import the configuration you already have. In a terminal, creates a session in the daemon and attaches to it; without a terminal (script, pipe, CI), runs directly, in the foreground, without the daemon |
 | `sandmux ls` | Lists the sessions: identifier, name, state (alive, ended with the exit code, stopped with the reason), attached terminals and folder |
 | `sandmux attach [id]` | Attaches this terminal to a session. Without an identifier, to the only live session |
+| `sandmux enter [id]` | Opens a shell inside the sandbox of a live session, with what the agent sees (Ctrl+b `t` in the TUI; [docs/en/sessions.md](docs/en/sessions.md#shell-inside-a-tabs-sandbox)) |
 | `sandmux detach <id>` | Detaches all terminals from a session, without ending it |
 | `sandmux kill <id>` | Ends the session and removes it from the list |
 | `sandmux rename <id> <name>` | Changes the name of a session (the tab name) |
@@ -92,7 +93,7 @@ sandmux setup
 | Option | Effect |
 |---|---|
 | `--workdir <folder>` | Uses another work folder instead of the current folder |
-| `--ro <path>`, `--rw <path>` | Adds a host path read-only or writable. Mounting a known credential (`~/.kube`, `~/.aws`) gives a warning |
+| `--ro <path>`, `--rw <path>` | Adds a host path read-only or writable. Mounting a known credential (`~/.kube`, `~/.aws`) gives a warning; write access to paths the host runs (`~/.bashrc`, `~/.local/bin`) is refused ([docs/en/config.md](docs/en/config.md#paths-the-host-runs)) |
 | `--pass-env <NAME>` | Passes a variable from your environment inside, with a warning. For API keys and tokens, prefer the vault, which hands over only a fake value |
 | `--ssh-key <NAME>` | Lets the session's SSH agent use the vault SSH key with that name (`*` for all of them) |
 | `--import`, `--no-import` | Answers the first-run question without an interactive terminal |

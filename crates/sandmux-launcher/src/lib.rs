@@ -7,6 +7,7 @@
 //! política.
 
 mod connector;
+pub mod enter;
 pub mod files;
 mod landlock_rules;
 mod launch;

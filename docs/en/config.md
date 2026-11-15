@@ -154,6 +154,15 @@ The sandbox never receives the configuration folder with write access. These are
 
 It may enter read-only (`--ro ~/.config`), because it stores no secret.
 
+## Paths the host runs
+
+The HOME paths that the host runs outside the sandbox are also refused with write access, in `--rw`, in the `rw` key, as the work folder and in live-mounted folders. With write access to them, the agent could plant something that runs on the next terminal or login:
+
+- shell and session startup files: `.bashrc`, `.bash_profile`, `.bash_login`, `.bash_logout`, `.profile`, `.zshrc`, `.zprofile`, `.zshenv`, `.zlogin`, `.zlogout`, `.xprofile`, `.xinitrc`, `.xsession`, `.xsessionrc` and `.pam_environment`;
+- folders: `.bashrc.d`, `.oh-my-zsh`, `.local/bin`, `.local/share/applications`, `.config/autostart`, `.config/systemd`, `.config/environment.d`, `.config/fish` and `.config/plasma-workspace`.
+
+This applies to the path, to anything inside it and to a folder that contains it. Read-only, all of them may enter (`--ro ~/.local/bin`).
+
 ## When a change applies
 
 The policy is resolved on each launch, with the file as it is at that moment. The session list stores the options given to `run` and the profile name, not the resolved policy.

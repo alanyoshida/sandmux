@@ -491,6 +491,20 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     )?;
                     continue;
                 }
+                // Shell de dentro: o daemon escolhe a aba alvo e a pasta.
+                let mut opts = opts;
+                if opts.harness == crate::launch::ENTER {
+                    match session::enter_target(shared, opts.args.first().map(String::as_str)) {
+                        Ok((target, workdir)) => {
+                            opts.args = vec![target.to_string()];
+                            opts.workdir = workdir;
+                        }
+                        Err(e) => {
+                            error(&mut stream, format!("{e:#}"))?;
+                            continue;
+                        }
+                    }
+                }
                 let id = session::reserve(shared);
                 match session::spawn(shared, id, 1, &opts, &vars, size) {
                     Err(e) => error(&mut stream, format!("{e:#}"))?,

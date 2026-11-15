@@ -367,6 +367,7 @@ pub const TUI_ACTIONS: &[(&str, char)] = &[
     ("command", 'g'),
     ("menu", ':'),
     ("settings", 'e'),
+    ("enter", 't'),
 ];
 
 /// Uma cor do tema da TUI.
@@ -1416,6 +1417,8 @@ fn assistant_section(
 
 fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfig, ConfigError> {
     let mut cfg = TuiConfig::default();
+    // Ações com tecla escolhida pelo usuário: vencem a tecla padrão de outra.
+    let mut explicit: Vec<String> = Vec::new();
     // O tema vem antes das cores, que ficam por cima dele.
     if let Some(item) = t.get("theme") {
         let span = item
@@ -1497,6 +1500,7 @@ fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfi
                         }
                     };
                     cfg.keys.insert(action.to_string(), c);
+                    explicit.push(action.to_string());
                 }
             }
             "theme" => {}
@@ -1631,6 +1635,15 @@ fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfi
             }
         }
     }
+    // Uma tecla escolhida pelo usuário tira a tecla padrão de outra ação
+    // (uma ação nova numa versão nova não invalida o arquivo); duas
+    // escolhidas iguais são erro.
+    let taken: Vec<char> = explicit
+        .iter()
+        .filter_map(|a| cfg.keys.get(a).copied())
+        .collect();
+    cfg.keys
+        .retain(|a, c| explicit.contains(a) || !taken.contains(c));
     let mut seen: BTreeMap<char, &str> = BTreeMap::new();
     for (a, c) in &cfg.keys {
         if let Some(other) = seen.insert(*c, a) {
@@ -2767,6 +2780,11 @@ repo = true
         assert!(parse("[assistant.provider.openrouter]\nurl = \"https://x\"\n").is_err());
         assert!(parse("[assistant.provider.l]\nurl = \"ftp://x\"\n").is_err());
         assert!(parse("[assistant.provider.l]\n").is_err());
+        // A tecla escolhida vence a padrão de outra ação, que fica sem tecla.
+        let c = parse("[tui.keys]\nnew = \"t\"\n").unwrap();
+        assert_eq!(c.tui.action_for('t'), Some("new"));
+        assert_eq!(c.tui.key("enter"), '\0');
+        assert!(parse("[tui.keys]\nnew = \"t\"\nclose = \"t\"\n").is_err());
         let c = parse("[tui.keys]\nchat = \"y\"\n").unwrap();
         assert_eq!(c.tui.action_for('y'), Some("chat"));
         assert_eq!(TuiConfig::default().key("chat"), 'i');
@@ -2815,10 +2833,16 @@ repo = true
         assert!(parse("[tui.keys]\nvoar = \"z\"\n").is_err());
         assert!(parse("[tui.keys]\nnew = \"1\"\n").is_err());
         assert!(parse("[tui.keys]\nnew = \"ab\"\n").is_err());
-        let e = parse("[tui.keys]\nnext = \"x\"\n").unwrap_err();
+        // Duas teclas escolhidas iguais são erro; a padrão de outra ação cede.
+        let e = parse("[tui.keys]\nnext = \"x\"\nclose = \"x\"\n").unwrap_err();
         assert!(
             e.message.contains("close") && e.message.contains("next"),
             "{e}"
+        );
+        let c = parse("[tui.keys]\nnext = \"x\"\n").unwrap();
+        assert_eq!(
+            (c.tui.action_for('x'), c.tui.key("close")),
+            (Some("next"), '\0')
         );
     }
 

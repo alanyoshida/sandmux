@@ -195,6 +195,29 @@ fn pasta_de_configuracao_com_escrita_recusada() {
     assert!(out.status.success(), "{}", stderr(&out));
 }
 
+#[test]
+fn escrita_em_caminho_que_o_host_executa_recusada() {
+    let e = Env::new();
+    let bashrc = e.home.join(".bashrc");
+    std::fs::write(&bashrc, "# bashrc\n").unwrap();
+    let bin = e.home.join(".local/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let out = e.shell(&["--rw", bashrc.to_str().unwrap()], "echo rodou");
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(
+        err.contains("o host executa ~/.bashrc fora do sandbox") && err.contains("--ro"),
+        "{err}"
+    );
+    // Em somente leitura, o sandbox sobe e lê.
+    let out = e.shell(&["--ro", bin.to_str().unwrap()], "echo rodou");
+    assert!(out.status.success(), "{}", stderr(&out));
+    // Pela configuração também.
+    let out = config(&e, &["add", "rw", bin.to_str().unwrap(), "--global"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("~/.local/bin"), "{}", stderr(&out));
+}
+
 // ---- sandmux config ----
 
 fn config(e: &Env, args: &[&str]) -> std::process::Output {

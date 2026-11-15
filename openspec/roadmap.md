@@ -389,6 +389,15 @@ Objetivo: o sandmux em português ou inglês, e o cofre gerenciado pela página 
 
 Release `v0.1.1` (2026-11-15), com os changes 27 a 39, pelo workflow de release numa tag, depois do merge do PR #6 e do arquivamento. Decisão do usuário (2026-11-15): arquivar, publicar a release e seguir sem parar, exceto por decisões pendentes.
 
+### Etapa 13 - Segurança e o primeiro item depois da v1
+
+Objetivo: fechar a última decisão em aberto e começar a lista "Depois da v1". Decisões do usuário (2026-11-15): recusar o `--rw` em caminhos que o host executa; o primeiro item depois da v1 é entrar no sandbox de uma aba.
+
+| # | Change | Situação | Conteúdo |
+|---|---|---|---|
+| 40 | `refuse-host-exec-rw` | Arquivado em 2026-11-15 em `openspec/changes/archive/2026-11-15-refuse-host-exec-rw/`, com as specs sincronizadas. Implementado: 3 de 3 tarefas em 2026-11-15, com testes de unidade e de integração. Decisão do usuário (2026-11-15): recusar. Decisões do agente: a lista de arquivos de inicialização de shell e de sessão e de pastas executadas (`.local/bin`, `.config/autostart`, `.config/systemd`, `.config/fish` e outras), recusada no caminho, dentro dele e numa pasta que o contém, em todos os pontos que já recusam caminhos perigosos; `--ro` continua aceito | Escrita em caminhos que o host executa recusada |
+| 41 | `add-tab-shell` | Arquivado em 2026-11-15 em `openspec/changes/archive/2026-11-15-add-tab-shell/`, com as specs sincronizadas. Implementado: 8 de 8 tarefas em 2026-11-15, com testes de integração (mesma pasta, mesmos processos, `.env` negado, `/etc` só leitura, aba alvo continua viva; Ctrl+b `t`). Proposta, specs, design e tarefas escritos e validados em 2026-11-15. Decisões do agente: um auxiliar de entrada nasce com os outros auxiliares do supervisor e abre o shell com a visão, a rede, o Landlock, o seccomp e o filtro das aberturas do comando (o mesmo supervisor de arquivos, com o auxiliar de nomes compartilhado); socket `<controle>.enter` e `sandmux-run --enter`; sessão com o harness `dentro`, etiqueta própria, proteção da alvo no painel, volta parada depois de reiniciar o daemon; Ctrl+b `t` e `sandmux enter [id]`. Achado pelo teste da documentação: o `t` novo invalidava um arquivo que já tinha trocado outra ação para `t`; a regra passou a ser que a tecla escolhida vence a padrão de outra ação, que fica sem tecla (só duas escolhidas iguais são erro) | Shell dentro do sandbox de uma aba em execução, para ver o que o agente vê |
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
@@ -409,7 +418,7 @@ Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
 | Histórico de tela em disco | Guardar a saída das abas em arquivo, para sobreviver ao reinício do daemon |
 | Sessões nomeadas | Várias sessões, cada uma com as suas abas, como no tmux |
 | Programas com janela | Opção explícita que libera o socket do Wayland, com aviso. O X11 nunca entra, porque permite capturar o teclado do desktop inteiro |
-| Entrar no sandbox de uma aba | Abrir um shell dentro do sandbox de uma aba em execução, para ver exatamente o que o agente vê |
+| Entrar no sandbox de uma aba | Abrir um shell dentro do sandbox de uma aba em execução, para ver exatamente o que o agente vê. Priorizado pelo usuário em 2026-11-15: change 41 |
 | Tela da aba como contexto do assistente | No modal de comando, um atalho inclui as últimas linhas do terminal na pergunta enviada ao modelo |
 | Daemon no boot | Início sem login (linger), junto com o keyring, que é quando passa a fazer diferença |
 | Atualização do harness pelo sandmux | Comando que roda o atualizador oficial do harness fora do sandbox |
@@ -501,9 +510,7 @@ Os changes abaixo foram arquivados em 2026-11-15 por decisão do usuário, antes
 
 ### Decisões ainda não tomadas
 
-| Decisão | Change |
-|---|---|
-| `--rw` (ou a chave `rw`) sobre arquivos que o host executa: `~/.bashrc`, `~/.profile`, `~/.zshrc`, `~/.config/autostart`, `~/.local/bin` e afins deixam o agente plantar algo que roda fora do sandbox. Achado ao propor o change 3, que só fecha a pasta de configuração do sandmux (e, com ela, `--rw ~/.config` inteiro, que inclui o systemd de usuário). Falta decidir entre recusar, avisar como as credenciais conhecidas, ou deixar para a política de arquivos | 16 |
+Nenhuma no momento. A última, o `--rw` sobre arquivos que o host executa (achado do change 3), foi decidida pelo usuário em 2026-11-15: recusar (change 40).
 
 As demais decisões levantadas até 2026-11-13 estão resolvidas e registradas nas seções 2 e 4.
 

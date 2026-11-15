@@ -88,6 +88,11 @@ pub const HELP: &[(&str, &str, &str)] = &[
         "generate a command and type it into the tab",
     ),
     ("settings", "configurações", "settings"),
+    (
+        "enter",
+        "shell dentro do sandbox da aba (o que o agente vê)",
+        "shell inside the tab's sandbox (what the agent sees)",
+    ),
     ("menu", "menu de ações", "action menu"),
 ];
 
@@ -805,6 +810,7 @@ impl App {
             "detach" => self.quit = true,
             "help" => self.modal = Some(Modal::Help),
             "menu" => self.modal = Some(Modal::Menu(0)),
+            "enter" => self.enter_active(),
             "settings" => self.open_settings(),
             "network" => self.open_net(),
             "chat" => self.open_chat(),
@@ -1173,6 +1179,40 @@ impl App {
         }
     }
 
+    /// Abre uma aba com um shell dentro do sandbox da aba ativa.
+    fn enter_active(&mut self) {
+        let Some(t) = self.tabs.get(self.active) else {
+            return;
+        };
+        if t.opts.harness == sandmux::launch::ENTER {
+            return self.say(tr!(
+                "esta aba já é um shell de dentro",
+                "this tab is already a shell inside"
+            ));
+        }
+        let mut opts = LaunchOptions::new(sandmux::launch::ENTER);
+        opts.workdir = t.workdir.clone();
+        opts.args = vec![t.id.to_string()];
+        let workdir = t.workdir.clone();
+        let size = self.size;
+        let r = (|| -> Result<(UnixStream, u32, Vec<String>)> {
+            let mut c = client::connect_or_start()?;
+            c.send(&Msg::Create {
+                opts: Box::new(opts),
+                vars: Default::default(),
+                size,
+                attach: true,
+            })?;
+            let mut s = c.stream;
+            let (id, _, warnings) = Self::until_created(&mut s)?;
+            Ok((s, id, warnings))
+        })();
+        match r {
+            Ok((s, id, w)) => self.add_tab(s, id, workdir, sandmux::launch::ENTER, &w),
+            Err(e) => self.say(trf!("entrar: {e:#}", "enter: {e:#}")),
+        }
+    }
+
     fn open_new(&mut self) {
         self.modal = Some(Modal::New(NewTab {
             field: 0,
@@ -1201,7 +1241,11 @@ impl App {
         let (id, opts) = (t.id, t.opts.clone());
         let r = (|| -> Result<UnixStream> {
             let host = Host::detect()?;
-            let names = sandmux::launch::effective(&host, &opts)?.pass_env_names();
+            let names = if opts.harness == sandmux::launch::ENTER {
+                Vec::new()
+            } else {
+                sandmux::launch::effective(&host, &opts)?.pass_env_names()
+            };
             let vars = client::client_vars(&names)?;
             let mut c = client::connect_or_start()?;
             c.send(&Msg::Restart {

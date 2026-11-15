@@ -441,6 +441,16 @@ fn restore(shared: &Arc<Shared>) {
         st.next_id = saved.next_id.max(1);
         for s in saved.sessions {
             let mut state = s.state.clone();
+            // Um shell de dentro não volta: o sandbox da aba alvo é outro.
+            if s.opts.harness == crate::launch::ENTER && state == SessionState::Viva {
+                state = SessionState::Parada {
+                    motivo: tr!(
+                        "o daemon reiniciou; entre de novo com Ctrl+b t na aba alvo",
+                        "the daemon restarted; enter again with Ctrl+b t on the target tab"
+                    )
+                    .into(),
+                };
+            }
             // Um gateway que esperava para reiniciar volta como vivo.
             if s.opts.gateway && matches!(state, SessionState::Reiniciando { .. }) {
                 state = SessionState::Viva;
