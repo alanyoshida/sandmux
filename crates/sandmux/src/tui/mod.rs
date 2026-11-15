@@ -220,7 +220,7 @@ impl NewTab {
 
 /// Modal de chat: a mensagem e o modelo.
 pub struct ChatModal {
-    /// 0 = mensagem, 1 = modelo.
+    /// 0 = mensagem, 1 = modelo, 2 = botão Enviar.
     pub field: usize,
     pub text: String,
     pub model: String,
@@ -240,7 +240,7 @@ pub enum CmdStage {
 /// Modal de comando: a pergunta, o modelo e o comando sugerido.
 pub struct CommandModal {
     pub stage: CmdStage,
-    /// 0 = pergunta, 1 = modelo, 2 = tela.
+    /// 0 = pergunta, 1 = modelo, 2 = tela, 3 = botão Enviar.
     pub field: usize,
     /// Mandar as últimas linhas da tela da aba com a pergunta (desligado ao
     /// abrir; só vai quando o usuário liga).
@@ -1206,6 +1206,29 @@ impl App {
     }
 
     /// Escreve o comando do modal na aba sob ele, sem executar.
+    /// Envia a mensagem do modal de chat (Enter ou o botão Enviar).
+    fn chat_send(&mut self) {
+        let Some(Modal::Chat(c)) = self.modal.as_mut() else {
+            return;
+        };
+        let (model, text) = (c.model.trim().to_string(), c.text.trim().to_string());
+        if text.is_empty() {
+            c.error = Some(tr!("escreva a mensagem", "write the message").into());
+            c.field = 0;
+        } else if model.is_empty() {
+            c.error = Some(
+                tr!(
+                    "escolha um modelo (<provedor>/<modelo>) ou defina `chat-model` em [assistant]",
+                    "pick a model (<provider>/<model>) or set `chat-model` in [assistant]"
+                )
+                .into(),
+            );
+            c.field = 1;
+        } else {
+            self.submit_chat(model, text);
+        }
+    }
+
     fn insert_command(&mut self) {
         let Some(Modal::Command(c)) = &mut self.modal else {
             return;
@@ -2076,7 +2099,8 @@ impl App {
             },
             Modal::Chat(c) => match k {
                 Key::Esc => self.modal = None,
-                Key::Tab => c.field = 1 - c.field.min(1),
+                Key::Tab => c.field = (c.field + 1) % 3,
+                Key::Char(_) | Key::Backspace if c.field == 2 => {}
                 Key::Right if c.field == 1 => self.open_picker(picker::PickFor::ChatModal),
                 Key::Up | Key::Down if c.field == 1 => {
                     let choices = self.assistant.model_choices();
@@ -2114,23 +2138,7 @@ impl App {
                         c.choice = None;
                     }
                 }
-                Key::Enter => {
-                    let (model, text) = (c.model.trim().to_string(), c.text.trim().to_string());
-                    if text.is_empty() {
-                        c.error = Some(tr!("escreva a mensagem", "write the message").into());
-                    } else if model.is_empty() {
-                        c.error = Some(
-                            tr!(
-                                "escolha um modelo (<provedor>/<modelo>) ou defina `chat-model` em [assistant]",
-                                "pick a model (<provider>/<model>) or set `chat-model` in [assistant]"
-                            )
-                            .into(),
-                        );
-                        c.field = 1;
-                    } else {
-                        self.submit_chat(model, text);
-                    }
-                }
+                Key::Enter => self.chat_send(),
                 _ => {}
             },
             Modal::Command(c) => {
@@ -2138,9 +2146,9 @@ impl App {
                 match (c.stage, k) {
                     (_, Key::Esc) => self.modal = None,
                     (CmdStage::Waiting, _) => {}
-                    (CmdStage::Ask, Key::Tab) => c.field = (c.field + 1) % 3,
+                    (CmdStage::Ask, Key::Tab) => c.field = (c.field + 1) % 4,
                     (CmdStage::Ask, Key::Char(' ')) if c.field == 2 => c.screen = !c.screen,
-                    (CmdStage::Ask, Key::Char(_) | Key::Backspace) if c.field == 2 => {}
+                    (CmdStage::Ask, Key::Char(_) | Key::Backspace) if c.field >= 2 => {}
                     (CmdStage::Ask, Key::Right) if c.field == 1 => {
                         self.open_picker(picker::PickFor::CommandModal)
                     }
@@ -2305,9 +2313,7 @@ impl App {
             return;
         }
         if self.modal.is_some() {
-            if let (Some(Modal::Command(c)), Some((x, y, w))) =
-                (&self.modal, self.modal_button.get())
-                && c.stage == CmdStage::Command
+            if let Some((x, y, w)) = self.modal_button.get()
                 && !m.release
                 && !m.is_motion()
                 && !m.is_wheel()
@@ -2315,7 +2321,14 @@ impl App {
             {
                 let (mx, my) = (m.x.saturating_sub(1), m.y.saturating_sub(1));
                 if my == y && mx >= x && mx < x + w {
-                    self.insert_command();
+                    match &self.modal {
+                        Some(Modal::Command(c)) if c.stage == CmdStage::Ask => self.ask_command(),
+                        Some(Modal::Command(c)) if c.stage == CmdStage::Command => {
+                            self.insert_command()
+                        }
+                        Some(Modal::Chat(_)) => self.chat_send(),
+                        _ => {}
+                    }
                 }
             }
             return;

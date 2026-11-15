@@ -9,7 +9,14 @@ Na TUI, Ctrl+b `i` abre o modal de chat:
 - **mensagem:** a primeira pergunta;
 - **modelo:** começa com `chat-model` de `[assistant]`. As setas ↑ ↓ passam pelos modelos de `models`, → abre a [lista dos provedores](#lista-de-modelos), e qualquer outro nome pode ser escrito.
 
-Tab troca de campo, Enter envia e Esc cancela. A resposta abre numa aba de chat nova, com o nome `chat:<modelo>`.
+Tab troca de campo e chega ao botão `⏎ Enviar`; Enter, ou o clique no botão, envia, e Esc cancela. A resposta abre numa aba de chat nova, com o nome `chat:<modelo>`.
+
+Os modais de chat e de comando seguem o [tema](tui.md#tema-de-cores):
+
+- o fundo e o texto da página;
+- o título num bloco da cor de destaque, como os blocos da barra;
+- os rótulos na cor secundária, e o campo ativo sublinhado no destaque;
+- o botão em dois tons, com `⏎` num bloco escuro e o rótulo no destaque. Com o foco do Tab, o bloco do `⏎` também fica no destaque.
 
 Pela linha de comando:
 
@@ -117,9 +124,9 @@ Esta é uma exceção à regra do histórico de tela, que nunca vai para o disco
 Ctrl+b `g` abre, sobre a aba ativa, o modal de comando: uma pergunta como "comprimir a pasta logs sem os .tmp" vira um comando escrito na linha da aba.
 
 1. **Pergunta e modelo:** o modelo começa com `command-model` de `[assistant]` ou, sem ele, com `chat-model`. Tab e as setas funcionam como no modal de chat.
-2. **Enter pergunta.** Vão ao modelo só a pergunta, a pasta de trabalho da aba e o nome do shell (o `SHELL` do usuário quando está nas pastas de sistema; senão, `bash`), com um texto de sistema que pede um único comando, sem explicação. Nada da tela da aba é enviado, a não ser que o campo **tela** esteja ligado (veja abaixo). A TUI continua respondendo enquanto o modal mostra "esperando o modelo".
+2. **Enter, ou o clique no botão `⏎ Enviar`, pergunta.** Vão ao modelo só a pergunta, a pasta de trabalho da aba e o nome do shell (o `SHELL` do usuário quando está nas pastas de sistema; senão, `bash`), com um texto de sistema que pede um único comando, sem explicação. Nada da tela da aba é enviado, a não ser que o campo **tela** esteja ligado (veja abaixo). A TUI continua respondendo enquanto o modal mostra "esperando o modelo".
 3. **O comando sugerido** aparece num campo editável, sem as cercas de código e sem um `$ ` no começo. Tab volta à pergunta.
-4. **Enter, ou o clique em `[ Inserir ]`,** escreve o comando na entrada da aba, sem Enter: ele só roda quando o usuário apertar Enter na aba.
+4. **Enter, ou o clique no botão `⏎ Inserir`,** escreve o comando na entrada da aba, sem Enter: ele só roda quando o usuário apertar Enter na aba.
 
 **Campo tela:** com Tab até ele e Espaço, liga o envio das últimas 40 linhas visíveis da aba, sem o histórico rolado e sem as linhas vazias do fim, junto com a pergunta. Serve para pedir o comando que corrige um erro que acabou de aparecer. O campo começa desligado a cada abertura do modal, e, ligado, o modal avisa que a tela vai ao provedor.
 

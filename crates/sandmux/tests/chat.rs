@@ -406,7 +406,7 @@ fn modal_de_comando_escreve_sem_executar() {
     t.write(b"\x02g");
     t.wait_text("Comando");
     t.write(b"mostrar um eco\r");
-    t.wait_text("[ Inserir ]");
+    t.wait_text("⏎  Inserir");
     t.wait_text("echo gerado-$((40+2))");
     // O que o provedor recebeu: a pergunta, a pasta e o shell; nada da tela.
     let body = bodies.lock().unwrap().last().cloned().unwrap();
@@ -429,13 +429,15 @@ fn modal_de_comando_escreve_sem_executar() {
     // sem rodar. O botão é clicado.
     t.write(b"\x02g");
     t.wait_text("Comando");
-    t.write(b"duas linhas\r");
-    t.wait_text("[ Inserir ]");
+    t.write(b"duas linhas");
+    // O botão Enviar, clicado, pergunta como o Enter.
+    click(&mut t, "Enviar");
+    t.wait_text("⏎  Inserir");
     let (row, col) = t.with_screen(|s| {
         let (rows, cols) = (s.size().0.get(), s.size().1.get());
         for r in 0..rows {
             let line = s.contents_between(r, 0, r, cols);
-            if let Some(c) = line.find("[ Inserir ]") {
+            if let Some(c) = line.find("Inserir") {
                 return (r, line[..c].chars().count() as u16);
             }
         }
@@ -465,7 +467,7 @@ fn modal_de_comando_escreve_sem_executar() {
     t.write(b"\x02g");
     t.wait_text("Comando");
     t.write(b"duas linhas\r");
-    t.wait_text("[ Inserir ]");
+    t.wait_text("⏎  Inserir");
     t.write(b"\r");
     t.wait_text("aceita colagem");
     t.write(b"\x1b");
@@ -570,7 +572,7 @@ fn modal_de_comando_manda_a_tela_so_quando_pedida() {
     t.wait_text("● enviar as últimas 40 linhas da aba");
     t.wait_text("a tela da aba vai ao provedor");
     t.write(b"\r");
-    t.wait_text("[ Inserir ]");
+    t.wait_text("⏎  Inserir");
     let body = bodies.lock().unwrap().last().cloned().unwrap();
     assert!(body.contains("corrigir o erro"), "{body}");
     assert!(body.contains("erro-arquivo-43"), "{body}");
@@ -580,11 +582,92 @@ fn modal_de_comando_manda_a_tela_so_quando_pedida() {
     t.wait_text("○ não enviar");
     t.write(b"outra coisa\r");
     t.wait_for("segunda resposta", |_| bodies.lock().unwrap().len() >= 2);
-    t.wait_text("[ Inserir ]");
+    t.wait_text("⏎  Inserir");
     let body = bodies.lock().unwrap().last().cloned().unwrap();
     assert!(body.contains("outra coisa"), "{body}");
     assert!(!body.contains("erro-arquivo-43"), "{body}");
     t.write(b"\x1b");
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+/// Clica no texto dado (a primeira ocorrência na tela).
+fn click(t: &mut Term, text: &str) {
+    let (row, col) = t.with_screen(|s| {
+        let (rows, cols) = (s.size().0.get(), s.size().1.get());
+        for r in 0..rows {
+            let line = s.contents_between(r, 0, r, cols);
+            if let Some(c) = line.find(text) {
+                return (r, line[..c].chars().count() as u16);
+            }
+        }
+        panic!("sem {text}: {}", s.contents());
+    });
+    t.write(
+        format!(
+            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+            col + 2,
+            row + 1,
+            col + 2,
+            row + 1
+        )
+        .as_bytes(),
+    );
+}
+
+#[test]
+fn modais_do_assistente_seguem_o_tema() {
+    let (e, _) = setup();
+    e.write_config("[tui]\ntheme = \"catppuccin\"\n");
+    let mut cmd = e.cmd(&e.work, &["run", "shell"]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut t = Term::spawn_answering(cmd, 120, 30);
+    t.write(b"echo pronto-$((1+1))\r");
+    t.wait_text("pronto-2");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+    let mut cmd = e.cmd(&e.work, &[]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut t = Term::spawn_answering(cmd, 120, 30);
+    t.wait_text(&tab(1, "shell:app"));
+    for (keys, title) in [(&b"\x02g"[..], "≡ Comando"), (&b"\x02i"[..], "≡ Chat")] {
+        t.write(keys);
+        t.wait_text(title);
+        t.wait_text("⏎  Enviar");
+        t.with_screen(|s| {
+            let (rows, cols) = (s.size().0.get(), s.size().1.get());
+            let at = |text: &str| {
+                (0..rows)
+                    .find_map(|r| {
+                        let line = s.contents_between(r, 0, r, cols);
+                        line.find(text)
+                            .map(|c| (r, line[..c].chars().count() as u16))
+                    })
+                    .unwrap_or_else(|| panic!("sem {text}: {}", s.contents()))
+            };
+            // Título no bloco de destaque, fundo da página no modal.
+            let (r, c) = at(title);
+            let accent = vt100::Color::Rgb(0xcb, 0xa6, 0xf7);
+            assert_eq!(
+                s.cell(r, c + 2).unwrap().bgcolor(),
+                accent,
+                "{}",
+                s.contents()
+            );
+            let (r, c) = at("modelo");
+            assert_eq!(
+                s.cell(r, c).unwrap().bgcolor(),
+                vt100::Color::Rgb(0x1e, 0x1e, 0x2e),
+                "{}",
+                s.contents()
+            );
+            // O rótulo do botão no destaque.
+            let (r, c) = at("Enviar");
+            assert_eq!(s.cell(r, c).unwrap().bgcolor(), accent);
+        });
+        t.write(b"\x1b");
+        std::thread::sleep(Duration::from_millis(200));
+    }
     t.write(b"\x02d");
     t.wait_exit();
 }
