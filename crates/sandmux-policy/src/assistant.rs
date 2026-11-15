@@ -76,8 +76,9 @@ impl Provider {
 pub fn split_model(model: &str) -> Result<(&str, &str), String> {
     match model.trim().split_once('/') {
         Some((p, m)) if !p.is_empty() && !m.trim().is_empty() => Ok((p, m.trim())),
-        _ => Err(format!(
-            "modelo inválido: {model:?}; escreva <provedor>/<modelo>, como openrouter/deepseek/deepseek-v4.1-flash-1017"
+        _ => Err(sandmux_spec::trf!(
+            "modelo inválido: {model:?}; escreva <provedor>/<modelo>, como openrouter/deepseek/deepseek-v4.1-flash-1017",
+            "invalid model: {model:?}; write <provider>/<model>, like openrouter/deepseek/deepseek-v4.1-flash-1017"
         )),
     }
 }
@@ -143,8 +144,9 @@ impl AssistantConfig {
     pub fn resolve(&self, model: &str) -> Result<(Provider, String), String> {
         let (p, m) = split_model(model)?;
         let prov = self.provider(p).ok_or_else(|| {
-            format!(
+            sandmux_spec::trf!(
                 "provedor desconhecido: {p:?}. Provedores: {}",
+                "unknown provider: {p:?}. Providers: {}",
                 self.provider_names()
             )
         })?;

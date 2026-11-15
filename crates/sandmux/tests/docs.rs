@@ -70,6 +70,7 @@ fn documentacao_da_configuracao_acompanha_o_codigo() {
             &sandmux_policy::config::SSH_KEYS,
             &sandmux_policy::config::DB_KEY,
             &sandmux_policy::config::PORTS_KEY,
+            &sandmux_policy::config::HOST_PORTS_KEY,
         ])
         .chain(sandmux_policy::config::FILE_LIST_KEYS)
         .chain(sandmux_policy::config::MCP_LIST_KEYS)
@@ -202,6 +203,30 @@ fn documentacao_da_tui_acompanha_o_codigo() {
         sandmux_policy::config::Config::parse(std::path::Path::new("docs/tui.md"), &doc[i..end])
             .unwrap();
     assert_eq!(c.tui.prefix, 'a');
+    // O estilo da barra e o exemplo sem a fonte.
+    for k in [
+        "`style`",
+        "`bar`",
+        "\"blocos\"",
+        "\"powerline\"",
+        "\"simples\"",
+        "Ctrl+b `e`",
+        "Ctrl+b `:`",
+        "\"bottom\"",
+        "\"top\"",
+    ] {
+        assert!(doc.contains(k), "docs/tui.md não cita {k}");
+    }
+    let i = doc
+        .find("```toml\n# Sem uma fonte")
+        .expect("exemplo do estilo simples")
+        + "```toml\n".len();
+    let end = i + doc[i..].find("```").unwrap();
+    let c =
+        sandmux_policy::config::Config::parse(std::path::Path::new("docs/tui.md"), &doc[i..end])
+            .unwrap();
+    assert_eq!(c.tui.style, sandmux_policy::config::BarStyle::Simples);
+    assert!(c.tui.bar_top);
 }
 
 #[test]
@@ -680,6 +705,63 @@ fn documentacao_da_instalacao_acompanha_o_codigo() {
         let t = std::fs::read_to_string(format!("{root}{f}")).unwrap();
         for b in bins.split(' ') {
             assert!(t.contains(b), "{f} não cita {b}");
+        }
+    }
+}
+
+#[test]
+fn documentacao_em_ingles_acompanha_a_portuguesa() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let readme = std::fs::read_to_string(format!("{root}/README.md")).unwrap();
+    let readme_en = std::fs::read_to_string(format!("{root}/README.en.md")).unwrap();
+    assert!(readme.contains("(README.en.md)"));
+    assert!(readme_en.contains("(README.md)"));
+    let mut docs: Vec<(String, String)> = vec![("README.en.md".into(), readme_en)];
+    for e in std::fs::read_dir(format!("{root}/docs")).unwrap() {
+        let p = e.unwrap().path();
+        if p.extension().is_some_and(|x| x == "md") {
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            let en = std::fs::read_to_string(format!("{root}/docs/en/{name}"))
+                .unwrap_or_else(|_| panic!("falta docs/en/{name}"));
+            assert!(
+                en.contains(&format!("(../{name})")),
+                "docs/en/{name} sem link para o português"
+            );
+            docs.push((format!("docs/en/{name}"), en));
+        }
+    }
+    for (name, text) in &docs {
+        // Os exemplos de configuração em inglês são válidos.
+        let mut rest = text.as_str();
+        while let Some(i) = rest.find("```toml\n") {
+            let body = &rest[i + 8..];
+            let end = body.find("```").unwrap();
+            let block = &body[..end];
+            if ["[global]", "[tui", "[profile", "[project", "[assistant"]
+                .iter()
+                .any(|s| block.contains(s))
+            {
+                sandmux_policy::config::Config::parse(std::path::Path::new(name), block)
+                    .unwrap_or_else(|e| panic!("{name}: exemplo inválido: {e}\n{block}"));
+            }
+            rest = &body[end + 3..];
+        }
+        // Os links relativos apontam para arquivos que existem.
+        let dir = std::path::Path::new(root).join(name);
+        let dir = dir.parent().unwrap();
+        let mut s = text.as_str();
+        while let Some(i) = s.find("](") {
+            let after = &s[i + 2..];
+            let end = after.find(')').unwrap_or(after.len());
+            let link = &after[..end];
+            s = &after[end..];
+            if link.starts_with("http") || link.starts_with('#') || link.contains(' ') {
+                continue;
+            }
+            let file = link.split('#').next().unwrap();
+            if !file.is_empty() {
+                assert!(dir.join(file).exists(), "{name}: link quebrado {link}");
+            }
         }
     }
 }

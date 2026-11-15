@@ -14,9 +14,44 @@ use sandmux_launcher::support::{self, SupportReport};
 use sandmux_policy::limits::{self, Limits, MemoryLimit, ProcessLimit};
 use sandmux_policy::{Host, LayerMode, Layout, compose, config, home};
 use sandmux_proto::LaunchOptions;
+use sandmux_spec::{tr, trf};
 
 /// Caminho de um binário irmão (na mesma pasta do executável atual), com o
 /// nome puro como recuo, para ser procurado no `PATH`.
+/// Os textos do resumo da proteção (nível, camada e rede) são gravados no
+/// idioma do lançamento; na exibição, vão para o idioma atual.
+pub fn localize_summary(s: &str) -> String {
+    const PAIRS: &[(&str, &str)] = &[
+        ("persistente", "persistent"),
+        (
+            "temporária (outra execução usa a persistente)",
+            "temporary (another run is using the persistent one)",
+        ),
+        (
+            "recuo: caches vazios, toolchains em somente leitura",
+            "fallback: empty caches, read-only toolchains",
+        ),
+        ("aberta, registrada", "open, logged"),
+        ("só inferência, registrada", "inference only, logged"),
+        (
+            "custom (allowlist), registrada",
+            "custom (allowlist), logged",
+        ),
+        ("sem rede", "no network"),
+    ];
+    let en = sandmux_spec::lang::is_en();
+    for (pt, e) in PAIRS {
+        if s == *pt || s == *e {
+            return if en { e } else { pt }.to_string();
+        }
+    }
+    let (pt, e) = ("nível ", "level ");
+    if let Some(rest) = s.strip_prefix(pt).or_else(|| s.strip_prefix(e)) {
+        return format!("{}{rest}", if en { e } else { pt });
+    }
+    s.to_string()
+}
+
 pub fn sibling(name: &str) -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -33,15 +68,16 @@ pub fn runner_path() -> PathBuf {
 /// Motivo curto de uma máquina sem suporte.
 pub fn short_reason(r: &SupportReport) -> String {
     if !r.landlock_ok() {
-        return format!(
+        return trf!(
             "Landlock ABI {} encontrado, exige {}",
+            "Landlock ABI {} found, requires {}",
             r.landlock_abi,
             sandmux_launcher::REQUIRED_ABI
         );
     }
     match &r.userns {
         Err(e) => e.clone(),
-        Ok(()) => "motivo desconhecido".into(),
+        Ok(()) => tr!("motivo desconhecido", "unknown reason").into(),
     }
 }
 
@@ -57,7 +93,7 @@ fn try_layer_lock(path: &Path) -> Result<Option<File>> {
         .truncate(false)
         .write(true)
         .open(path)
-        .with_context(|| format!("trava {}", path.display()))?;
+        .with_context(|| trf!("trava {}", "lock {}", path.display()))?;
     // SAFETY: flock sobre um descritor válido.
     if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Ok(None);
@@ -106,12 +142,15 @@ impl Prepared {
                 c.args(limits::scope_args(l, &self.scope_name))
                     .arg(&self.runner)
                     .arg("--spec-fd")
-                    .arg(spec_fd);
+                    .arg(spec_fd)
+                    .env(sandmux_spec::lang::ENV, sandmux_spec::lang::get().code());
                 c
             }
             None => {
                 let mut c = Command::new(&self.runner);
-                c.arg("--spec-fd").arg(spec_fd);
+                c.arg("--spec-fd")
+                    .arg(spec_fd)
+                    .env(sandmux_spec::lang::ENV, sandmux_spec::lang::get().code());
                 c
             }
         }
@@ -124,7 +163,11 @@ impl Prepared {
             unsafe { libc::fcntl(fd, libc::F_SETFD, 0) };
         }
         let err = self.command().exec();
-        anyhow!("executar {}: {err}", self.runner.display())
+        anyhow!(trf!(
+            "executar {}: {err}",
+            "run {}: {err}",
+            self.runner.display()
+        ))
     }
 }
 
@@ -158,6 +201,39 @@ pub struct VaultLaunch {
     pub db_socket: Option<PathBuf>,
     /// Aba de chat: o valor falso da chave de cada provedor próprio.
     pub chat_keys: Vec<(String, String)>,
+    /// Modelos descobertos nos servidores locais do opencode.
+    pub opencode_models: Vec<(String, Vec<String>)>,
+}
+
+/// Descobre os modelos dos servidores locais do opencode cujas portas estão
+/// em `host-ports`. `real` troca os falsos do cofre pelos reais no valor da
+/// autorização. Uma thread por provedor, com tempo curto.
+pub fn discover_opencode_models(
+    host: &Host,
+    workdir: &Path,
+    host_ports: &[u16],
+    real: impl Fn(&str) -> String,
+) -> Vec<(String, Vec<String>)> {
+    let home = Layout::new(&host.data_dir).home("opencode");
+    let jobs: Vec<_> = sandmux_policy::opencode_models::local_providers(&home, workdir)
+        .into_iter()
+        .filter(|p| host_ports.contains(&p.port))
+        .map(|p| {
+            let auth = p
+                .authorization
+                .clone()
+                .or_else(|| p.api_key.as_ref().map(|k| format!("Bearer {k}")))
+                .map(|a| real(&a));
+            std::thread::spawn(move || {
+                let m = crate::discover::models(&p.base_url, p.port, auth.as_deref());
+                (p.id, m.unwrap_or_default())
+            })
+        })
+        .collect();
+    jobs.into_iter()
+        .filter_map(|j| j.join().ok())
+        .filter(|(_, m)| !m.is_empty())
+        .collect()
 }
 
 /// Variável da chave de um provedor próprio no `sandmux-chat`.
@@ -225,9 +301,11 @@ pub fn prepare_with(
     let mut warnings = Vec::new();
     for r in &eff.ports {
         if let Some(a) = r.addr {
-            warnings.push(format!(
+            warnings.push(trf!(
                 "a porta {} fica exposta à rede em {a}:{}, além do 127.0.0.1",
-                r.port, r.port
+                "port {} is exposed to the network at {a}:{}, besides 127.0.0.1",
+                r.port,
+                r.port
             ));
         }
     }
@@ -242,10 +320,11 @@ pub fn prepare_with(
     let runner = runner_path();
     let report = support::check_via(&runner);
     if !report.can_launch() {
-        bail!(
+        bail!(trf!(
             "esta máquina não permite lançar o sandbox ({}); rode `sandmux doctor`",
+            "this machine cannot launch the sandbox ({}); run `sandmux doctor`",
             short_reason(&report)
-        );
+        ));
     }
     // SANDMUX_DISABLE_OVERLAY só desliga a camada (modo de recuo): nunca afrouxa.
     let overlay_ok =
@@ -263,6 +342,7 @@ pub fn prepare_with(
     let mut run = eff.run_options(&opts.harness, &opts.workdir, &opts.args, mode);
     run.docker_socket = docker_socket.map(Path::to_path_buf);
     run.fake_env = vault.fake_env;
+    run.opencode_models = vault.opencode_models;
     run.tool_secrets = vault.tool_secrets;
     run.ssh_agent_socket = vault.ssh_agent_socket;
     run.ssh_servers = vault.ssh_servers;
@@ -273,8 +353,9 @@ pub fn prepare_with(
             run.db_socket = Some(sock);
             run.db_mcp = Some(bin);
         } else {
-            warnings.push(format!(
+            warnings.push(trf!(
                 "MCP de banco sem o repassador: falta {}",
+                "database MCP without the relay: {} is missing",
                 bin.display()
             ));
         }
@@ -282,10 +363,25 @@ pub fn prepare_with(
     if opts.harness == sandmux_policy::assistant::HARNESS {
         let bin = runner_path().with_file_name("sandmux-chat");
         if !bin.is_file() {
-            bail!("falta o programa da aba de chat: {}", bin.display());
+            bail!(trf!(
+                "falta o programa da aba de chat: {}",
+                "the chat tab program is missing: {}",
+                bin.display()
+            ));
         }
         run.chat_bin = Some(bin);
         run.chat_env = chat_env(host, &vault.chat_keys);
+        // A aba de chat fala o idioma do sandmux.
+        run.chat_env.push((
+            sandmux_spec::lang::ENV.to_string(),
+            sandmux_spec::lang::get().code().to_string(),
+        ));
+        // A tecla de prefixo, para a aba dizer como sair (Ctrl+b d).
+        let prefix = config::Config::load(&config::path(host))
+            .map(|c| c.tui.prefix)
+            .unwrap_or('b');
+        run.chat_env
+            .push(("SANDMUX_PREFIX".to_string(), format!("Ctrl+{prefix}")));
     }
     run.files_log = Some(crate::paths::state_dir().join("files"));
     // A política de arquivos: no daemon, num arquivo que ele regrava quando a
@@ -311,16 +407,23 @@ pub fn prepare_with(
     warnings.extend(composed.warnings);
     let limits = scope_limits(&eff, &mut warnings);
     let summary = sandmux_proto::msg::PolicySummary {
-        level: format!(
+        level: trf!(
             "nível 1: namespaces, Landlock ABI {}, seccomp",
+            "level 1: namespaces, Landlock ABI {}, seccomp",
             report.landlock_abi
         ),
         layer: match mode {
-            LayerMode::Persistent => "persistente".into(),
-            LayerMode::Temporary => "temporária (outra execução usa a persistente)".into(),
-            LayerMode::ReadOnlyFallback => {
-                "recuo: caches vazios, toolchains em somente leitura".into()
-            }
+            LayerMode::Persistent => tr!("persistente", "persistent").into(),
+            LayerMode::Temporary => tr!(
+                "temporária (outra execução usa a persistente)",
+                "temporary (another run is using the persistent one)"
+            )
+            .into(),
+            LayerMode::ReadOnlyFallback => tr!(
+                "recuo: caches vazios, toolchains em somente leitura",
+                "fallback: empty caches, read-only toolchains"
+            )
+            .into(),
         },
         workdir: composed.workdir.clone(),
         ro: eff.ro(),
@@ -338,7 +441,8 @@ pub fn prepare_with(
         if d.starts_with(&host.data_dir) {
             home::private_dir(d)?;
         } else {
-            std::fs::create_dir_all(d).with_context(|| format!("criar {}", d.display()))?;
+            std::fs::create_dir_all(d)
+                .with_context(|| trf!("criar {}", "create {}", d.display()))?;
         }
     }
 
@@ -376,8 +480,9 @@ fn scope_limits(eff: &config::Effective, warnings: &mut Vec<String>) -> Option<L
             Some(eff.limits(total))
         }
         Err(why) => {
-            warnings.push(format!(
-                "esta sessão roda sem teto de memória e de processos: {why}; veja `sandmux doctor`"
+            warnings.push(trf!(
+                "esta sessão roda sem teto de memória e de processos: {why}; veja `sandmux doctor`",
+                "this session runs with no memory or process cap: {why}; see `sandmux doctor`"
             ));
             None
         }
@@ -421,7 +526,7 @@ pub fn write_file_policy(path: &Path, p: &sandmux_spec::files::FilePolicy) -> Re
             .recursive(true)
             .mode(0o700)
             .create(dir)
-            .with_context(|| format!("criar {}", dir.display()))?;
+            .with_context(|| trf!("criar {}", "create {}", dir.display()))?;
     }
     let tmp = path.with_extension("tmp");
     let mut f = std::fs::OpenOptions::new()
@@ -430,9 +535,9 @@ pub fn write_file_policy(path: &Path, p: &sandmux_spec::files::FilePolicy) -> Re
         .truncate(true)
         .mode(0o600)
         .open(&tmp)
-        .with_context(|| format!("gravar {}", tmp.display()))?;
+        .with_context(|| trf!("gravar {}", "write {}", tmp.display()))?;
     std::io::Write::write_all(&mut f, &serde_json::to_vec(p)?)?;
-    std::fs::rename(&tmp, path).with_context(|| format!("gravar {}", path.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| trf!("gravar {}", "write {}", path.display()))?;
     Ok(())
 }
 
@@ -445,7 +550,7 @@ pub fn ports_file(tag: &str) -> Result<PathBuf> {
         .recursive(true)
         .mode(0o700)
         .create(&dir)
-        .with_context(|| format!("criar {}", dir.display()))?;
+        .with_context(|| trf!("criar {}", "create {}", dir.display()))?;
     Ok(dir.join(format!("{tag}.ports.json")))
 }
 
@@ -494,7 +599,10 @@ pub fn run_layer(opts: &LaunchOptions) -> Result<config::Layer> {
                 .iter()
                 .find(|k| !config::valid_ssh_key_name(k))
             {
-                bail!("--ssh-key: nome inválido {k:?}");
+                bail!(trf!(
+                    "--ssh-key: nome inválido {k:?}",
+                    "--ssh-key: invalid name {k:?}"
+                ));
             }
             opts.ssh_keys.clone()
         },
@@ -504,7 +612,10 @@ pub fn run_layer(opts: &LaunchOptions) -> Result<config::Layer> {
         secret_files_off: vec![],
         db: {
             if let Some(k) = opts.db.iter().find(|k| !config::valid_ssh_key_name(k)) {
-                bail!("--db: nome inválido {k:?}");
+                bail!(trf!(
+                    "--db: nome inválido {k:?}",
+                    "--db: invalid name {k:?}"
+                ));
             }
             opts.db.clone()
         },
@@ -513,6 +624,15 @@ pub fn run_layer(opts: &LaunchOptions) -> Result<config::Layer> {
             .iter()
             .map(|p| p.parse().map_err(|e| anyhow!("--port: {e}")))
             .collect::<Result<_>>()?,
+        host_ports: {
+            if opts.host_ports.contains(&0) {
+                bail!(tr!(
+                    "--host-port: a porta precisa ser de 1 a 65535",
+                    "--host-port: the port must be from 1 to 65535"
+                ));
+            }
+            opts.host_ports.clone()
+        },
         mcp_deny: opts.mcp_deny.clone(),
         mcp_allow: opts.mcp_allow.clone(),
         ro: opts.ro.clone(),

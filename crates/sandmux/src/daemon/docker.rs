@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use sandmux_policy::limits;
 use sandmux_proto::LaunchOptions;
 use sandmux_proto::msg::DockerStats;
+use sandmux_spec::{tr, trf};
 
 use super::Shared;
 use crate::{docker, launch, paths};
@@ -80,10 +81,12 @@ impl Engines {
             g.as_ref().expect("spawner").clone()
         };
         let (rtx, rrx) = std::sync::mpsc::channel();
-        tx.send((cmd, rtx))
-            .map_err(|_| std::io::Error::other("a thread do Docker parou"))?;
-        rrx.recv()
-            .map_err(|_| std::io::Error::other("a thread do Docker parou"))?
+        tx.send((cmd, rtx)).map_err(|_| {
+            std::io::Error::other(tr!("a thread do Docker parou", "the Docker thread stopped"))
+        })?;
+        rrx.recv().map_err(|_| {
+            std::io::Error::other(tr!("a thread do Docker parou", "the Docker thread stopped"))
+        })?
     }
 
     fn slot(&self, workdir: &Path) -> Arc<Mutex<Option<Engine>>> {
@@ -99,8 +102,9 @@ impl Engines {
     pub fn ensure(&self, shared: &Shared, workdir: &Path) -> Result<PathBuf, String> {
         let workdir = canon(workdir);
         let sup = support(shared).clone().map_err(|e| {
-            format!(
-                "o Docker privado não está disponível nesta máquina: {e}; veja `sandmux doctor`"
+            trf!(
+                "o Docker privado não está disponível nesta máquina: {e}; veja `sandmux doctor`",
+                "the private Docker is not available on this machine: {e}; see `sandmux doctor`"
             )
         })?;
         let slot = self.slot(&workdir);
@@ -160,8 +164,12 @@ impl Engines {
                 let _ = child.kill();
                 let _ = child.wait();
                 eprintln!(
-                    "sandmuxd: o espelho do Docker Hub não subiu: {}",
-                    tail(&dir.join("registry.log"))
+                    "{}",
+                    trf!(
+                        "sandmuxd: o espelho do Docker Hub não subiu: {}",
+                        "sandmuxd: the Docker Hub mirror did not start: {}",
+                        tail(&dir.join("registry.log"))
+                    )
                 );
                 return None;
             }
@@ -247,13 +255,15 @@ fn start(
     let dirs = docker::Dirs::new(&shared.base.data_dir, &paths::runtime_dir(), &id);
     let io = |what: &str, e: std::io::Error| format!("{what}: {e}");
     let _ = std::fs::remove_dir_all(&dirs.state);
-    private_dir(&dirs.data).map_err(|e| io("pasta de dados do Docker", e))?;
+    private_dir(&dirs.data)
+        .map_err(|e| io(tr!("pasta de dados do Docker", "Docker data folder"), e))?;
     for d in [
         dirs.state.clone(),
         dirs.state.join("home"),
         dirs.state.join("xdg"),
     ] {
-        private_dir(&d).map_err(|e| io("pasta de estado do Docker", e))?;
+        private_dir(&d)
+            .map_err(|e| io(tr!("pasta de estado do Docker", "Docker state folder"), e))?;
     }
     let _ = std::fs::write(dirs.data.join("pasta"), workdir.display().to_string());
 
@@ -265,11 +275,11 @@ fn start(
     // Um socket velho (a pasta de estado de uma subida anterior pode não ter
     // saído inteira) faria o `bind` falhar.
     let _ = std::fs::remove_file(&tun_sock);
-    let tun_listener =
-        UnixListener::bind(&tun_sock).map_err(|e| io("socket do TUN do Docker", e))?;
+    let tun_listener = UnixListener::bind(&tun_sock)
+        .map_err(|e| io(tr!("socket do TUN do Docker", "Docker TUN socket"), e))?;
     tun_listener
         .set_nonblocking(true)
-        .map_err(|e| io("socket do TUN do Docker", e))?;
+        .map_err(|e| io(tr!("socket do TUN do Docker", "Docker TUN socket"), e))?;
     // A CA do gateway do Docker: decifra os registries dos segredos `docker`.
     let tls = launch::launch_ca();
     let spec = sandmux_policy::compose_docker_view(
@@ -281,8 +291,9 @@ fn start(
         Some(&tun_sock),
         tls.as_ref().map(|t| t.ca_cert_pem.as_str()),
     )
-    .map_err(|e| format!("visão do Docker: {e}"))?;
-    std::fs::write(dirs.view_file(), spec.to_json()).map_err(|e| io("gravar a visão", e))?;
+    .map_err(|e| trf!("visão do Docker: {e}", "Docker view: {e}"))?;
+    std::fs::write(dirs.view_file(), spec.to_json())
+        .map_err(|e| io(tr!("gravar a visão", "write the view"), e))?;
     let _ = std::fs::set_permissions(dirs.view_file(), std::fs::Permissions::from_mode(0o600));
 
     // Tetos da pasta, pela configuração (sem opções de run).
@@ -310,8 +321,9 @@ fn start(
                 Ok(o) if o.status.success() => {}
                 Ok(o) => {
                     let _ = std::fs::remove_file(&tun_sock);
-                    return Err(format!(
+                    return Err(trf!(
                         "não foi possível pôr o teto na slice {slice}: {}",
+                        "could not set the cap on slice {slice}: {}",
                         String::from_utf8_lossy(&o.stderr).trim()
                     ));
                 }
@@ -331,8 +343,11 @@ fn start(
             c
         }
     };
-    let log = std::fs::File::create(dirs.log()).map_err(|e| io("log do Docker", e))?;
-    let log2 = log.try_clone().map_err(|e| io("log do Docker", e))?;
+    let log =
+        std::fs::File::create(dirs.log()).map_err(|e| io(tr!("log do Docker", "Docker log"), e))?;
+    let log2 = log
+        .try_clone()
+        .map_err(|e| io(tr!("log do Docker", "Docker log"), e))?;
     cmd.stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log2));
@@ -346,7 +361,7 @@ fn start(
     }
     let mut child = engines
         .spawn(cmd)
-        .map_err(|e| io("subir o rootlesskit", e))?;
+        .map_err(|e| io(tr!("subir o rootlesskit", "start rootlesskit"), e))?;
     let deadline = Instant::now() + Duration::from_secs(30);
     let tag = format!("docker-{id}");
     let policy_file = super::net::policy_path(&tag);
@@ -392,16 +407,18 @@ fn start(
             break;
         }
         if let Ok(Some(st)) = child.try_wait() {
-            return Err(format!(
+            return Err(trf!(
                 "o Docker privado não subiu ({st}): {}",
+                "the private Docker did not start ({st}): {}",
                 tail(&dirs.log())
             ));
         }
         if Instant::now() > deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(format!(
+            return Err(trf!(
                 "o Docker privado não respondeu em 30 s: {}",
+                "the private Docker did not answer within 30 s: {}",
                 tail(&dirs.log())
             ));
         }
@@ -604,7 +621,12 @@ fn accept_loop(shared: Arc<Shared>, l: UnixListener, stop: Arc<AtomicBool>, work
 
 fn serve(shared: &Shared, client: UnixStream, workdir: &Path) {
     match shared.docker.ensure(shared, workdir).and_then(|sock| {
-        UnixStream::connect(sock).map_err(|e| format!("conectar ao Docker privado: {e}"))
+        UnixStream::connect(sock).map_err(|e| {
+            trf!(
+                "conectar ao Docker privado: {e}",
+                "connect to the private Docker: {e}"
+            )
+        })
     }) {
         Ok(upstream) => splice(client, upstream),
         Err(msg) => refuse(client, &msg),

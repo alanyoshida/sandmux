@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::Result;
 use sandmux_proto::msg::answer_hello;
 use sandmux_proto::{Frame, Msg, SessionState, Size, read_frame, write_control, write_data};
+use sandmux_spec::{tr, trf};
 
 use super::session::{self, CLIENT_QUEUE, Client, Out};
 use super::{Shared, State};
@@ -22,9 +23,9 @@ pub fn handle(shared: Arc<Shared>, stream: UnixStream) {
 
 fn list_text(st: &State) -> String {
     if st.sessions.is_empty() {
-        return " Não há sessões.".into();
+        return tr!(" Não há sessões.", " No sessions.").into();
     }
-    let mut s = String::from(" Sessões:");
+    let mut s = String::from(tr!(" Sessões:", " Sessions:"));
     for x in st.sessions.values() {
         s.push_str(&format!("\n  {}  {}  {}", x.id, x.name, x.state));
     }
@@ -34,7 +35,11 @@ fn list_text(st: &State) -> String {
 fn resolve(st: &State, id: Option<u32>) -> Result<u32, String> {
     match id {
         Some(i) if st.sessions.contains_key(&i) => Ok(i),
-        Some(i) => Err(format!("não existe a sessão {i}.{}", list_text(st))),
+        Some(i) => Err(trf!(
+            "não existe a sessão {i}.{}",
+            "session {i} does not exist.{}",
+            list_text(st)
+        )),
         None => {
             let live: Vec<u32> = st
                 .sessions
@@ -44,9 +49,14 @@ fn resolve(st: &State, id: Option<u32>) -> Result<u32, String> {
                 .collect();
             match live.as_slice() {
                 [only] => Ok(*only),
-                [] => Err(format!("não há sessão viva.{}", list_text(st))),
-                many => Err(format!(
+                [] => Err(trf!(
+                    "não há sessão viva.{}",
+                    "no session is alive.{}",
+                    list_text(st)
+                )),
+                many => Err(trf!(
                     "há {} sessões vivas; escolha uma com `sandmux attach <id>`.{}",
+                    "{} sessions are alive; pick one with `sandmux attach <id>`.{}",
                     many.len(),
                     list_text(st)
                 )),
@@ -66,9 +76,17 @@ fn error(stream: &mut UnixStream, message: impl Into<String>) -> Result<()> {
 }
 
 fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
+    // O idioma pode ter mudado na configuração (página da TUI).
+    crate::init_language();
     let Some(Frame::Control(hello)) = read_frame(&mut stream)? else {
         return Ok(());
     };
+    // Responde no idioma do cliente, quando ele diz qual é.
+    if let Msg::Hello { lang, .. } = &hello
+        && let Some(l) = sandmux_spec::lang::Lang::parse(lang)
+    {
+        sandmux_spec::lang::set(l);
+    }
     let (reply, ok) = answer_hello(
         &hello,
         shared.protocol,
@@ -162,7 +180,10 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     }
                     Some((m, _, _)) => m,
                     None => Msg::Error {
-                        message: format!("não existe a sessão {id}.{text}"),
+                        message: trf!(
+                            "não existe a sessão {id}.{text}",
+                            "session {id} does not exist.{text}"
+                        ),
                     },
                 };
                 write_control(&mut stream, &reply)?;
@@ -180,7 +201,10 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                                 Msg::Ok
                             }
                             None => Msg::Error {
-                                message: format!("não existe a sessão {id}.{text}"),
+                                message: trf!(
+                                    "não existe a sessão {id}.{text}",
+                                    "session {id} does not exist.{text}"
+                                ),
                             },
                         }
                     }
@@ -271,6 +295,18 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 }
                 reply_unit(&mut stream, r)?;
             }
+            Msg::VaultSetDomains { name, domains } => {
+                let r = shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .set_domains(&name, domains);
+                if r.is_ok() {
+                    let s = shared.clone();
+                    std::thread::spawn(move || super::net::recompile_all(&s));
+                }
+                reply_unit(&mut stream, r)?;
+            }
             Msg::VaultAddSsh { name, key, servers } => {
                 let r = shared
                     .vault
@@ -330,7 +366,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 let opts = shared.lock().sessions.get(&id).map(|s| s.opts.clone());
                 let reply = match opts {
                     None => Msg::Error {
-                        message: format!("não existe a sessão {id}"),
+                        message: trf!("não existe a sessão {id}", "session {id} does not exist"),
                     },
                     Some(o) => {
                         let mut host = shared.base.clone();
@@ -392,8 +428,9 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 match st.sessions.get_mut(&id) {
                     Some(s) => {
                         s.drop_clients(Msg::Detached {
-                            reason: format!(
-                                "desanexado por `sandmux detach {id}`; a sessão continua viva"
+                            reason: trf!(
+                                "desanexado por `sandmux detach {id}`; a sessão continua viva",
+                                "detached by `sandmux detach {id}`; the session is still alive"
                             ),
                         });
                         drop(st);
@@ -402,10 +439,20 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     None => {
                         let text = list_text(&st);
                         drop(st);
-                        error(&mut stream, format!("não existe a sessão {id}.{text}"))?;
+                        error(
+                            &mut stream,
+                            trf!(
+                                "não existe a sessão {id}.{text}",
+                                "session {id} does not exist.{text}"
+                            ),
+                        )?;
                     }
                 }
             }
+            Msg::ListModels => match session::list_models(shared) {
+                Ok((ids, notes)) => write_control(&mut stream, &Msg::Models { ids, notes })?,
+                Err(e) => error(&mut stream, format!("{e:#}"))?,
+            },
             Msg::ChatCheck { host } => {
                 let reply = {
                     let v = shared.vault.lock().unwrap_or_else(|e| e.into_inner());
@@ -437,8 +484,9 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 {
                     error(
                         &mut stream,
-                        format!(
-                            "já existe a sessão {g} do gateway do hermes; encerre-a com `sandmux kill {g}` antes"
+                        trf!(
+                            "já existe a sessão {g} do gateway do hermes; encerre-a com `sandmux kill {g}` antes",
+                            "session {g} of the hermes gateway already exists; end it with `sandmux kill {g}` first"
                         ),
                     )?;
                     continue;
@@ -501,7 +549,13 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     Err(e) => error(&mut stream, e)?,
                 }
             }
-            other => error(&mut stream, format!("pedido inesperado: {other:?}"))?,
+            other => error(
+                &mut stream,
+                trf!(
+                    "pedido inesperado: {other:?}",
+                    "unexpected request: {other:?}"
+                ),
+            )?,
         }
     }
 }
@@ -517,7 +571,11 @@ fn kill(shared: &Arc<Shared>, id: u32) -> Result<(), String> {
     let pid = {
         let mut st = shared.lock();
         let Some(s) = st.sessions.get_mut(&id) else {
-            return Err(format!("não existe a sessão {id}.{}", list_text(&st)));
+            return Err(trf!(
+                "não existe a sessão {id}.{}",
+                "session {id} does not exist.{}",
+                list_text(&st)
+            ));
         };
         match s.pid() {
             Some(pid) => {
@@ -526,7 +584,10 @@ fn kill(shared: &Arc<Shared>, id: u32) -> Result<(), String> {
             }
             None => {
                 s.drop_clients(Msg::Detached {
-                    reason: format!("a sessão {id} foi encerrada por `sandmux kill`"),
+                    reason: trf!(
+                        "a sessão {id} foi encerrada por `sandmux kill`",
+                        "session {id} was ended by `sandmux kill`"
+                    ),
                 });
                 if let Some(s) = st.sessions.remove(&id) {
                     session::remove_chat_dir(&s.opts);
@@ -546,7 +607,10 @@ fn kill(shared: &Arc<Shared>, id: u32) -> Result<(), String> {
             session::signal(pid, libc::SIGKILL);
         }
         if !shared.wait_until(Duration::from_secs(5), gone) {
-            return Err(format!("a sessão {id} não terminou"));
+            return Err(trf!(
+                "a sessão {id} não terminou",
+                "session {id} did not end"
+            ));
         }
     }
     Ok(())
@@ -576,7 +640,7 @@ fn attached(shared: &Arc<Shared>, mut stream: UnixStream, id: u32, size: Size) -
         st.next_client += 1;
         let Some(s) = st.sessions.get_mut(&id) else {
             let _ = tx.try_send(Out::Msg(Msg::Error {
-                message: format!("não existe a sessão {id}"),
+                message: trf!("não existe a sessão {id}", "session {id} does not exist"),
             }));
             drop(st);
             drop(tx);
@@ -585,8 +649,9 @@ fn attached(shared: &Arc<Shared>, mut stream: UnixStream, id: u32, size: Size) -
         };
         if let SessionState::Parada { motivo } = &s.state {
             let _ = tx.try_send(Out::Msg(Msg::Error {
-                message: format!(
-                    "a sessão {id} está parada: {motivo}. Rode `sandmux restart {id}`"
+                message: trf!(
+                    "a sessão {id} está parada: {motivo}. Rode `sandmux restart {id}`",
+                    "session {id} is stopped: {motivo}. Run `sandmux restart {id}`"
                 ),
             }));
             drop(st);

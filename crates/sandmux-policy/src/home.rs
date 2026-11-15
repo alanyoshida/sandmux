@@ -87,9 +87,10 @@ pub fn write_git_identity(host: &Host, synthetic_home: &Path) -> Vec<String> {
         }
     }
     if !missing.is_empty() {
-        warnings.push(format!(
+        warnings.push(sandmux_spec::trf!(
             "a configuração do git não define {}; um commit dentro do sandbox vai pedir a identidade",
-            missing.join(" e ")
+            "the git configuration does not set {}; a commit inside the sandbox will ask for the identity",
+            missing.join(sandmux_spec::tr!(" e ", " and "))
         ));
     }
     warnings

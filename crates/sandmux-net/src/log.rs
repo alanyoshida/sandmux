@@ -220,6 +220,7 @@ impl Log {
     #[allow(clippy::too_many_arguments)]
     pub fn write_http(
         &self,
+        proto: &str,
         domain: &str,
         ip: &str,
         port: u16,
@@ -228,7 +229,7 @@ impl Log {
         ms: u64,
         http: Http<'_>,
     ) -> Entry {
-        self.write_full("https", domain, ip, port, up, down, ms, None, Some(http))
+        self.write_full(proto, domain, ip, port, up, down, ms, None, Some(http))
     }
 
     #[allow(clippy::too_many_arguments)]

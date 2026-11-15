@@ -49,8 +49,12 @@ fn owned(ret: libc::c_long) -> io::Result<OwnedFd> {
 
 /// Converte um caminho em `CString`.
 pub fn cstr(p: impl AsRef<Path>) -> io::Result<CString> {
-    CString::new(p.as_ref().as_os_str().as_encoded_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "caminho com byte nulo"))
+    CString::new(p.as_ref().as_os_str().as_encoded_bytes()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            sandmux_spec::tr!("caminho com byte nulo", "path with a null byte"),
+        )
+    })
 }
 
 const EMPTY: &CStr = c"";

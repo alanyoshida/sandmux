@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use sandmux_spec::{EnvVar, LandlockRules, LaunchSpec, Layer, Mount, SPEC_VERSION, SeccompRules};
+use sandmux_spec::{tr, trf};
 
 use crate::git::{self, GitLayout};
 use crate::host::Host;
@@ -87,6 +88,9 @@ pub struct RunOptions {
     /// Binário `sandmux-chat` e as variáveis da aba de chat.
     pub chat_bin: Option<PathBuf>,
     pub chat_env: Vec<(String, String)>,
+    /// Modelos descobertos nos servidores locais do opencode: (provedor,
+    /// modelos), somados ao `OPENCODE_CONFIG_CONTENT`.
+    pub opencode_models: Vec<(String, Vec<String>)>,
     /// Servidores MCP desabilitados e a allowlist (não vazia: só ela).
     pub mcp_deny: Vec<String>,
     pub mcp_allow: Vec<String>,
@@ -149,6 +153,7 @@ impl RunOptions {
             db_mcp: None,
             chat_bin: None,
             chat_env: Vec::new(),
+            opencode_models: Vec::new(),
             network: crate::config::NetworkMode::Aberta,
             net_policy: Some(sandmux_spec::net::NetPolicy::default()),
             fake_env: Vec::new(),
@@ -176,15 +181,24 @@ pub struct Composed {
 /// política.
 pub fn check_dangerous(host: &Host, p: &Path, writable: bool) -> Result<(), PolicyError> {
     let reason = if p == Path::new("/") {
-        Some("é a raiz do sistema")
+        Some(tr!("é a raiz do sistema", "it is the system root"))
     } else if p == host.home {
-        Some("é o HOME do usuário")
+        Some(tr!("é o HOME do usuário", "it is the user's HOME"))
     } else if host.home.starts_with(p) {
-        Some("contém o HOME do usuário")
+        Some(tr!(
+            "contém o HOME do usuário",
+            "it contains the user's HOME"
+        ))
     } else if p.starts_with(&host.data_dir) {
-        Some("fica dentro do diretório de dados do sandmux")
+        Some(tr!(
+            "fica dentro do diretório de dados do sandmux",
+            "it is inside the sandmux data directory"
+        ))
     } else if host.data_dir.starts_with(p) {
-        Some("contém o diretório de dados do sandmux")
+        Some(tr!(
+            "contém o diretório de dados do sandmux",
+            "it contains the sandmux data directory"
+        ))
     } else {
         None
     };
@@ -192,25 +206,36 @@ pub fn check_dangerous(host: &Host, p: &Path, writable: bool) -> Result<(), Poli
         return Err(PolicyError::Dangerous {
             path: p.to_path_buf(),
             reason: r.into(),
-            hint: "Use uma subpasta".into(),
+            hint: tr!("Use uma subpasta", "Use a subfolder").into(),
         });
     }
     let config = if !writable {
         None
     } else if p.starts_with(&host.config_dir) {
-        Some("fica dentro da pasta de configuração do sandmux")
+        Some(tr!(
+            "fica dentro da pasta de configuração do sandmux",
+            "it is inside the sandmux configuration folder"
+        ))
     } else if host.config_dir.starts_with(p) {
-        Some("contém a pasta de configuração do sandmux")
+        Some(tr!(
+            "contém a pasta de configuração do sandmux",
+            "it contains the sandmux configuration folder"
+        ))
     } else {
         None
     };
     match config {
         Some(r) => Err(PolicyError::Dangerous {
             path: p.to_path_buf(),
-            reason: format!(
-                "{r}, e com escrita o agente poderia alterar a configuração do sandmux"
+            reason: trf!(
+                "{r}, e com escrita o agente poderia alterar a configuração do sandmux",
+                "{r}, and with write access the agent could change the sandmux configuration"
             ),
-            hint: "Monte em somente leitura (--ro) ou escolha uma pasta fora dela".into(),
+            hint: tr!(
+                "Monte em somente leitura (--ro) ou escolha uma pasta fora dela",
+                "Mount it read-only (--ro) or choose a folder outside it"
+            )
+            .into(),
         }),
         None => Ok(()),
     }
@@ -342,8 +367,9 @@ impl Builder<'_> {
                     }
                     self.bind(workdir, workdir, true);
                 } else {
-                    warnings.push(format!(
+                    warnings.push(trf!(
                         "a pasta de trabalho fica dentro do repositório {}; o git não funciona no sandbox (use --repo para montar o repositório inteiro em somente leitura)",
+                        "the work folder is inside the repository {}; git does not work in the sandbox (use --repo to mount the whole repository read-only)",
                         repo_root.display()
                     ));
                     self.bind(workdir, workdir, true);
@@ -485,8 +511,9 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         .cloned()
         .collect();
     if pass_env.len() != opts.pass_env.len() {
-        warnings.push(format!(
+        warnings.push(trf!(
             "--pass-env ignorado para {}: o cofre tem a chave, e o agente recebe o valor falso",
+            "--pass-env ignored for {}: the vault has the key, and the agent gets the fake value",
             opts.pass_env
                 .iter()
                 .filter(|n| replaced(n))
@@ -513,8 +540,9 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
             let creds = credentials_touched(host, &c);
             if !creds.is_empty() {
                 let names: Vec<String> = creds.iter().map(|c| c.display().to_string()).collect();
-                warnings.push(format!(
+                warnings.push(trf!(
                     "{} dá ao agente acesso a credenciais reais: {}",
+                    "{} gives the agent access to real credentials: {}",
                     c.display(),
                     names.join(", ")
                 ));
@@ -532,8 +560,9 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         env_extra.push((name.clone(), v.clone()));
     }
     if !pass_env.is_empty() {
-        warnings.push(format!(
+        warnings.push(trf!(
             "--pass-env deixa ao alcance do agente: {}",
+            "--pass-env puts within the agent's reach: {}",
             opts.pass_env.join(", ")
         ));
     }
@@ -590,7 +619,13 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
                 dest: "/dev/kvm".into(),
             });
         } else {
-            warnings.push("--kvm pedido, mas a máquina não tem /dev/kvm".into());
+            warnings.push(
+                tr!(
+                    "--kvm pedido, mas a máquina não tem /dev/kvm",
+                    "--kvm requested, but the machine has no /dev/kvm"
+                )
+                .into(),
+            );
         }
     }
     b.tmpfs("/tmp", 0o1777);
@@ -667,12 +702,17 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     }
     if opts.layer == LayerMode::ReadOnlyFallback {
         warnings.push(
-            "a camada de escrita não está disponível nesta máquina: caches começam vazios e as toolchains ficam em somente leitura".into(),
+            tr!(
+                "a camada de escrita não está disponível nesta máquina: caches começam vazios e as toolchains ficam em somente leitura",
+                "the write layer is not available on this machine: caches start empty and toolchains are read-only"
+            )
+            .into(),
         );
     }
     if opts.layer == LayerMode::Temporary {
-        warnings.push(format!(
+        warnings.push(trf!(
             "outra execução do {} já usa a camada de escrita; o que for instalado ou baixado agora não será guardado",
+            "another run of {} already uses the write layer; what is installed or downloaded now will not be kept",
             opts.harness
         ));
     }
@@ -696,8 +736,9 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         if !disabled.is_empty() {
             match crate::mcp::hermes_filtered(&text, &disabled) {
                 Some(f) => out = Some(f),
-                None => warnings.push(format!(
+                None => warnings.push(trf!(
                     "MCPs não desabilitados no hermes ({}): o config.yaml não foi entendido",
+                    "MCPs not disabled in hermes ({}): the config.yaml was not understood",
                     disabled.join(", ")
                 )),
             }
@@ -733,7 +774,11 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         });
         if !env_extra.is_empty() {
             warnings.push(
-                "nesta execução o ~/.hermes/.env tem os valores de --pass-env e fica em somente leitura; o .env guardado continua com os valores falsos".into(),
+                tr!(
+                    "nesta execução o ~/.hermes/.env tem os valores de --pass-env e fica em somente leitura; o .env guardado continua com os valores falsos",
+                    "in this run ~/.hermes/.env has the --pass-env values and is read-only; the saved .env keeps the fake values"
+                )
+                .into(),
             );
         }
     }
@@ -862,6 +907,19 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
                 o.insert("mcp".into(), m);
             }
             env.push(("OPENCODE_CONFIG_CONTENT".into(), v.to_string()));
+        }
+        // Modelos dos servidores locais, descobertos pelo daemon.
+        if opts.opencode_models.iter().any(|(_, m)| !m.is_empty()) {
+            let current = env
+                .iter()
+                .rev()
+                .find(|(n, _)| n == "OPENCODE_CONFIG_CONTENT")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(|| "{}".into());
+            env.push((
+                "OPENCODE_CONFIG_CONTENT".into(),
+                crate::opencode_models::merge_models(&current, &opts.opencode_models),
+            ));
         }
     }
     // A última definição de cada nome vale.

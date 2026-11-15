@@ -9,7 +9,9 @@ pub mod input;
 pub mod modes;
 pub mod netscreen;
 pub mod paste;
+pub mod picker;
 pub mod render;
+pub mod settings;
 
 use std::io::{Read, Write};
 use std::net::Shutdown;
@@ -32,24 +34,76 @@ use sandmux_proto::{
 
 use input::{Input, Key, Parser};
 use modes::Mouse;
+use sandmux_spec::{tr, trf};
 
-/// Ações da ajuda, na ordem, com a descrição.
-pub const HELP: &[(&str, &str)] = &[
-    ("new", "nova aba"),
-    ("next", "próxima aba"),
-    ("prev", "aba anterior"),
-    ("list", "lista de abas"),
-    ("rename", "renomear a aba"),
-    ("restart", "reiniciar a aba encerrada ou parada"),
-    ("close", "fechar a aba"),
-    ("paste-image", "colar imagem do clipboard"),
-    ("detach", "sair (as sessões continuam)"),
-    ("help", "esta ajuda"),
-    ("panel", "mostrar ou esconder o painel lateral"),
-    ("network", "rede da aba: acessos e regras"),
-    ("chat", "conversar com um modelo numa aba de chat"),
-    ("command", "gerar um comando e escrevê-lo na aba"),
+/// Ações da ajuda, na ordem, com a descrição em português e em inglês.
+pub const HELP: &[(&str, &str, &str)] = &[
+    ("new", "nova aba", "new tab"),
+    ("next", "próxima aba", "next tab"),
+    ("prev", "aba anterior", "previous tab"),
+    ("list", "lista de abas", "tab list"),
+    ("rename", "renomear a aba", "rename the tab"),
+    (
+        "restart",
+        "reiniciar a aba encerrada ou parada",
+        "restart the ended or stopped tab",
+    ),
+    ("close", "fechar a aba", "close the tab"),
+    (
+        "paste-image",
+        "colar imagem do clipboard",
+        "paste an image from the clipboard",
+    ),
+    (
+        "detach",
+        "sair (as sessões continuam)",
+        "quit (sessions keep running)",
+    ),
+    ("help", "esta ajuda", "this help"),
+    (
+        "panel",
+        "mostrar ou esconder o painel lateral",
+        "show or hide the side panel",
+    ),
+    (
+        "network",
+        "rede da aba: acessos e regras",
+        "tab network: accesses and rules",
+    ),
+    ("files", "acessos a arquivos da aba", "tab file accesses"),
+    (
+        "folders",
+        "pastas montadas na aba",
+        "folders mounted in the tab",
+    ),
+    ("mcp", "servidores MCP da aba", "tab MCP servers"),
+    (
+        "chat",
+        "conversar com um modelo numa aba de chat",
+        "talk to a model in a chat tab",
+    ),
+    (
+        "command",
+        "gerar um comando e escrevê-lo na aba",
+        "generate a command and type it into the tab",
+    ),
+    ("settings", "configurações", "settings"),
+    ("menu", "menu de ações", "action menu"),
 ];
+
+/// A descrição de uma ação da ajuda no idioma atual.
+pub fn help_label(item: &(&'static str, &'static str, &'static str)) -> &'static str {
+    tr!(item.1, item.2)
+}
+
+/// As ações do menu: as da ajuda, sem o próprio menu, com a descrição no
+/// idioma atual.
+pub fn menu_items() -> Vec<(&'static str, &'static str)> {
+    HELP.iter()
+        .filter(|(a, _, _)| *a != "menu")
+        .map(|h| (h.0, help_label(h)))
+        .collect()
+}
 
 const HISTORY: usize = 10_000;
 
@@ -67,6 +121,8 @@ enum Ev {
     Quit,
     /// Resposta do modelo ao modal de comando, com o número do pedido.
     Answer(u64, std::result::Result<String, String>),
+    /// A lista de modelos dos provedores, para o seletor.
+    Models(std::result::Result<(Vec<String>, Vec<String>), String>),
 }
 
 pub struct Tab {
@@ -75,7 +131,7 @@ pub struct Tab {
     pub state: SessionState,
     pub workdir: PathBuf,
     pub opts: LaunchOptions,
-    pub parser: vt100::Parser,
+    pub parser: vt100::Parser<paste::Clip>,
     pub tracker: ModeTracker,
     /// Conexão anexada (escrita) e o número dela.
     conn: Option<(u64, UnixStream)>,
@@ -84,6 +140,10 @@ pub struct Tab {
     pub new_domain: bool,
     /// A sessão teve um bloqueio de rede enquanto a aba estava inativa.
     pub blocked: bool,
+    /// O harness terminou com a TUI aberta: perguntar se reinicia.
+    pub ask_restart: bool,
+    /// Começo do lançamento atual (segundos Unix), para o tempo na barra.
+    pub started_at: Option<u64>,
 }
 
 /// Seleção de texto, em coordenadas da tela da aba.
@@ -166,6 +226,8 @@ enum Pending {
 }
 
 pub enum Modal {
+    /// A aba terminou: reiniciar, fechar ou deixar (id e código).
+    Ended(u32, i32),
     New(NewTab),
     Chat(ChatModal),
     Command(Box<CommandModal>),
@@ -182,6 +244,25 @@ pub enum Modal {
     Mcp(Box<McpScreen>),
     /// Senha do cofre trancado: o texto digitado e o último erro.
     Unlock(String, Option<String>),
+    /// Menu de ações: a escolhida.
+    Menu(usize),
+    /// Página de configurações.
+    Settings(Box<settings::Settings>),
+}
+
+/// O que um clique na faixa de uma seção do painel acerta.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PanelHit {
+    Toggle(String),
+    Up(String),
+    Down(String),
+}
+
+/// O que um clique na página de configurações acerta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hit {
+    Section(usize),
+    Item(usize),
 }
 
 pub struct FileScreen {
@@ -215,6 +296,8 @@ pub struct App {
     pub modal: Option<Modal>,
     pub sel: Option<Sel>,
     pub bar_ranges: Vec<(u16, u16, usize)>,
+    /// Colunas do ✕ das abas encerradas na barra: o clique fecha a aba.
+    pub close_ranges: Vec<(u16, u16, usize)>,
     pub cfg: TuiConfig,
     status: Option<(String, Instant)>,
     size: Size,
@@ -242,8 +325,26 @@ pub struct App {
     after_unlock: Option<Pending>,
     /// Último número de pedido do modal de comando.
     ask_token: u64,
+    /// Clipboard do sistema, para o que a TUI copia.
+    clipboard: paste::System,
+    /// Cofre: existe e está desbloqueado (relido a cada segundo).
+    pub vault: Option<(bool, bool)>,
+    /// Linha da barra (a partir de 1) e quantas linhas a barra empurra a
+    /// área da aba para baixo (1 com a barra em cima, 0 embaixo).
+    pub bar_row: u16,
+    pub area_dy: u16,
     /// Posição do botão do modal de comando (x, y, largura), do último desenho.
     pub modal_button: std::cell::Cell<Option<(u16, u16, u16)>>,
+    /// Colunas do `≡` do menu na barra.
+    pub menu_button: Option<(u16, u16)>,
+    /// Linhas clicáveis da página de configurações: linha, colunas e o que é.
+    pub settings_hits: std::cell::RefCell<Vec<(u16, u16, u16, Hit)>>,
+    /// Faixas das seções do painel: linha, colunas e o que é.
+    pub panel_hits: std::cell::RefCell<Vec<(u16, u16, u16, PanelHit)>>,
+    /// Seletor de modelo aberto, por cima do modal.
+    pub picker: Option<picker::Picker>,
+    /// Lista de modelos dos provedores, guardada até a TUI fechar.
+    pub models: picker::Models,
 }
 
 /// Linhas de rede no painel.
@@ -272,9 +373,14 @@ fn area_size(panel: bool) -> Size {
     }
 }
 
-fn new_parser(size: Size) -> vt100::Parser {
+fn new_parser(size: Size) -> vt100::Parser<paste::Clip> {
     let nz = |v: u16| std::num::NonZeroU16::new(v.max(1)).unwrap_or(std::num::NonZeroU16::MIN);
-    vt100::Parser::new(nz(size.rows), nz(size.cols), HISTORY)
+    vt100::Parser::new_with_callbacks(
+        nz(size.rows),
+        nz(size.cols),
+        HISTORY,
+        paste::Clip::default(),
+    )
 }
 
 fn out(bytes: &[u8]) {
@@ -369,7 +475,8 @@ impl App {
     fn attach(&mut self, idx: usize) {
         let id = self.tabs[idx].id;
         let r = (|| -> Result<UnixStream> {
-            let mut c = Conn::connect()?.ok_or_else(|| anyhow::anyhow!("o daemon parou"))?;
+            let mut c = Conn::connect()?
+                .ok_or_else(|| anyhow::anyhow!(tr!("o daemon parou", "the daemon stopped")))?;
             c.send(&Msg::Attach {
                 id: Some(id),
                 size: self.size,
@@ -378,7 +485,7 @@ impl App {
         })();
         match r {
             Ok(s) => self.bind(idx, s),
-            Err(e) => self.say(format!("anexar {id}: {e:#}")),
+            Err(e) => self.say(trf!("anexar {id}: {e:#}", "attach {id}: {e:#}")),
         }
     }
 
@@ -391,7 +498,10 @@ impl App {
                 Some(Frame::Control(Msg::Created { id, name })) => return Ok((id, name, warnings)),
                 Some(Frame::Control(Msg::Error { message })) => bail!(message),
                 Some(_) => {}
-                None => bail!("o daemon encerrou a conexão"),
+                None => bail!(tr!(
+                    "o daemon encerrou a conexão",
+                    "the daemon closed the connection"
+                )),
             }
         }
     }
@@ -409,6 +519,8 @@ impl App {
             scroll: 0,
             new_domain: false,
             blocked: false,
+            ask_restart: false,
+            started_at: s.started_at,
         }
     }
 
@@ -426,8 +538,12 @@ impl App {
                     let t = &mut self.tabs[i];
                     t.name = s.name.clone();
                     t.opts = s.opts.clone();
+                    t.started_at = s.started_at;
                     let was_live = t.state == SessionState::Viva;
                     t.state = s.state.clone();
+                    if was_live && matches!(t.state, SessionState::Encerrada { .. }) {
+                        t.ask_restart = true;
+                    }
                     if !was_live && t.state == SessionState::Viva && t.conn.is_none() {
                         t.parser = new_parser(self.size);
                         self.attach(i);
@@ -447,6 +563,65 @@ impl App {
         self.active = active_id
             .and_then(|id| self.tabs.iter().position(|t| t.id == id))
             .unwrap_or(self.active.min(self.tabs.len().saturating_sub(1)));
+    }
+
+    /// Copia para o terminal do usuário (OSC 52) e para o clipboard do
+    /// sistema, quando há acesso.
+    fn copy_text(&mut self, text: &str) {
+        out(format!("\x1b]52;c;{}\x07", base64(text.as_bytes())).as_bytes());
+        self.clipboard.set_text(text);
+    }
+
+    /// O estado do cofre, para a barra.
+    fn refresh_vault(&mut self) {
+        if let Ok(Msg::VaultInfo {
+            exists, unlocked, ..
+        }) = self.call(&Msg::VaultStatus)
+        {
+            self.vault = Some((exists, unlocked));
+        }
+    }
+
+    /// Abre a pergunta de reinício da aba ativa, quando ela terminou com a
+    /// TUI aberta e não há outro modal.
+    fn prompt_ended(&mut self) {
+        if self.modal.is_some() {
+            return;
+        }
+        let Some(t) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        if !t.ask_restart {
+            return;
+        }
+        t.ask_restart = false;
+        if let SessionState::Encerrada { codigo } = t.state {
+            self.modal = Some(Modal::Ended(t.id, codigo));
+        }
+    }
+
+    /// Encerra a sessão da aba `i` e tira a aba da barra.
+    fn close_tab(&mut self, i: usize) {
+        let Some(id) = self.tabs.get(i).map(|t| t.id) else {
+            return;
+        };
+        match self.call(&Msg::Kill { id }) {
+            Ok(_) => {
+                if matches!(self.modal, Some(Modal::Ended(m, _)) if m == id) {
+                    self.modal = None;
+                }
+                if let Some((_, s)) = self.tabs[i].conn.take() {
+                    let _ = s.shutdown(Shutdown::Both);
+                }
+                self.tabs.remove(i);
+                if self.active > i || self.active >= self.tabs.len() {
+                    self.active = self.active.saturating_sub(1);
+                }
+                self.active = self.active.min(self.tabs.len().saturating_sub(1));
+                self.say(trf!("aba {id} fechada", "tab {id} closed"));
+            }
+            Err(e) => self.say(trf!("fechar: {e:#}", "close: {e:#}")),
+        }
     }
 
     fn send_active(&mut self, bytes: &[u8]) {
@@ -573,6 +748,13 @@ impl App {
         match f {
             Frame::Data(d) => {
                 t.parser.process(&d);
+                // Cópias do harness que o daemon deixou passar (clipboard
+                // liberado): o emulador as consome, a TUI as repassa.
+                let copies = std::mem::take(&mut t.parser.callbacks_mut().pending);
+                for c in copies {
+                    self.copy_text(&c);
+                }
+                let t = &mut self.tabs[i];
                 t.tracker.feed(&d);
             }
             Frame::Control(Msg::Attached { name, .. }) => {
@@ -584,6 +766,9 @@ impl App {
                 }
             }
             Frame::Control(Msg::Exited { code, .. }) => {
+                if t.state == SessionState::Viva {
+                    t.ask_restart = true;
+                }
                 t.state = SessionState::Encerrada { codigo: code };
             }
             Frame::Control(Msg::Error { message }) => {
@@ -595,7 +780,7 @@ impl App {
             Frame::Control(Msg::Detached { reason }) => {
                 t.conn = None;
                 let id = t.id;
-                self.say(format!("aba {id}: {reason}"));
+                self.say(trf!("aba {id}: {reason}", "tab {id}: {reason}"));
             }
             _ => {}
         }
@@ -619,6 +804,8 @@ impl App {
             "paste-image" => self.paste_image(),
             "detach" => self.quit = true,
             "help" => self.modal = Some(Modal::Help),
+            "menu" => self.modal = Some(Modal::Menu(0)),
+            "settings" => self.open_settings(),
             "network" => self.open_net(),
             "chat" => self.open_chat(),
             "command" => self.open_command(),
@@ -665,6 +852,50 @@ impl App {
         }
     }
 
+    /// Recolhe ou expande uma seção do painel, ou a move na ordem, e grava
+    /// em `[tui]` (`panel-collapsed`, `panel-order`).
+    fn panel_click(&mut self, h: PanelHit) {
+        let up = matches!(h, PanelHit::Up(_));
+        let (key, value) = match h {
+            PanelHit::Toggle(s) => {
+                let c = &mut self.cfg.panel_collapsed;
+                match c.iter().position(|x| *x == s) {
+                    Some(i) => {
+                        c.remove(i);
+                    }
+                    None => c.push(s),
+                }
+                ("panel-collapsed", c.clone())
+            }
+            PanelHit::Up(s) | PanelHit::Down(s) if self.cfg.panel_order.contains(&s) => {
+                let o = &mut self.cfg.panel_order;
+                let i = o.iter().position(|x| *x == s).unwrap_or(0);
+                let j = if up { i.checked_sub(1) } else { Some(i + 1) };
+                match j {
+                    Some(j) if j < o.len() => o.swap(i, j),
+                    _ => return,
+                }
+                ("panel-order", o.clone())
+            }
+            _ => return,
+        };
+        // Lista vazia apaga a chave; a ordem padrão também.
+        let default_order = key == "panel-order"
+            && value
+                .iter()
+                .map(String::as_str)
+                .eq(sandmux_policy::config::PANEL_SECTIONS.iter().copied());
+        let v: Option<toml_edit::Value> = (!value.is_empty() && !default_order)
+            .then(|| toml_edit::Array::from_iter(value).into());
+        let path = sandmux_policy::config::path(&self.host);
+        if let Err(e) = sandmux_policy::config::edit::set_value(&path, &["tui"], key, v) {
+            self.say(trf!(
+                "painel: não gravou no config.toml: {e}",
+                "panel: could not write to config.toml: {e}"
+            ));
+        }
+    }
+
     fn open_chat(&mut self) {
         // A configuração do momento: o modelo padrão pode ter mudado.
         if let Ok(c) = Config::load(&sandmux_policy::config::path(&self.host)) {
@@ -681,7 +912,10 @@ impl App {
 
     fn open_command(&mut self) {
         let Some(tab) = self.tabs.get(self.active).map(|t| t.id) else {
-            self.say("comando: abra uma aba antes");
+            self.say(tr!(
+                "comando: abra uma aba antes",
+                "command: open a tab first"
+            ));
             return;
         };
         if let Ok(c) = Config::load(&sandmux_policy::config::path(&self.host)) {
@@ -717,13 +951,16 @@ impl App {
             }
         };
         if question.is_empty() {
-            return fail(self, "escreva a pergunta".into());
+            return fail(self, tr!("escreva a pergunta", "write the question").into());
         }
         if model.is_empty() {
             return fail(
                 self,
-                "escolha um modelo (<provedor>/<modelo>) ou defina `command-model` em [assistant]"
-                    .into(),
+                tr!(
+                    "escolha um modelo (<provedor>/<modelo>) ou defina `command-model` em [assistant]",
+                    "pick a model (<provider>/<model>) or set `command-model` in [assistant]"
+                )
+                .into(),
             );
         }
         let assistant = self.assistant.clone();
@@ -767,7 +1004,10 @@ impl App {
                     system: Some(system),
                 })? {
                     Msg::Answer { text } => Ok(text),
-                    m => Err(anyhow::anyhow!("resposta inesperada do daemon: {m:?}")),
+                    m => Err(anyhow::anyhow!(trf!(
+                        "resposta inesperada do daemon: {m:?}",
+                        "unexpected reply from the daemon: {m:?}"
+                    ))),
                 }
             })()
             .map_err(|e| format!("{e:#}"));
@@ -786,7 +1026,13 @@ impl App {
             Ok(text) => {
                 let cmd = sandmux_policy::assistant::clean_command(&text);
                 if cmd.is_empty() {
-                    c.error = Some("o modelo não devolveu um comando".into());
+                    c.error = Some(
+                        tr!(
+                            "o modelo não devolveu um comando",
+                            "the model returned no command"
+                        )
+                        .into(),
+                    );
                     c.stage = CmdStage::Ask;
                 } else {
                     c.command = cmd;
@@ -810,14 +1056,23 @@ impl App {
             return;
         }
         let Some(i) = self.tabs.iter().position(|t| t.id == c.tab) else {
-            c.error = Some("a aba sob o modal foi fechada".into());
+            c.error = Some(
+                tr!(
+                    "a aba sob o modal foi fechada",
+                    "the tab under the dialog was closed"
+                )
+                .into(),
+            );
             return;
         };
         let bytes = if cmd.contains('\n') {
             if !self.tabs[i].parser.screen().bracketed_paste() {
                 c.error = Some(
-                    "o comando tem várias linhas e a aba não aceita colagem: a quebra de linha o executaria. Edite para uma linha"
-                        .into(),
+                    tr!(
+                        "o comando tem várias linhas e a aba não aceita colagem: a quebra de linha o executaria. Edite para uma linha",
+                        "the command has several lines and the tab does not accept paste: the line break would run it. Edit it into one line"
+                    )
+                    .into(),
                 );
                 return;
             }
@@ -906,13 +1161,15 @@ impl App {
             scroll: 0,
             new_domain: false,
             blocked: false,
+            ask_restart: false,
+            started_at: None,
         });
         self.tabs.sort_by_key(|t| t.id);
         let i = self.tabs.iter().position(|t| t.id == id).unwrap_or(0);
         self.bind(i, s);
         self.set_active(i);
         if let Some(w) = warnings.first() {
-            self.say(format!("aviso: {w}"));
+            self.say(trf!("aviso: {w}", "warning: {w}"));
         }
     }
 
@@ -935,7 +1192,10 @@ impl App {
             return;
         };
         if t.state == SessionState::Viva {
-            self.say("a aba está viva; feche-a antes para relançar");
+            self.say(tr!(
+                "a aba está viva; feche-a antes para relançar",
+                "the tab is alive; close it before relaunching"
+            ));
             return;
         }
         let (id, opts) = (t.id, t.opts.clone());
@@ -957,13 +1217,18 @@ impl App {
         match r {
             Ok(s) => {
                 let i = self.active;
+                // A pergunta desta aba perde o sentido.
+                if matches!(self.modal, Some(Modal::Ended(m, _)) if m == id) {
+                    self.modal = None;
+                }
+                self.tabs[i].ask_restart = false;
                 self.tabs[i].parser = new_parser(self.size);
                 self.tabs[i].tracker = ModeTracker::new();
                 self.tabs[i].state = SessionState::Viva;
                 self.bind(i, s);
-                self.say(format!("aba {id} reiniciada"));
+                self.say(trf!("aba {id} reiniciada", "tab {id} restarted"));
             }
-            Err(e) => self.say(format!("reiniciar: {e:#}")),
+            Err(e) => self.say(trf!("reiniciar: {e:#}", "restart: {e:#}")),
         }
     }
 
@@ -983,7 +1248,10 @@ impl App {
                     .unwrap_or_default();
                 let inside = host.h("inbox").join(&name);
                 self.send_active(inside.display().to_string().as_bytes());
-                self.say(format!("imagem colada: ~/inbox/{name}"));
+                self.say(trf!(
+                    "imagem colada: ~/inbox/{name}",
+                    "image pasted: ~/inbox/{name}"
+                ));
             }
             Err(e) => self.say(e),
         }
@@ -1012,8 +1280,9 @@ impl App {
                     && sandmux_import::has_state(&harness, &host.home);
                 match (has_state, import) {
                     (true, None) => {
-                        return Ok(Err(format!(
-                            "Primeira execução do {harness}. Importar a configuração existente? s/n"
+                        return Ok(Err(trf!(
+                            "Primeira execução do {harness}. Importar a configuração existente? s/n",
+                            "First run of {harness}. Import the existing configuration? y/n"
                         )));
                     }
                     (true, Some(true)) => {
@@ -1073,7 +1342,7 @@ impl App {
         };
         match self.load_net(id) {
             Ok(ns) => self.modal = Some(Modal::Net(Box::new(ns))),
-            Err(e) => self.say(format!("rede: {e}")),
+            Err(e) => self.say(trf!("rede: {e}", "network: {e}")),
         }
     }
 
@@ -1097,10 +1366,14 @@ impl App {
                 value: value.clone(),
             }) {
                 Ok(_) => match action {
-                    "deny" => format!("{value} negado na aba"),
-                    "allow" => format!("{value} liberado na aba"),
-                    "forget" => format!("{value} tirado da aba"),
-                    _ => format!("modo da aba: {value}"),
+                    "deny" => trf!("{value} negado na aba", "{value} denied in the tab"),
+                    "allow" => trf!("{value} liberado na aba", "{value} allowed in the tab"),
+                    "forget" => trf!("{value} tirado da aba", "{value} removed from the tab"),
+                    _ => trf!(
+                        "modo da aba: {}",
+                        "tab mode: {}",
+                        sandmux_policy::config::value_label("network", &value)
+                    ),
                 },
                 Err(e) => format!("{e:#}"),
             },
@@ -1158,7 +1431,15 @@ impl App {
                 match ns.selected_line().and_then(netscreen::pattern_of) {
                     Some(p) if c == 'n' => ns.ask = Some(Pending::Deny(p)),
                     Some(p) => ns.ask = Some(Pending::Allow(p)),
-                    None => ns.note = Some("o acesso não tem destino para regra".into()),
+                    None => {
+                        ns.note = Some(
+                            tr!(
+                                "o acesso não tem destino para regra",
+                                "the access has no destination for a rule"
+                            )
+                            .into(),
+                        )
+                    }
                 }
             }
             Key::Char(' ') if ns.list == 1 => {
@@ -1202,8 +1483,10 @@ impl App {
                             action: action.into(),
                             value: path.clone(),
                         }) {
-                            Ok(_) if c == 'b' => format!("{path} negado na aba"),
-                            Ok(_) => format!("{path} liberado na aba"),
+                            Ok(_) if c == 'b' => {
+                                trf!("{path} negado na aba", "{path} denied in the tab")
+                            }
+                            Ok(_) => trf!("{path} liberado na aba", "{path} allowed in the tab"),
                             Err(e) => format!("{e:#}"),
                         },
                     );
@@ -1263,7 +1546,7 @@ impl App {
                         value: path.clone(),
                         rw,
                     }) {
-                        Ok(_) => format!("{path} montada"),
+                        Ok(_) => trf!("{path} montada", "{path} mounted"),
                         Err(e) => format!("{e:#}"),
                     },
                 );
@@ -1288,7 +1571,10 @@ impl App {
                             value: name.clone(),
                             rw: false,
                         }) {
-                            Ok(_) => format!("/mnt/sandmux/{name} desmontada"),
+                            Ok(_) => trf!(
+                                "/mnt/sandmux/{name} desmontada",
+                                "/mnt/sandmux/{name} unmounted"
+                            ),
                             Err(e) => format!("{e:#}"),
                         },
                     );
@@ -1334,12 +1620,21 @@ impl App {
                     ms.note = Some(match r {
                         Err(e) => format!("{e:#}"),
                         Ok(_) if now == m.enabled => {
-                            format!("{} continua como a configuração manda", m.name)
+                            trf!(
+                                "{} continua como a configuração manda",
+                                "{} stays as the configuration says",
+                                m.name
+                            )
                         }
-                        Ok(_) => format!(
+                        Ok(_) => trf!(
                             "{} {}; vale no próximo lançamento (Ctrl+b r)",
+                            "{} {}; takes effect on the next launch (Ctrl+b r)",
                             m.name,
-                            if now { "habilitado" } else { "desabilitado" }
+                            if now {
+                                tr!("habilitado", "enabled")
+                            } else {
+                                tr!("desabilitado", "disabled")
+                            }
                         ),
                     });
                 }
@@ -1350,6 +1645,36 @@ impl App {
     }
 
     fn modal_key(&mut self, k: Key) {
+        if matches!(self.modal, Some(Modal::Settings(_))) {
+            if let Some(Modal::Settings(s)) = self.modal.take() {
+                self.modal = self.settings_key(s, k).map(Modal::Settings);
+            }
+            return;
+        }
+        if let Some(Modal::Menu(sel)) = self.modal.as_mut() {
+            let n = menu_items().len();
+            match k {
+                Key::Esc | Key::Char('q') => self.modal = None,
+                Key::Up => *sel = (*sel + n - 1) % n,
+                Key::Down | Key::Tab => *sel = (*sel + 1) % n,
+                Key::Enter => {
+                    let a = menu_items()[*sel].0;
+                    self.modal = None;
+                    self.action(a);
+                }
+                Key::Char(c) => {
+                    // A tecla da ação, sem o prefixo, também vale no menu.
+                    if let Some(a) = self.cfg.action_for(c).map(str::to_string)
+                        && a != "menu"
+                    {
+                        self.modal = None;
+                        self.action(&a);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         if matches!(self.modal, Some(Modal::Mcp(_))) {
             if let Some(Modal::Mcp(ms)) = self.modal.take() {
                 self.modal = self.mcp_key(ms, k).map(Modal::Mcp);
@@ -1447,7 +1772,7 @@ impl App {
                         Ok(_) => {
                             self.tabs[self.active].name = name;
                         }
-                        Err(e) => self.say(format!("renomear: {e:#}")),
+                        Err(e) => self.say(trf!("renomear: {e:#}", "rename: {e:#}")),
                     }
                 }
                 _ => {}
@@ -1455,6 +1780,7 @@ impl App {
             Modal::Chat(c) => match k {
                 Key::Esc => self.modal = None,
                 Key::Tab => c.field = 1 - c.field.min(1),
+                Key::Right if c.field == 1 => self.open_picker(picker::PickFor::ChatModal),
                 Key::Up | Key::Down if c.field == 1 => {
                     let choices = self.assistant.model_choices();
                     if !choices.is_empty() {
@@ -1494,11 +1820,14 @@ impl App {
                 Key::Enter => {
                     let (model, text) = (c.model.trim().to_string(), c.text.trim().to_string());
                     if text.is_empty() {
-                        c.error = Some("escreva a mensagem".into());
+                        c.error = Some(tr!("escreva a mensagem", "write the message").into());
                     } else if model.is_empty() {
                         c.error = Some(
-                            "escolha um modelo (<provedor>/<modelo>) ou defina `chat-model` em [assistant]"
-                                .into(),
+                            tr!(
+                                "escolha um modelo (<provedor>/<modelo>) ou defina `chat-model` em [assistant]",
+                                "pick a model (<provider>/<model>) or set `chat-model` in [assistant]"
+                            )
+                            .into(),
                         );
                         c.field = 1;
                     } else {
@@ -1513,6 +1842,9 @@ impl App {
                     (_, Key::Esc) => self.modal = None,
                     (CmdStage::Waiting, _) => {}
                     (CmdStage::Ask, Key::Tab) => c.field = 1 - c.field.min(1),
+                    (CmdStage::Ask, Key::Right) if c.field == 1 => {
+                        self.open_picker(picker::PickFor::CommandModal)
+                    }
                     (CmdStage::Command, Key::Tab) => {
                         c.stage = CmdStage::Ask;
                         c.field = 0;
@@ -1564,21 +1896,32 @@ impl App {
                     _ => {}
                 }
             }
+            Modal::Ended(id, _) => {
+                let id = *id;
+                let still = self.tabs.get(self.active).is_some_and(|t| {
+                    t.id == id && matches!(t.state, SessionState::Encerrada { .. })
+                });
+                match k {
+                    Key::Esc => self.modal = None,
+                    Key::Enter | Key::Char('r' | 'R') => {
+                        self.modal = None;
+                        if still {
+                            self.restart();
+                        }
+                    }
+                    Key::Char('x' | 'X') => {
+                        self.modal = None;
+                        if still {
+                            self.close_tab(self.active);
+                        }
+                    }
+                    _ => {}
+                }
+            }
             Modal::Close => match k {
                 Key::Char('s' | 'S' | 'y' | 'Y') => {
                     self.modal = None;
-                    let id = self.tabs[self.active].id;
-                    match self.call(&Msg::Kill { id }) {
-                        Ok(_) => {
-                            if let Some((_, s)) = self.tabs[self.active].conn.take() {
-                                let _ = s.shutdown(Shutdown::Both);
-                            }
-                            self.tabs.remove(self.active);
-                            self.active = self.active.min(self.tabs.len().saturating_sub(1));
-                            self.say(format!("aba {id} fechada"));
-                        }
-                        Err(e) => self.say(format!("fechar: {e:#}")),
-                    }
+                    self.close_tab(self.active);
                 }
                 Key::Char('n' | 'N') | Key::Esc => self.modal = None,
                 _ => {}
@@ -1588,13 +1931,21 @@ impl App {
                     self.modal = None;
                 }
             }
-            Modal::Net(_) | Modal::Files(_) | Modal::Folders(_) | Modal::Mcp(_) => {}
+            Modal::Net(_)
+            | Modal::Files(_)
+            | Modal::Folders(_)
+            | Modal::Mcp(_)
+            | Modal::Menu(_)
+            | Modal::Settings(_) => {}
             Modal::Unlock(text, error) => match k {
                 Key::Esc => {
                     zeroize::Zeroize::zeroize(text);
                     self.modal = None;
                     self.after_unlock = None;
-                    self.say("cofre trancado; `sandmux vault unlock` desbloqueia depois");
+                    self.say(tr!(
+                        "cofre trancado; `sandmux vault unlock` desbloqueia depois",
+                        "vault locked; `sandmux vault unlock` unlocks it later"
+                    ));
                 }
                 Key::Backspace => {
                     text.pop();
@@ -1613,7 +1964,7 @@ impl App {
                     match r {
                         Ok(_) => {
                             self.modal = None;
-                            self.say("cofre desbloqueado");
+                            self.say(tr!("cofre desbloqueado", "vault unlocked"));
                             self.sync();
                             match self.after_unlock.take() {
                                 Some(Pending::Chat(model, text)) => self.submit_chat(model, text),
@@ -1637,6 +1988,23 @@ impl App {
     }
 
     fn mouse(&mut self, m: Mouse) {
+        // A pergunta da aba encerrada não prende o mouse: um clique a fecha
+        // e segue (no ✕, fecha a aba).
+        if matches!(self.modal, Some(Modal::Ended(..))) && !m.release && !m.is_motion() {
+            self.modal = None;
+        }
+        if matches!(self.modal, Some(Modal::Settings(_))) {
+            if !m.release
+                && !m.is_motion()
+                && !m.is_wheel()
+                && m.button() == 0
+                && let Some(Modal::Settings(s)) = self.modal.take()
+            {
+                let s = self.settings_click(s, m.x.saturating_sub(1), m.y.saturating_sub(1));
+                self.modal = Some(Modal::Settings(s));
+            }
+            return;
+        }
         if self.modal.is_some() {
             if let (Some(Modal::Command(c)), Some((x, y, w))) =
                 (&self.modal, self.modal_button.get())
@@ -1653,24 +2021,42 @@ impl App {
             }
             return;
         }
-        if m.x > self.size.cols {
-            // Clique no painel lateral.
-            return;
-        }
-        if m.y == 1 {
+        if m.y == self.bar_row {
             if !m.release && !m.is_motion() && !m.is_wheel() && m.button() == 0 {
                 let x = m.x.saturating_sub(1);
-                if let Some(&(_, _, i)) = self.bar_ranges.iter().find(|(a, b, _)| x >= *a && x < *b)
-                {
+                let inside = |(a, b, _): &&(u16, u16, usize)| x >= *a && x < *b;
+                if self.menu_button.is_some_and(|(a, b)| x >= a && x < b) {
+                    self.modal = Some(Modal::Menu(0));
+                } else if let Some(&(_, _, i)) = self.close_ranges.iter().find(inside) {
+                    self.close_tab(i);
+                } else if let Some(&(_, _, i)) = self.bar_ranges.iter().find(inside) {
                     self.set_active(i);
                 }
             }
             return;
         }
+        if m.x > self.size.cols {
+            // Clique no painel lateral: a faixa de uma seção recolhe ou muda
+            // a ordem.
+            if !m.release && !m.is_motion() && !m.is_wheel() && m.button() == 0 {
+                let (x, y) = (m.x.saturating_sub(1), m.y.saturating_sub(1));
+                let hit = self
+                    .panel_hits
+                    .borrow()
+                    .iter()
+                    .find(|(row, a, b, _)| *row == y && x >= *a && x < *b)
+                    .map(|h| h.3.clone());
+                if let Some(h) = hit {
+                    self.panel_click(h);
+                }
+            }
+            return;
+        }
+        let dy = self.area_dy;
         let Some(t) = self.tabs.get_mut(self.active) else {
             return;
         };
-        if let Some(bytes) = modes::encode_for(t.parser.screen(), &m, 1) {
+        if let Some(bytes) = modes::encode_for(t.parser.screen(), &m, dy) {
             if let Some((_, s)) = t.conn.as_mut() {
                 let _ = write_data(s, &bytes);
             }
@@ -1679,7 +2065,7 @@ impl App {
         if t.parser.screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None {
             return;
         }
-        let (row, col) = (m.y.saturating_sub(2), m.x.saturating_sub(1));
+        let (row, col) = (m.y.saturating_sub(1 + dy), m.x.saturating_sub(1));
         if m.is_wheel() {
             let max = HISTORY;
             t.scroll = if m.wheel_up() {
@@ -1716,8 +2102,12 @@ impl App {
                 .map(str::trim_end)
                 .collect::<Vec<_>>()
                 .join("\n");
-            out(format!("\x1b]52;c;{}\x07", base64(text.as_bytes())).as_bytes());
-            self.say(format!("copiado: {} caracteres", text.chars().count()));
+            self.copy_text(&text);
+            self.say(trf!(
+                "copiado: {} caracteres",
+                "copied: {} characters",
+                text.chars().count()
+            ));
         }
     }
 
@@ -1731,6 +2121,7 @@ impl App {
                     self.set_active(i);
                 }
                 Input::Mouse(m) => self.mouse(m),
+                Input::Key(k) if self.picker.is_some() => self.picker_key(k),
                 Input::Key(k) => self.modal_key(k),
             }
         }
@@ -1741,7 +2132,10 @@ impl App {
 pub fn run() -> Result<i32> {
     use std::io::IsTerminal;
     if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
-        bail!("a TUI precisa de um terminal interativo na entrada e na saída");
+        bail!(tr!(
+            "a TUI precisa de um terminal interativo na entrada e na saída",
+            "the TUI needs an interactive terminal on input and output"
+        ));
     }
     let host = Host::detect()?;
     let cfg = Config::load(&sandmux_policy::config::path(&host))?;
@@ -1822,6 +2216,7 @@ pub fn run() -> Result<i32> {
         modal: None,
         sel: None,
         bar_ranges: Vec::new(),
+        close_ranges: Vec::new(),
         cfg: cfg.tui,
         status: None,
         size: area_size(panel_on),
@@ -1841,6 +2236,15 @@ pub fn run() -> Result<i32> {
         after_unlock: None,
         ask_token: 0,
         modal_button: std::cell::Cell::new(None),
+        menu_button: None,
+        settings_hits: std::cell::RefCell::new(Vec::new()),
+        panel_hits: std::cell::RefCell::new(Vec::new()),
+        picker: None,
+        models: picker::Models::None,
+        clipboard: paste::System::default(),
+        vault: None,
+        bar_row: 1,
+        area_dy: 1,
     };
     app.sync();
     if app.tabs.is_empty() {
@@ -1888,8 +2292,13 @@ pub fn run() -> Result<i32> {
                 app.on_answer(token, r);
                 dirty = true;
             }
+            Ok(Ev::Models(r)) => {
+                app.models_loaded(r);
+                dirty = true;
+            }
             Ok(Ev::Tick) => {
                 app.sync();
+                app.refresh_vault();
                 app.refresh_panel();
                 app.refresh_marks();
                 dirty = true;
@@ -1902,6 +2311,7 @@ pub fn run() -> Result<i32> {
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
+        app.prompt_ended();
         parser.modal = app.modal.is_some();
         if app.panel && app.panel_data.is_none() && !app.tabs.is_empty() {
             app.refresh_panel();
@@ -1926,7 +2336,13 @@ pub fn run() -> Result<i32> {
     out(&app.applied.1);
     out(b"\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[0m\x1b[?25h\x1b[?1049l");
     drop(raw);
-    eprintln!("sandmux: TUI fechada; as sessões continuam (sandmux ls)");
+    eprintln!(
+        "{}",
+        tr!(
+            "sandmux: TUI fechada; as sessões continuam (sandmux ls)",
+            "sandmux: TUI closed; sessions keep running (sandmux ls)"
+        )
+    );
     Ok(0)
 }
 

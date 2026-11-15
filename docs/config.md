@@ -6,7 +6,7 @@ O sandmux funciona sem nenhuma configuração: a baseline embutida e o preset do
 
 `$XDG_CONFIG_HOME/sandmux/config.toml`, ou `~/.config/sandmux/config.toml` quando `XDG_CONFIG_HOME` não está definido. O `sandmux doctor` mostra o caminho e se o arquivo é válido.
 
-O arquivo é opcional. Ele tem três tipos de seção de política, e mais duas que não mudam os sandboxes: `[tui]`, com a tecla de prefixo e os atalhos da interface ([docs/tui.md](tui.md)), e `[assistant]`, com os modelos do chat e do modal de comando e os provedores próprios ([docs/chat.md](chat.md)):
+O arquivo é opcional. Ele tem três tipos de seção de política, e mais duas que não mudam os sandboxes: `[tui]`, com a tecla de prefixo, os atalhos, o tema e a barra da interface ([docs/tui.md](tui.md)), e `[assistant]`, com os modelos do chat e do modal de comando e os provedores próprios ([docs/chat.md](chat.md)):
 
 ```toml
 # Vale para toda execução.
@@ -46,6 +46,7 @@ pass-env = ["OPENROUTER_API_KEY"]
 | `file-allow` | lista de padrões de arquivo liberados, que vencem `file-deny` e os segredos | `--file-allow` |
 | `secret-files` | lista de padrões somados à lista de arquivos com cara de segredo | (sem opção) |
 | `secret-files-off` | lista de padrões que deixam de contar como segredo | (sem opção) |
+| `host-ports` | lista de números de porta do host levadas ao `127.0.0.1` do sandbox, para serviços locais como o LM Studio ([network.md](network.md#portas-do-host)) | `--host-port` |
 | `ports` | lista de portas de entrada publicadas, `8642` (só no `127.0.0.1`) ou `8443@0.0.0.0` (também no endereço); quando não está vazia, só elas saem do sandbox ([network.md](network.md#allowlist-de-portas)) | `--port` |
 | `db` | lista de nomes de conexões de banco do cofre que o MCP de banco da sessão pode usar ([database.md](database.md)); `"*"` libera todas | `--db` |
 | `mcp-deny` | lista de nomes de servidores MCP desabilitados ([mcp.md](mcp.md)) | `--mcp-deny` |
@@ -53,6 +54,7 @@ pass-env = ["OPENROUTER_API_KEY"]
 | `ssh-keys` | lista de nomes de chaves SSH do [cofre](vault.md#chaves-ssh) que o agente SSH da sessão pode usar; `"*"` libera todas | `--ssh-key` |
 | `net-log-days` | número de dias, só em `[global]` | (retenção do registro de rede, padrão 30) |
 | `net-log-max` | tamanho, como `"500M"`, só em `[global]` | (teto do registro de rede, padrão `"500M"`) |
+| `language` | `"pt"` ou `"en"`, só em `[global]` | (idioma do sandmux: TUI, linha de comando e mensagens; sem a chave, o do sistema; [veja abaixo](#idioma)) |
 
 - **Caminhos:** absolutos ou começando por `~/`.
 - **`pass-env`:** guarda só nomes, nunca valores. O valor vem do ambiente de quem lança, com o mesmo aviso da opção. Uma variável ausente recusa o lançamento.
@@ -108,6 +110,23 @@ O comando:
 - grava de forma atômica.
 
 Um arquivo novo é criado com modo 600 e a pasta com 700.
+
+A [página de configurações da TUI](tui.md#configurações) (Ctrl+b `e`) grava pelo mesmo editor, com as mesmas regras, e também as chaves de `[tui]`, `[assistant]` e as que só valem em `[global]` (`net-log-days`, `net-log-max`, `language`).
+
+## Idioma
+
+O sandmux fala português ou inglês: a TUI, a saída e os erros da linha de comando, os avisos do daemon e as mensagens de validação deste arquivo. O idioma vem, nesta ordem:
+
+1. da variável `SANDMUX_LANG` (`pt` ou `en`);
+2. da chave `language` de `[global]`;
+3. do sistema: `LC_ALL`, `LC_MESSAGES` ou `LANG`, o primeiro que estiver definido. Um valor começado por `pt` é português; qualquer outro, inclusive `C`, é inglês.
+
+```toml
+[global]
+language = "en"
+```
+
+Os nomes das chaves, seções e valores deste arquivo, dos subcomandos e das opções são os mesmos nos dois idiomas; em inglês, a TUI e o `config show` mostram o nome traduzido de alguns valores (`aberta` aparece como `open (aberta)`), e o arquivo continua com o valor em português. O cliente diz o idioma dele na saudação, e o daemon responde nesse idioma. A página de configurações da TUI tem o idioma na seção Geral, e a troca vale na hora.
 
 Exemplos:
 

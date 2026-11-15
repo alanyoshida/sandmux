@@ -151,6 +151,7 @@ mod tests {
             decrypt: Vec::new(),
             ssh: Vec::new(),
             ports: Vec::new(),
+            host_ports: Vec::new(),
         };
         std::fs::write(&f, serde_json::to_vec(&deny("a.test")).unwrap()).unwrap();
         let pol = Policy::new(deny("a.test"), Some(f.clone()));

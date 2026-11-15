@@ -3,12 +3,42 @@
 `sandmux` sem subcomando, ou `sandmux tui`, num terminal, abre a interface do sandmux. Cada sessão do daemon é uma aba: as mesmas abas aparecem em todo terminal que abre a TUI, e as sessões continuam quando ela fecha.
 
 ```
- 1:shell:app  2:opencode:api ✕  3:hermes:notas                  imagem colada: ~/inbox/colado-…png
 [sandmux] ana@host:~/projetos/app$ █
+
+ ≡   1  shell:app   2  opencode:api ✕   3  hermes:notas   imagem colada…   shell   ~/projetos/app   cofre aberto   ! 1   1h 20m
 ```
 
-- **Primeira linha:** as abas, com a posição (o número dos atalhos), o nome e uma marca: ✕ para encerrada e ‖ para parada. À direita aparecem os avisos.
+- **Última linha, a barra:** no estilo em blocos (o padrão), o `≡` do começo abre o [menu](#menu). Cada aba é um bloco com a posição (o número dos atalhos), seguido do nome e de uma marca: ✕ para encerrada (um clique nele fecha a aba), ‖ para parada, (cofre) para aguardando cofre e ↻ para o gateway reiniciando. A aba ativa tem o bloco em destaque. No meio aparecem os avisos. À direita, em blocos coloridos:
+  - o harness da aba ativa;
+  - a pasta da aba ativa, num bloco de outra cor;
+  - o estado do cofre (aberto, trancado ou sem cofre);
+  - os alertas de rede, quantas abas têm bloqueio (`!`) e domínio novo (`•`), só quando há;
+  - há quanto tempo a aba ativa está viva.
+
+  Sem espaço, os blocos da direita saem da esquerda para a direita, e o tempo fica por último.
 - **Resto da tela:** o terminal da aba ativa, com cores (inclusive cor verdadeira), atributos, cursor e tela alternativa. Trocar de aba mostra a tela da outra na hora.
+
+### Fonte e estilo da barra
+
+O estilo padrão, `"blocos"`, usa só blocos coloridos e caracteres que toda fonte tem. O estilo `"powerline"` acrescenta separadores inclinados e ícones, que só existem nas fontes com os símbolos do Powerline e do Nerd Font (por exemplo, as do projeto Nerd Fonts); sem uma delas, eles aparecem como quadrados. `[tui]` tem duas chaves:
+
+| Chave | Valores | Padrão |
+|---|---|---|
+| `style` | `"blocos"`; `"powerline"`, com separadores e ícones de Nerd Font; ou `"simples"`, a barra só com texto e a aba ativa em vídeo inverso | `"blocos"` |
+| `bar` | `"bottom"` (última linha) ou `"top"` (primeira linha) | `"bottom"` |
+
+```toml
+# Sem uma fonte com os símbolos do Powerline:
+[tui]
+style = "simples"
+bar = "top"
+```
+
+```toml
+# Com uma Nerd Font no terminal, os separadores e os ícones:
+[tui]
+style = "powerline"
+```
 
 Sem nenhuma sessão, a TUI abre o modal de nova aba. Sem terminal interativo (pipe, script), `sandmux tui` termina com erro.
 
@@ -35,6 +65,8 @@ Todos começam pela tecla de prefixo, Ctrl+b por padrão:
 | `m` | Tela de MCPs da aba: habilita e desabilita servidores |
 | `i` | Modal de chat: uma pergunta a um modelo, que abre uma aba de chat ([chat.md](chat.md)) |
 | `g` | Modal de comando: o modelo gera um comando, escrito na aba sem executar ([chat.md](chat.md#modal-de-comando)) |
+| `e` | [Configurações](#configurações) |
+| `:` | [Menu](#menu) com todas as ações |
 | o prefixo de novo | Envia o prefixo ao harness |
 
 Outra tecla depois do prefixo é descartada. O prefixo funciona como byte de controle e também na forma do protocolo de teclado do kitty.
@@ -52,16 +84,16 @@ new = "t"
 close = "q"
 ```
 
-- **Ações:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat` e `command`.
+- **Ações:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu` e `settings`.
 - **Teclas:** um caractere visível, que não seja dígito, porque os dígitos levam às abas.
 - **Duas ações na mesma tecla** tornam o arquivo inválido.
 - **`[tui]` não é camada de política:** não muda nada nos sandboxes.
 
 ## Painel lateral
 
-Com o terminal de pelo menos 100 colunas, um painel de 34 colunas fica à direita. A área do terminal das abas encolhe na mesma medida, e as sessões recebem o tamanho novo. O painel tem quatro seções sobre a aba ativa.
+Com o terminal de pelo menos 100 colunas, um painel de 34 colunas fica à direita. A área do terminal das abas encolhe na mesma medida, e as sessões recebem o tamanho novo. O painel tem cinco seções sobre a aba ativa. Cada uma começa por uma faixa colorida com o nome e, à direita, um resumo: o nível de proteção, o estado da sessão, quantas portas estão publicadas, o modo de rede, quantos MCPs estão habilitados. Os valores ficam em colunas: o rótulo à esquerda, num tom mais apagado, e o valor alinhado à direita.
 
-**Proteção** mostra o que foi aplicado no último lançamento da sessão:
+**Proteção** mostra o que foi aplicado no último lançamento da sessão. O que é ligado ou desligado aparece em pontos de estado, em duas colunas: `●` colorido para ligado, `○` apagado para desligado (o clipboard e o `pass-env` ligados em amarelo, porque abrem algo ao agente):
 
 - o nível de proteção, com a ABI do Landlock;
 - a camada de escrita;
@@ -74,17 +106,31 @@ Com o terminal de pelo menos 100 colunas, um painel de 34 colunas fica à direit
 
 **Recursos** mostra, atualizado a cada segundo:
 
-- a memória em uso, o pico e o teto;
-- os processos;
+- a memória em uso, o pico e o teto, com um medidor de uso;
+- os processos, também com medidor;
 - o CPU;
 - as mortes por falta de memória;
 - o Docker privado da pasta.
 
+O medidor fica verde até 75% do teto, amarelo até 90% e vermelho acima disso. Uma morte por falta de memória aparece em vermelho.
+
 **Portas** mostra as portas publicadas no `127.0.0.1` do host: as que o agente escuta no sandbox e as dos contêineres do Docker privado da pasta, como `3000 → 127.0.0.1:3000 (sandbox)`.
 
-**Rede** mostra o modo de rede da sessão e as últimas 6 conexões registradas da aba, com o domínio (ou "sem domínio"), os bytes enviados e recebidos, e o bloqueio. Um domínio visto pela primeira vez na pasta de trabalho aparece como "novo". Uma aba inativa ganha na barra `•` quando a sessão acessa um domínio novo e `!` quando tem um bloqueio, até ficar ativa. O registro completo está em [network.md](network.md).
+**Rede** mostra o modo de rede da sessão e as últimas 6 conexões registradas da aba, numa tabela sem bordas: domínio (ou "sem domínio"), bytes enviados (`↑`) e recebidos (`↓`) e status (o código HTTP, `✗` para bloqueio, "novo"). Um domínio longo fica numa linha só, com os números embaixo, e o motivo de um bloqueio aparece embaixo da linha. Um domínio visto pela primeira vez na pasta de trabalho aparece como "novo". Uma aba inativa ganha na barra `•` quando a sessão acessa um domínio novo e `!` quando tem um bloqueio, até ficar ativa. O status HTTP de erro e o bloqueio aparecem em vermelho, e "novo" em amarelo. O registro completo está em [network.md](network.md).
 
-Ctrl+b `s` esconde e mostra o painel. A chave `panel` de `[tui]` (`true` ou `false`) define como a TUI abre. Nas etapas seguintes, o painel ganha os MCPs.
+**MCP** mostra os servidores MCP da aba, com ✓ em verde para os habilitados e ✗ em vermelho para os desabilitados.
+
+**Ordem e seções recolhidas:** um clique no título de uma seção a recolhe (`▸`) ou expande (`▾`), e as setas `↑` e `↓` no fim da faixa a movem uma posição. As duas coisas ficam gravadas em `[tui]` e valem na próxima vez que a TUI abrir:
+
+```toml
+[tui]
+panel-order = ["rede", "recursos", "protecao", "portas", "mcp"]
+panel-collapsed = ["protecao"]
+```
+
+As seções são `protecao`, `recursos`, `portas`, `rede` e `mcp`. As que faltam em `panel-order` vão para o fim, na ordem padrão. Voltar à ordem padrão, ou expandir todas, apaga a chave.
+
+Ctrl+b `s` esconde e mostra o painel. A chave `panel` de `[tui]` (`true` ou `false`) define como a TUI abre.
 
 ## Cofre trancado
 
@@ -115,20 +161,91 @@ Ctrl+b `a` abre a tela de rede da aba ativa, com duas listas alternadas por Tab:
 
 Negar e liberar perguntam onde gravar: `a` na aba (só esta sessão, guardada na lista de sessões), `p` no perfil do projeto ou `g` no global. Ligar e desligar gravam no projeto ou no global. A mudança vale na conexão seguinte da sessão. A troca de modo vale na aba; para entrar ou sair de `sem-rede`, use `sandmux net mode` e relance a sessão.
 
+## Menu
+
+Ctrl+b `:`, ou um clique no `≡` do começo da barra (estilos blocos e powerline), abre um menu com todas as ações e as teclas delas. As setas escolhem, Enter executa e Esc fecha. A tecla de uma ação, sem o prefixo, também a executa de dentro do menu.
+
+## Configurações
+
+Ctrl+b `e`, ou "configurações" no menu, abre uma página de tela cheia com as opções do [arquivo de configuração](config.md), em seções:
+
+| Seção | Opções |
+|---|---|
+| Geral | idioma (`auto`, que segue o sistema, `pt` ou `en`; [config.md](config.md#idioma)) |
+| Aparência | tema (com amostras de cor), estilo e posição da barra, painel lateral |
+| Atalhos | tecla de prefixo |
+| Sandbox | repo, KVM, GPU, clipboard, memória, processos, pastas extras, `pass-env`, chaves SSH, bancos |
+| Rede | modo, denylist, allowlist, catálogos, decifração, portas de entrada, portas do host |
+| Arquivos | arquivos negados e liberados, arquivos de segredo |
+| MCP | servidores negados e liberados |
+| Assistente | modelos do chat e de comandos, modelos sugeridos (Enter, ou `a` na lista, abre a [lista dos provedores](chat.md#lista-de-modelos); `e` edita o texto) |
+| Registro | dias e teto do registro de rede |
+| Cofre | o estado e os segredos do cofre, sem os valores; criar, desbloquear, trancar, trocar a senha, acrescentar segredo e chave SSH, editar domínios e apagar ([vault.md](vault.md#pela-tui)) |
+
+Cada item mostra o valor atual e de onde ele vem ("padrão", "do global"):
+
+- toggles: `● ligado` ou `○ desligado`;
+- escolhas: `‹ valor ›`;
+- textos;
+- listas.
+
+**Teclas:**
+
+| Tecla | Ação |
+|---|---|
+| ↑ ↓ | Movem nas seções ou nos itens |
+| Tab | Troca entre as seções e os itens |
+| ← → | Mudam uma escolha |
+| Espaço ou Enter | Alterna um toggle |
+| Enter | Edita um texto (Enter grava, vazio volta ao padrão) ou abre uma lista |
+| `a` e `x` (na lista) | Acrescentam e tiram |
+| `x` (num item) | Volta o item ao padrão |
+| `g` | Troca o alvo entre o global e o projeto da pasta da aba ativa |
+| Esc ou `q` | Fecha |
+
+Um clique escolhe uma seção ou um item, e alterna um toggle.
+
+**Gravação:** cada mudança é gravada na hora no `config.toml` pelo mesmo editor do `sandmux config set/add/remove`. Ele preserva os comentários e o resto do arquivo, e valida o arquivo inteiro antes de gravar. Uma mudança recusada mostra o motivo embaixo, e o arquivo não muda.
+
+**Quando vale:**
+
+- idioma, tema, barra, painel e prefixo: na hora;
+- modelos do assistente: no próximo pedido;
+- política das sessões: no próximo lançamento da aba (Ctrl+b `r`).
+
+As opções de `[tui]`, `[assistant]` e do registro valem só no global; com o alvo num projeto, elas aparecem como "só global". As teclas de cada ação (`[tui.keys]`), as cores de cada elemento (`[tui.colors]`), os perfis e os provedores próprios do assistente ficam no arquivo.
+
 ## Tema de cores
 
 A chave `theme` de `[tui]` escolhe um tema embutido:
 
-- `padrao`: as cores do terminal, com vídeo inverso. É o padrão.
+- `padrao`: na barra, fundo escuro com o número da aba ativa em lilás e os blocos da direita em rosa, verde, amarelo e ciano; no estilo simples, as cores do terminal com vídeo inverso. É o padrão.
 - `escuro`: fundo escuro com destaque azul.
 - `claro`: fundo claro com destaque azul-escuro.
+- `catppuccin`: Catppuccin Mocha, destaque mauve.
+- `rose-pine`: Rosé Pine, destaque iris.
+- `tokyo-night`: Tokyo Night (Night), destaque azul.
+- `kanagawa`: Kanagawa (Wave), destaque crystal blue.
+- `gruvbox`: Gruvbox escuro, destaque laranja.
+- `dracula`: Dracula, destaque roxo.
+
+Os temas pintam a barra, os modais, o painel e a página de configurações. Na página, passar pelos temas com ← → mostra cada um na hora e já grava a escolha.
 
 Em `[tui.colors]`, cada elemento pode trocar de cor por cima do tema:
 
 | Elemento | O que pinta |
 |---|---|
-| `tab-active-fg`, `tab-active-bg` | Aba ativa |
-| `tab-fg`, `tab-bg` | Outras abas |
+| `tab-active-fg`, `tab-active-bg` | Aba ativa no estilo simples |
+| `tab-fg`, `tab-bg` | Outras abas (nos blocos, a cor e o fundo do nome; no Powerline, `tab-fg` é a cor do nome) |
+| `tab-index-fg`, `tab-index-bg` | Bloco do número das abas (blocos e Powerline) |
+| `tab-active-index-fg`, `tab-active-index-bg` | Bloco do número da aba ativa e cor do nome dela (blocos e Powerline) |
+| `chip-fg` | Texto dos blocos da direita e do `≡` (blocos e Powerline) |
+| `chip-harness-bg`, `chip-folder-bg`, `chip-vault-bg`, `chip-alert-bg`, `chip-time-bg` | Blocos da direita: harness, pasta, cofre, alertas e tempo (blocos e Powerline) |
+| `accent` | Destaque: o `≡` do menu, a borda e os títulos da página de configurações |
+| `muted-fg` | Texto secundário da página de configurações |
+| `ok-fg` | Toggle ligado e aviso de gravação |
+| `page-bg`, `page-fg` | Fundo e texto da página de configurações |
+| `surface-bg` | Seções e item escolhido na página de configurações |
 | `bar-bg` | Fundo da barra |
 | `status-fg` | Aviso à direita da barra |
 | `note-fg`, `note-bg` | Faixa de aba encerrada, parada ou no histórico |
@@ -145,10 +262,10 @@ Uma cor é `"#rrggbb"`, um índice de 0 a 255, um dos 16 nomes ANSI (`black`, `r
 theme = "escuro"
 
 [tui.colors]
-tab-active-bg = "#aa0000"
+tab-active-index-bg = "#aa0000"
 ```
 
-Um tema, elemento ou cor desconhecido torna o arquivo inválido. O tema vale ao abrir a TUI.
+Um tema, elemento ou cor desconhecido torna o arquivo inválido. O tema vale ao abrir a TUI, ou na hora quando muda pela página de configurações.
 
 ## Nova aba
 
@@ -165,6 +282,7 @@ Na primeira execução de um harness com configuração para importar, o própri
 ## Aba encerrada ou parada
 
 - **Encerrada:** a aba continua na barra, com a última tela e o código de saída. `r` relança a sessão na mesma aba, e `x` fecha.
+- **Pergunta ao terminar:** quando o harness termina com a TUI aberta (o hermes sai depois do assistente de configuração, por exemplo), um modal mostra o código e pergunta: Enter ou `r` reinicia, `x` fecha a aba, Esc deixa como está. Se a aba não estava ativa, a pergunta aparece quando você a ativa, uma vez. Abas que já estavam encerradas ao abrir a TUI não perguntam. Um clique no ✕ da aba na barra também fecha, sem confirmação.
 - **Parada:** a aba mostra o motivo, por exemplo uma variável de `pass-env` que faltou na restauração.
 
 ## Mouse
@@ -173,7 +291,8 @@ Na primeira execução de um harness com configuração para importar, o própri
 - **Harness que ligou o mouse** (opencode, por exemplo): os cliques, a roda e o arrasto vão para ele, com as linhas contadas a partir da área do terminal.
 - **Harness sem mouse** (um shell, por exemplo):
   - a roda rola o histórico da aba, com um aviso na última linha;
-  - arrastar seleciona texto, que ao soltar vai para o clipboard do seu terminal por OSC 52. A cópia pela TUI funciona sempre, mesmo com a escrita no clipboard bloqueada para o harness.
+  - arrastar seleciona texto, que ao soltar vai para o clipboard do seu terminal por OSC 52 e para o clipboard do sistema (Wayland ou X11), o que funciona também dentro do tmux. A cópia pela TUI funciona sempre, mesmo com a escrita no clipboard bloqueada para o harness.
+- **Cópia do harness** (o opencode copia por OSC 52): bloqueada por padrão. Com `clipboard = true` na configuração, ou `sandmux run --allow-clipboard`, a TUI repassa a cópia ao seu terminal e ao clipboard do sistema.
 - **Shift com arrasto:** fica com a seleção nativa do seu terminal, que funciona também quando o harness usa o mouse.
 
 ## Colar imagem

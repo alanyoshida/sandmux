@@ -86,10 +86,20 @@ fn table(harness: &str) -> Option<&'static [Item]> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
-    #[error("o preset {0} não tem importação")]
     NotImportable(String),
-    #[error("{0}")]
     Io(String),
+}
+
+impl std::fmt::Display for ImportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImportError::NotImportable(h) => f.write_str(&sandmux_spec::trf!(
+                "o preset {h} não tem importação",
+                "the preset {h} has no import"
+            )),
+            ImportError::Io(m) => f.write_str(m),
+        }
+    }
 }
 
 fn io(e: std::io::Error, p: &Path) -> ImportError {
@@ -122,6 +132,9 @@ pub struct Report {
     pub differing: Vec<PathBuf>,
     pub ignored: Vec<PathBuf>,
     pub replaced: Vec<ManifestEntry>,
+    /// Portas de serviços locais (`127.0.0.1`, `localhost`, `[::1]`) citadas
+    /// na configuração do harness: no sandbox, o `127.0.0.1` é o dele.
+    pub local_ports: Vec<u16>,
 }
 
 impl Report {
@@ -131,6 +144,113 @@ impl Report {
             && self.unchanged.is_empty()
             && self.differing.is_empty()
     }
+}
+
+/// Arquivos de configuração em que URLs locais importam.
+const CONFIG_FILES: &[&str] = &[
+    "opencode.json",
+    "opencode.jsonc",
+    "config.yaml",
+    "config.yml",
+];
+
+/// As portas citadas com `127.0.0.1:`, `localhost:` ou `[::1]:`.
+pub fn local_ports(text: &str) -> Vec<u16> {
+    let mut out = Vec::new();
+    for host in ["127.0.0.1:", "localhost:", "[::1]:"] {
+        let mut rest = text;
+        while let Some(i) = rest.find(host) {
+            rest = &rest[i + host.len()..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(p) = digits.parse::<u16>()
+                && p > 0
+                && !out.contains(&p)
+            {
+                out.push(p);
+            }
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// Um arquivo do HOME sintético com credenciais reais. Sem `Debug`: o texto
+/// original tem os valores reais.
+pub struct RealSecrets {
+    /// Caminho relativo ao HOME sintético.
+    pub file: PathBuf,
+    /// O texto original e o texto com os falsos no lugar.
+    pub original: String,
+    pub scrubbed: String,
+    pub found: Vec<secrets::Replacement>,
+}
+
+/// As credenciais reais nos arquivos que a importação do harness pega,
+/// procuradas dentro do HOME sintético (gravadas pelo próprio harness, como
+/// o "Connect provider" do opencode). Nada é gravado.
+pub fn find_real_secrets(harness: &str, synthetic_home: &Path) -> Vec<RealSecrets> {
+    let Some(items) = table(harness) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for rel in files_to_copy(items, synthetic_home) {
+        let Ok(text) = fs::read_to_string(synthetic_home.join(&rel)) else {
+            continue;
+        };
+        let name = rel
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // Só arquivos de configuração: os textos (skills, memórias em
+        // Markdown) trazem tokens de exemplo, que não são credenciais.
+        let format = format_of(&name);
+        if format == secrets::Format::Text {
+            continue;
+        }
+        let (scrubbed, found) = scrub(&text, format);
+        if !found.is_empty() {
+            out.push(RealSecrets {
+                file: rel,
+                original: text,
+                scrubbed,
+                found,
+            });
+        }
+    }
+    out
+}
+
+/// Grava o arquivo com os falsos (mesmo modo) e anota as trocas no
+/// manifesto do harness.
+pub fn apply_fakes(
+    harness: &str,
+    synthetic_home: &Path,
+    manifest_path: &Path,
+    r: &RealSecrets,
+) -> Result<(), ImportError> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = synthetic_home.join(&r.file);
+    let mode = fs::metadata(&path)
+        .map(|m| m.permissions().mode())
+        .unwrap_or(0o600);
+    write_private(&path, r.scrubbed.as_bytes(), mode)?;
+    let mut manifest: Manifest = fs::read(manifest_path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_else(|| Manifest {
+            harness: harness.into(),
+            entries: vec![],
+        });
+    manifest
+        .entries
+        .extend(r.found.iter().map(|x| ManifestEntry {
+            file: r.file.clone(),
+            key: x.key.clone(),
+            line: x.line,
+            fake: x.fake.clone(),
+        }));
+    let json = serde_json::to_vec_pretty(&manifest).map_err(|e| ImportError::Io(e.to_string()))?;
+    write_private(manifest_path, &json, 0o600)
 }
 
 /// O preset tem importação.
@@ -312,6 +432,20 @@ pub fn import(
             }));
     }
     report.ignored = ignored_entries(harness, real_home, &files);
+    for rel in &files {
+        let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !CONFIG_FILES.contains(&name) {
+            continue;
+        }
+        if let Ok(t) = fs::read_to_string(real_home.join(rel)) {
+            for p in local_ports(&t) {
+                if !report.local_ports.contains(&p) {
+                    report.local_ports.push(p);
+                }
+            }
+        }
+    }
+    report.local_ports.sort_unstable();
 
     let mut manifest: Manifest = fs::read(manifest_path)
         .ok()
@@ -370,6 +504,53 @@ mod tests {
             .iter()
             .map(|f| fs::read_to_string(dir.join(f)).unwrap_or_default())
             .collect()
+    }
+
+    #[test]
+    fn chaves_reais_no_home_sintetico() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let auth = home.join(".local/share/opencode/auth.json");
+        fs::create_dir_all(auth.parent().unwrap()).unwrap();
+        fs::write(
+            &auth,
+            "{\n  \"lmstudio\": {\"type\": \"api\", \"key\": \"sandmux-fake-0123456789abcdef\"},\n  \"openrouter\": {\n    \"type\": \"api\",\n    \"key\": \"sk-or-v1-realkey123456\"\n  }\n}\n",
+        )
+        .unwrap();
+        let found = find_real_secrets("opencode", &home);
+        assert_eq!(found.len(), 1);
+        let r = &found[0];
+        assert_eq!(r.file, PathBuf::from(".local/share/opencode/auth.json"));
+        assert_eq!(r.found.len(), 1);
+        assert_eq!(r.found[0].real, "sk-or-v1-realkey123456");
+        assert_eq!(r.found[0].line, 5);
+        assert!(!format!("{:?}", r.found).contains("realkey"));
+        assert!(!r.scrubbed.contains("realkey"));
+        let m = d.path().join("manifest.json");
+        apply_fakes("opencode", &home, &m, r).unwrap();
+        let after = fs::read_to_string(&auth).unwrap();
+        assert!(after.contains(&r.found[0].fake) && !after.contains("realkey"));
+        let manifest = fs::read_to_string(&m).unwrap();
+        assert!(manifest.contains(&r.found[0].fake) && !manifest.contains("realkey"));
+        assert!(find_real_secrets("opencode", &home).is_empty());
+        // Texto de skill com token de exemplo: fora da busca.
+        let skill = home.join(".config/opencode/skills/x/SKILL.md");
+        fs::create_dir_all(skill.parent().unwrap()).unwrap();
+        fs::write(
+            &skill,
+            "use ghp_1234567890abcdefghijABCDEFGHIJ123456 como exemplo\n",
+        )
+        .unwrap();
+        assert!(find_real_secrets("opencode", &home).is_empty());
+    }
+
+    #[test]
+    fn portas_locais_citadas() {
+        let t = r#"{"provider":{"lmstudio":{"options":{"baseURL":"http://127.0.0.1:8888/v1"}}},
+            "mcp":{"x":{"url":"http://localhost:9000/mcp"},"y":{"url":"http://[::1]:7000"}},
+            "z":"127.0.0.1:abc", "w":"https://openrouter.ai:443"}"#;
+        assert_eq!(local_ports(t), vec![7000, 8888, 9000]);
+        assert!(local_ports("nada local").is_empty());
     }
 
     #[test]

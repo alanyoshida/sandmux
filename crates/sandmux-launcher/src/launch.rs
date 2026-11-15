@@ -74,12 +74,13 @@ pub fn check_kernel() -> Result<(), LaunchError> {
         });
     if abi < required {
         let found = if abi < 0 {
-            "ausente".to_string()
+            sandmux_spec::tr!("ausente", "missing").to_string()
         } else {
             format!("ABI {abi}")
         };
-        return Err(LaunchError::Unsupported(format!(
-            "o kernel não oferece Landlock com escopo de sockets abstratos e de sinais (exige ABI {required}, encontrado: {found}); rode `sandmux doctor`"
+        return Err(LaunchError::Unsupported(sandmux_spec::trf!(
+            "o kernel não oferece Landlock com escopo de sockets abstratos e de sinais (exige ABI {required}, encontrado: {found}); rode `sandmux doctor`",
+            "the kernel does not offer Landlock with abstract socket and signal scoping (requires ABI {required}, found: {found}); run `sandmux doctor`"
         )));
     }
     Ok(())
@@ -131,8 +132,9 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
     let pid = match unsafe { sys::clone_fork(flags) } {
         Ok(p) => p,
         Err(e) => {
-            return Err(LaunchError::Unsupported(format!(
-                "não foi possível criar os namespaces do sandbox ({e}); user namespaces sem privilégio podem estar bloqueados; rode `sandmux doctor`"
+            return Err(LaunchError::Unsupported(sandmux_spec::trf!(
+                "não foi possível criar os namespaces do sandbox ({e}); user namespaces sem privilégio podem estar bloqueados; rode `sandmux doctor`",
+                "could not create the sandbox namespaces ({e}); unprivileged user namespaces may be blocked; run `sandmux doctor`"
             )));
         }
     };
@@ -152,8 +154,9 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
     if let Err(e) = write_id_maps(child) {
         let _ = kill(child, Signal::SIGKILL);
         let _ = waitpid(child, None);
-        return Err(LaunchError::Unsupported(format!(
-            "não foi possível mapear o usuário no user namespace ({e}); rode `sandmux doctor`"
+        return Err(LaunchError::Unsupported(sandmux_spec::trf!(
+            "não foi possível mapear o usuário no user namespace ({e}); rode `sandmux doctor`",
+            "could not map the user in the user namespace ({e}); run `sandmux doctor`"
         )));
     }
     // O auxiliar de conexão das portas precisa de uma só thread e do /proc
@@ -214,7 +217,10 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
                         }
                         let reply = match serde_json::from_str::<crate::mounter::Request>(&line) {
                             Ok(req) => m.call(&req),
-                            Err(e) => Err(format!("pedido inválido: {e}")),
+                            Err(e) => Err(sandmux_spec::trf!(
+                                "pedido inválido: {e}",
+                                "invalid request: {e}"
+                            )),
                         };
                         let out =
                             serde_json::to_string(&crate::mounter::Reply { error: reply.err() })
@@ -245,7 +251,7 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
             ports: connector.map(|c| sandmux_net::ports::Ports {
                 pid: child.as_raw(),
                 file: n.ports_file.clone(),
-                connector: sandmux_net::ports::Connector::new(c),
+                connector: std::sync::Arc::new(sandmux_net::ports::Connector::new(c)),
             }),
             aliases: Vec::new(),
             tls: n.tls.clone(),
@@ -256,8 +262,9 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
             Err(e) => {
                 let _ = kill(child, Signal::SIGKILL);
                 let _ = waitpid(child, None);
-                return Err(LaunchError::Setup(format!(
-                    "não foi possível subir o gateway de rede: {e}"
+                return Err(LaunchError::Setup(sandmux_spec::trf!(
+                    "não foi possível subir o gateway de rede: {e}",
+                    "could not start the network gateway: {e}"
                 )));
             }
         }
@@ -370,7 +377,14 @@ fn init_process(
                 _ => Ok(()),
             });
         if let Err(e) = res {
-            report(&err_w, MSG_SETUP, &format!("falha ao montar a rede: {e}"));
+            report(
+                &err_w,
+                MSG_SETUP,
+                &sandmux_spec::trf!(
+                    "falha ao montar a rede: {e}",
+                    "failed to set up the network: {e}"
+                ),
+            );
             // SAFETY: saída imediata do filho.
             unsafe { libc::_exit(EXIT_SETUP) };
         }
@@ -381,7 +395,10 @@ fn init_process(
         report(
             &err_w,
             MSG_SETUP,
-            &format!("falha ao montar o confinamento: {e}"),
+            &sandmux_spec::trf!(
+                "falha ao montar o confinamento: {e}",
+                "failed to set up the confinement: {e}"
+            ),
         );
         // SAFETY: saída imediata do filho.
         unsafe { libc::_exit(EXIT_SETUP) };
@@ -392,7 +409,11 @@ fn init_process(
         Ok(nix::unistd::ForkResult::Child) => command_process(spec, &err_w, &files_w),
         Ok(nix::unistd::ForkResult::Parent { child }) => child,
         Err(e) => {
-            report(&err_w, MSG_SETUP, &format!("fork do comando: {e}"));
+            report(
+                &err_w,
+                MSG_SETUP,
+                &sandmux_spec::trf!("fork do comando: {e}", "fork of the command: {e}"),
+            );
             // SAFETY: saída imediata do filho.
             unsafe { libc::_exit(EXIT_SETUP) };
         }
@@ -470,11 +491,18 @@ fn command_process(spec: &LaunchSpec, err_w: &OwnedFd, files_w: &OwnedFd) -> ! {
     if let Err(e) = nix::unistd::chdir(&spec.cwd) {
         fail(
             MSG_SETUP,
-            format!("entrar na pasta inicial {}: {e}", spec.cwd.display()),
+            sandmux_spec::trf!(
+                "entrar na pasta inicial {}: {e}",
+                "enter the initial folder {}: {e}",
+                spec.cwd.display()
+            ),
         );
     }
     if let Err(e) = sys::drop_all_capabilities() {
-        fail(MSG_SETUP, format!("descartar capabilities: {e}"));
+        fail(
+            MSG_SETUP,
+            sandmux_spec::trf!("descartar capabilities: {e}", "drop capabilities: {e}"),
+        );
     }
     if let Err(e) = sys::set_no_new_privs() {
         fail(MSG_SETUP, format!("no_new_privs: {e}"));
@@ -490,20 +518,39 @@ fn command_process(spec: &LaunchSpec, err_w: &OwnedFd, files_w: &OwnedFd) -> ! {
     match seccomp::install_notify() {
         Ok(listener) => {
             if let Err(e) = net::send_fd(files_w, &listener) {
-                fail(MSG_SETUP, format!("entregar o filtro das aberturas: {e}"));
+                fail(
+                    MSG_SETUP,
+                    sandmux_spec::trf!(
+                        "entregar o filtro das aberturas: {e}",
+                        "hand over the file-open filter: {e}"
+                    ),
+                );
             }
         }
-        Err(e) => fail(MSG_SETUP, format!("seccomp das aberturas: {e}")),
+        Err(e) => fail(
+            MSG_SETUP,
+            sandmux_spec::trf!("seccomp das aberturas: {e}", "file-open seccomp: {e}"),
+        ),
     }
     if let Err(e) = sys::cloexec_from(3) {
-        fail(MSG_SETUP, format!("fechar descritores herdados: {e}"));
+        fail(
+            MSG_SETUP,
+            sandmux_spec::trf!(
+                "fechar descritores herdados: {e}",
+                "close inherited descriptors: {e}"
+            ),
+        );
     }
 
     let program = match resolve_program(&spec.command[0], spec.env_value("PATH")) {
         Some(p) => p,
         None => fail(
             MSG_EXEC,
-            format!("comando não encontrado no sandbox: {}", spec.command[0]),
+            sandmux_spec::trf!(
+                "comando não encontrado no sandbox: {}",
+                "command not found in the sandbox: {}",
+                spec.command[0]
+            ),
         ),
     };
     let to_c = |s: &[u8]| CString::new(s).unwrap_or_default();
@@ -515,7 +562,10 @@ fn command_process(spec: &LaunchSpec, err_w: &OwnedFd, files_w: &OwnedFd) -> ! {
         .map(|v| to_c(format!("{}={}", v.name, v.value).as_bytes()))
         .collect();
     let err = nix::unistd::execve(&prog_c, &argv, &envp).unwrap_err();
-    fail(MSG_EXEC, format!("executar {}: {err}", program.display()));
+    fail(
+        MSG_EXEC,
+        sandmux_spec::trf!("executar {}: {err}", "execute {}: {err}", program.display()),
+    );
 }
 
 /// Modo de visão: monta a raiz da especificação no mount namespace atual e
@@ -528,28 +578,43 @@ pub fn exec_view(spec: &LaunchSpec) -> LaunchError {
     // vai para o daemon, que roda o gateway do Docker.
     if let Some(sock) = spec.network.as_ref().and_then(|n| n.tun_socket.as_ref()) {
         let sent = net::setup(true).and_then(|tun| {
-            let tun = tun.ok_or_else(|| std::io::Error::other("sem TUN"))?;
+            let tun =
+                tun.ok_or_else(|| std::io::Error::other(sandmux_spec::tr!("sem TUN", "no TUN")))?;
             let s = std::os::unix::net::UnixStream::connect(sock)?;
             net::send_fd_tagged(&OwnedFd::from(s), &tun, b'T')
         });
         if let Err(e) = sent {
-            return LaunchError::Setup(format!("falha ao montar a rede da visão: {e}"));
+            return LaunchError::Setup(sandmux_spec::trf!(
+                "falha ao montar a rede da visão: {e}",
+                "failed to set up the view's network: {e}"
+            ));
         }
     }
     if let Err(e) = mounts::setup_root(spec) {
-        return LaunchError::Setup(format!("falha ao montar a visão: {e}"));
+        return LaunchError::Setup(sandmux_spec::trf!(
+            "falha ao montar a visão: {e}",
+            "failed to set up the view: {e}"
+        ));
     }
     if let Err(e) = nix::unistd::chdir(&spec.cwd) {
-        return LaunchError::Setup(format!(
+        return LaunchError::Setup(sandmux_spec::trf!(
             "entrar na pasta inicial {}: {e}",
+            "enter the initial folder {}: {e}",
             spec.cwd.display()
         ));
     }
     if let Err(e) = sys::cloexec_from(3) {
-        return LaunchError::Setup(format!("fechar descritores herdados: {e}"));
+        return LaunchError::Setup(sandmux_spec::trf!(
+            "fechar descritores herdados: {e}",
+            "close inherited descriptors: {e}"
+        ));
     }
     let Some(program) = resolve_program(&spec.command[0], spec.env_value("PATH")) else {
-        return LaunchError::Exec(format!("comando não encontrado: {}", spec.command[0]));
+        return LaunchError::Exec(sandmux_spec::trf!(
+            "comando não encontrado: {}",
+            "command not found: {}",
+            spec.command[0]
+        ));
     };
     let to_c = |s: &[u8]| CString::new(s).unwrap_or_default();
     let prog_c = to_c(program.as_os_str().as_bytes());
@@ -568,7 +633,11 @@ pub fn exec_view(spec: &LaunchSpec) -> LaunchError {
         )
         .collect();
     let err = nix::unistd::execve(&prog_c, &argv, &envp).unwrap_err();
-    LaunchError::Exec(format!("executar {}: {err}", program.display()))
+    LaunchError::Exec(sandmux_spec::trf!(
+        "executar {}: {err}",
+        "execute {}: {err}",
+        program.display()
+    ))
 }
 
 /// Procura o programa no `PATH` do ambiente do sandbox, como `execvp`.

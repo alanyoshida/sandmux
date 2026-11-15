@@ -45,8 +45,9 @@ impl FromStr for Pattern {
     fn from_str(s: &str) -> Result<Pattern, String> {
         let t = s.trim().to_ascii_lowercase();
         let bad = || {
-            format!(
-                "padrão de destino inválido: {s:?} (aceitos: exemplo.com, *.exemplo.com, 10.0.0.5 ou 10.0.0.0/8)"
+            crate::trf!(
+                "padrão de destino inválido: {s:?} (aceitos: exemplo.com, *.exemplo.com, 10.0.0.5 ou 10.0.0.0/8)",
+                "invalid destination pattern: {s:?} (accepted: example.com, *.example.com, 10.0.0.5 or 10.0.0.0/8)"
             )
         };
         if let Some((ip, len)) = t.split_once('/') {
@@ -173,6 +174,9 @@ pub struct NetPolicy {
     /// as dela (e cada uma também no endereço dado).
     #[serde(default)]
     pub ports: Vec<PortRule>,
+    /// Portas do host: o `127.0.0.1:porta` do sandbox leva ao do host.
+    #[serde(default)]
+    pub host_ports: Vec<u16>,
 }
 
 /// Uma porta de entrada: `8642` ou `8443@0.0.0.0`.
@@ -187,7 +191,12 @@ pub struct PortRule {
 impl std::str::FromStr for PortRule {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, String> {
-        let bad = || format!("porta inválida: {s:?}; use 8642 ou 8443@0.0.0.0");
+        let bad = || {
+            crate::trf!(
+                "porta inválida: {s:?}; use 8642 ou 8443@0.0.0.0",
+                "invalid port: {s:?}; use 8642 or 8443@0.0.0.0"
+            )
+        };
         let (p, a) = match s.trim().split_once('@') {
             Some((p, a)) => (p, Some(a.parse::<Ipv4Addr>().map_err(|_| bad())?)),
             None => (s.trim(), None),
@@ -233,12 +242,52 @@ impl Default for NetPolicy {
             decrypt: Vec::new(),
             ssh: Vec::new(),
             ports: Vec::new(),
+            host_ports: Vec::new(),
         }
     }
 }
 
 /// Motivo do bloqueio de uma conexão SSH fora dos servidores das chaves.
 pub const SSH_BLOCKED: &str = "ssh fora dos servidores das chaves";
+
+/// O motivo de um bloqueio para exibir no idioma atual. O registro de rede
+/// guarda o motivo sempre em português (é dado, comparado e lido de volta);
+/// em inglês, os motivos conhecidos são traduzidos só na exibição, e um
+/// motivo desconhecido passa como está.
+pub fn reason_text(reason: &str) -> String {
+    if !crate::lang::is_en() {
+        return reason.to_string();
+    }
+    const FIXED: &[(&str, &str)] = &[
+        (SSH_BLOCKED, "ssh outside the key servers"),
+        ("fora do modo só inferência", "outside inference-only mode"),
+        ("fora da allowlist", "outside the allowlist"),
+        ("sem domínio", "no domain"),
+        ("metadados de cloud", "cloud metadata"),
+    ];
+    if let Some((_, en)) = FIXED.iter().find(|(pt, _)| *pt == reason) {
+        return (*en).to_string();
+    }
+    const PREFIXES: &[(&str, &str)] = &[
+        ("catálogo de exfiltração", "exfiltration catalog"),
+        ("catálogo de inferência", "inference catalog"),
+        ("catálogo comum", "common catalog"),
+        ("certificado inválido:", "invalid certificate:"),
+        ("o host recusou", "the host refused"),
+        ("porta do host", "host port"),
+        ("publicar em", "publish on"),
+    ];
+    if let Some((pt, en)) = PREFIXES.iter().find(|(pt, _)| reason.starts_with(pt)) {
+        return format!("{en}{}", &reason[pt.len()..]);
+    }
+    if let Some(rest) = reason
+        .strip_prefix("tempo esgotado em ")
+        .and_then(|r| r.strip_suffix(" do host"))
+    {
+        return format!("timed out on the host's {rest}");
+    }
+    reason.to_string()
+}
 
 /// Resultado da decisão sobre um destino.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,6 +316,12 @@ impl NetPolicy {
         self.rules
             .iter()
             .any(|r| r.enabled && r.kind == RuleKind::Allow && r.pattern.matches_ip(ip))
+    }
+
+    /// O motivo do bloqueio, quando uma regra da denylist casa com o nome ou
+    /// o IP (as portas do host só obedecem à denylist).
+    pub fn denied(&self, names: &[&str], ip: Option<Ipv4Addr>) -> Option<String> {
+        self.deny_hit(names, ip).map(Self::deny_reason)
     }
 
     fn deny_reason(r: &Rule) -> String {
@@ -413,6 +468,7 @@ pub fn strictest(list: &[Option<NetPolicy>]) -> NetPolicy {
             decrypt: Vec::new(),
             ssh: Vec::new(),
             ports: Vec::new(),
+            host_ports: Vec::new(),
         };
     }
     let first = same[0];
@@ -440,6 +496,7 @@ pub fn strictest(list: &[Option<NetPolicy>]) -> NetPolicy {
         decrypt: Vec::new(),
         ssh: Vec::new(),
         ports: Vec::new(),
+        host_ports: Vec::new(),
     }
 }
 
@@ -514,6 +571,7 @@ mod tests {
             decrypt: Vec::new(),
             ssh: Vec::new(),
             ports: Vec::new(),
+            host_ports: Vec::new(),
         };
         // Sem segredo de provedor: o catálogo inteiro.
         let mut sem = p.clone();
@@ -529,6 +587,7 @@ mod tests {
             decrypt: Vec::new(),
             ssh: Vec::new(),
             ports: Vec::new(),
+            host_ports: Vec::new(),
         };
         c.restrict_inference(&["openrouter.ai".into()]);
         assert_eq!(c.decide_name("a.test"), Verdict::Pass);
@@ -543,6 +602,7 @@ mod tests {
                 decrypt: Vec::new(),
                 ssh: Vec::new(),
                 ports: Vec::new(),
+                host_ports: Vec::new(),
             })
         };
         let open = pol(PolicyMode::Open, vec![rule("a.test", RuleKind::Deny)]);
@@ -594,6 +654,7 @@ mod tests {
             decrypt: Vec::new(),
             ssh: Vec::new(),
             ports: Vec::new(),
+            host_ports: Vec::new(),
         };
         assert_eq!(open.decide_name("ok.test"), Verdict::Pass);
         assert!(
@@ -625,6 +686,7 @@ mod tests {
             decrypt: Vec::new(),
             ssh: Vec::new(),
             ports: Vec::new(),
+            host_ports: Vec::new(),
         };
         // Negar sempre vence.
         assert_eq!(custom.decide_name("www.exemplo.com"), Verdict::Pass);
@@ -671,6 +733,7 @@ mod tests {
             decrypt: Vec::new(),
             ssh: Vec::new(),
             ports: Vec::new(),
+            host_ports: Vec::new(),
         };
         assert_eq!(
             inf.decide_name("exemplo.com"),

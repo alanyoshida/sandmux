@@ -65,10 +65,10 @@ impl FilePattern {
     pub fn parse(s: &str, home: Option<&Path>) -> Result<FilePattern, String> {
         let s = s.trim();
         if s.is_empty() || s.contains('\0') {
-            return Err("padrão de arquivo vazio".into());
+            return Err(crate::tr!("padrão de arquivo vazio", "empty file pattern").into());
         }
         if let Some(rest) = s.strip_prefix("~/") {
-            let h = home.ok_or("`~/` sem HOME")?;
+            let h = home.ok_or(crate::tr!("`~/` sem HOME", "`~/` without HOME"))?;
             return Ok(FilePattern::Path(format!(
                 "{}/{}",
                 h.display().to_string().trim_end_matches('/'),
@@ -84,8 +84,9 @@ impl FilePattern {
             }));
         }
         if s.contains('/') {
-            return Err(format!(
-                "padrão de arquivo inválido: {s:?}; use um caminho que começa com `/` ou `~/`, ou um nome sem `/`, como `*.sql`"
+            return Err(crate::trf!(
+                "padrão de arquivo inválido: {s:?}; use um caminho que começa com `/` ou `~/`, ou um nome sem `/`, como `*.sql`",
+                "invalid file pattern: {s:?}; use a path starting with `/` or `~/`, or a name without `/`, such as `*.sql`"
             ));
         }
         Ok(FilePattern::Name(s.into()))

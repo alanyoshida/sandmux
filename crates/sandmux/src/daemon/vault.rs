@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use sandmux_proto::msg::VaultEntry;
+use sandmux_spec::{tr, trf};
 use sandmux_vault::{FileStore, Secret, Store, Unlocked, VaultError};
 
 /// Arquivo do cofre no diretório de dados.
@@ -21,8 +22,19 @@ fn err(e: VaultError) -> String {
     e.to_string()
 }
 
-const LOCKED: &str = "o cofre está trancado; rode `sandmux vault unlock`";
-const MISSING: &str = "não há cofre; crie um com `sandmux vault init`";
+fn locked() -> &'static str {
+    tr!(
+        "o cofre está trancado; rode `sandmux vault unlock`",
+        "the vault is locked; run `sandmux vault unlock`"
+    )
+}
+
+fn missing() -> &'static str {
+    tr!(
+        "não há cofre; crie um com `sandmux vault init`",
+        "there is no vault; create one with `sandmux vault init`"
+    )
+}
 
 impl VaultState {
     pub fn new(data_dir: &std::path::Path) -> VaultState {
@@ -45,26 +57,30 @@ impl VaultState {
     }
 
     fn save(&self) -> Result<(), String> {
-        let o = self.open.as_ref().ok_or(LOCKED)?;
+        let o = self.open.as_ref().ok_or(locked())?;
         let bytes = o.seal().map_err(err)?;
         self.store
             .save(&bytes)
-            .map_err(|e| format!("gravar o cofre: {e}"))
+            .map_err(|e| trf!("gravar o cofre: {e}", "write the vault: {e}"))
     }
 
     fn opened(&mut self) -> Result<&mut Unlocked, String> {
         if !self.exists() {
-            return Err(MISSING.into());
+            return Err(missing().into());
         }
-        self.open.as_mut().ok_or_else(|| LOCKED.to_string())
+        self.open.as_mut().ok_or_else(|| locked().to_string())
     }
 
     pub fn init(&mut self, password: &str) -> Result<(), String> {
         if self.exists() {
-            return Err(format!("o cofre já existe em {}", self.store.0.display()));
+            return Err(trf!(
+                "o cofre já existe em {}",
+                "the vault already exists at {}",
+                self.store.0.display()
+            ));
         }
         if password.is_empty() {
-            return Err("a senha não pode ser vazia".into());
+            return Err(tr!("a senha não pode ser vazia", "the password cannot be empty").into());
         }
         self.open = Some(Unlocked::create(password).map_err(err)?);
         self.save()
@@ -74,8 +90,8 @@ impl VaultState {
         let bytes = self
             .store
             .load()
-            .map_err(|e| format!("ler o cofre: {e}"))?
-            .ok_or(MISSING)?;
+            .map_err(|e| trf!("ler o cofre: {e}", "read the vault: {e}"))?
+            .ok_or(missing())?;
         let mut o = Unlocked::open(&bytes, password).map_err(err)?;
         let mut filled = o.fill_fakes();
         // Segredos gravados antes das ferramentas ganham as dos domínios.
@@ -103,13 +119,13 @@ impl VaultState {
 
     pub fn passwd(&mut self, old: &str, new: &str) -> Result<(), String> {
         if new.is_empty() {
-            return Err("a senha não pode ser vazia".into());
+            return Err(tr!("a senha não pode ser vazia", "the password cannot be empty").into());
         }
         let bytes = self
             .store
             .load()
-            .map_err(|e| format!("ler o cofre: {e}"))?
-            .ok_or(MISSING)?;
+            .map_err(|e| trf!("ler o cofre: {e}", "read the vault: {e}"))?
+            .ok_or(missing())?;
         let mut o = Unlocked::open(&bytes, old).map_err(err)?;
         o.change_password(new).map_err(err)?;
         self.open = Some(o);
@@ -118,20 +134,29 @@ impl VaultState {
 
     pub fn add(&mut self, mut s: Secret) -> Result<(), String> {
         if s.name.trim().is_empty() {
-            return Err("o nome do segredo não pode ser vazio".into());
+            return Err(tr!(
+                "o nome do segredo não pode ser vazio",
+                "the secret name cannot be empty"
+            )
+            .into());
         }
         if let Some(t) = s
             .tools
             .iter()
             .find(|t| !sandmux_policy::presets::TOOLS.contains(&t.as_str()))
         {
-            return Err(format!(
+            return Err(trf!(
                 "ferramenta desconhecida: {t}; use {}",
+                "unknown tool: {t}; use {}",
                 sandmux_policy::presets::TOOLS.join(", ")
             ));
         }
         if !s.is_token() {
-            return Err("use `sandmux vault add-ssh` ou `sandmux db add` para esse tipo".into());
+            return Err(tr!(
+                "use `sandmux vault add-ssh` ou `sandmux db add` para esse tipo",
+                "use `sandmux vault add-ssh` or `sandmux db add` for this kind"
+            )
+            .into());
         }
         if s.tools.is_empty() {
             s.tools = sandmux_policy::presets::tools_for_secret(&s.domains, &s.value);
@@ -154,16 +179,25 @@ impl VaultState {
         servers: Vec<String>,
     ) -> Result<(), String> {
         if name.trim().is_empty() {
-            return Err("o nome da chave não pode ser vazio".into());
+            return Err(tr!(
+                "o nome da chave não pode ser vazio",
+                "the key name cannot be empty"
+            )
+            .into());
         }
         crate::sshagent::parse_key(&key)?;
         if servers.is_empty() {
-            return Err("falta o servidor da chave: use --server <domínio>".into());
+            return Err(tr!(
+                "falta o servidor da chave: use --server <domínio>",
+                "the key server is missing: use --server <domain>"
+            )
+            .into());
         }
         for s in &servers {
             if !matches!(s.parse(), Ok(sandmux_spec::net::Pattern::Exact(_))) {
-                return Err(format!(
-                    "servidor inválido: {s}; use um domínio exato, como github.com"
+                return Err(trf!(
+                    "servidor inválido: {s}; use um domínio exato, como github.com",
+                    "invalid server: {s}; use an exact domain, like github.com"
                 ));
             }
         }
@@ -243,16 +277,25 @@ impl VaultState {
     /// Guarda uma conexão de banco (o JSON com a senha fica cifrado).
     pub fn add_db(&mut self, c: sandmux_proto::msg::DbConn) -> Result<(), String> {
         if c.name.trim().is_empty() || c.name.contains(char::is_whitespace) {
-            return Err(format!("nome de conexão inválido: {:?}", c.name));
+            return Err(trf!(
+                "nome de conexão inválido: {:?}",
+                "invalid connection name: {:?}",
+                c.name
+            ));
         }
         if c.kind != "postgres" && c.kind != "mysql" {
-            return Err(format!(
+            return Err(trf!(
                 "tipo de banco desconhecido: {}; use postgres ou mysql",
+                "unknown database kind: {}; use postgres or mysql",
                 c.kind
             ));
         }
         if c.host.is_empty() || c.database.is_empty() || c.user.is_empty() {
-            return Err("faltam o host, o banco ou o usuário".into());
+            return Err(tr!(
+                "faltam o host, o banco ou o usuário",
+                "the host, the database or the user is missing"
+            )
+            .into());
         }
         let value = serde_json::to_string(&c).map_err(|e| e.to_string())?;
         self.opened()?.put(Secret {
@@ -302,8 +345,59 @@ impl VaultState {
 
     pub fn remove(&mut self, name: &str) -> Result<(), String> {
         if !self.opened()?.remove(name) {
-            return Err(format!("não existe o segredo {name:?} no cofre"));
+            return Err(trf!(
+                "não existe o segredo {name:?} no cofre",
+                "secret {name:?} is not in the vault"
+            ));
         }
+        self.save()
+    }
+
+    /// Troca os domínios de um token, ou os servidores de uma chave SSH,
+    /// validados como na criação; o valor não muda.
+    pub fn set_domains(&mut self, name: &str, domains: Vec<String>) -> Result<(), String> {
+        let domains: Vec<String> = domains
+            .into_iter()
+            .map(|d| d.trim().to_string())
+            .filter(|d| !d.is_empty())
+            .collect();
+        let o = self.opened()?;
+        let Some(s) = o.contents.secrets.iter_mut().find(|s| s.name == name) else {
+            return Err(trf!(
+                "não existe o segredo {name:?} no cofre",
+                "secret {name:?} is not in the vault"
+            ));
+        };
+        if s.is_ssh() {
+            if domains.is_empty() {
+                return Err(tr!(
+                    "uma chave SSH precisa de ao menos um servidor",
+                    "an SSH key needs at least one server"
+                )
+                .into());
+            }
+            for d in &domains {
+                if !matches!(d.parse(), Ok(sandmux_spec::net::Pattern::Exact(_))) {
+                    return Err(trf!(
+                        "servidor inválido: {d}; use um domínio exato, como github.com",
+                        "invalid server: {d}; use an exact domain, like github.com"
+                    ));
+                }
+            }
+        } else if s.is_token() {
+            for d in &domains {
+                if let Err(e) = d.parse::<sandmux_spec::net::Pattern>() {
+                    return Err(trf!("domínio inválido {d}: {e}", "invalid domain {d}: {e}"));
+                }
+            }
+        } else {
+            return Err(tr!(
+                "use `sandmux db` para as conexões de banco",
+                "use `sandmux db` for database connections"
+            )
+            .into());
+        }
+        s.domains = domains;
         self.save()
     }
 

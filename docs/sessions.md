@@ -82,7 +82,7 @@ Socket Unix de fluxo. Cada quadro tem 4 bytes de tamanho (big-endian, só o cont
 | 0 | Mensagem de controle em JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Bytes de terminal: entrada do cliente ou saída da sessão |
 
-A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados e a pasta de configuração do cliente. Esta versão usa o protocolo 21. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
+A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados, a pasta de configuração e o idioma do cliente (o daemon responde nesse idioma). Esta versão usa o protocolo 25. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
 
 O cliente envia ao daemon, junto com o pedido de sessão, as opções dadas no `run`, o perfil nomeado, a pasta atual, as variáveis da lista segura, o `SHELL` e os valores de `pass-env` da política efetiva. O daemon resolve as camadas de configuração ([docs/config.md](config.md)) e compõe a especificação de lançamento com a mesma função do `run` direto.
 
@@ -98,6 +98,7 @@ Ao subir, o daemon lê a lista:
 | Viva, com `pass-env` e os valores guardados no [cofre](vault.md) | Aguardando cofre; sobe sozinha quando o cofre é desbloqueado |
 | Viva, com `pass-env` sem os valores no cofre | Parada até `sandmux restart <id>` num terminal com as variáveis |
 | Gateway do hermes, vivo ou reiniciando, com o cofre criado | Aguardando cofre; sobe sozinha quando o cofre é desbloqueado |
+| Aba do opencode viva, com provedor local (porta em `host-ports`) que usa uma chave do cofre, e o cofre criado | Aguardando cofre; sobe com a lista de modelos do servidor local quando o cofre é desbloqueado ([network.md](network.md#portas-do-host)) |
 | Aba de chat viva, com o cofre criado | Aguardando cofre; sobe sozinha, com a conversa, quando o cofre é desbloqueado ([chat.md](chat.md)) |
 | Viva, com o perfil nomeado apagado ou a configuração inválida | Parada, com o motivo |
 | Viva, com a pasta apagada | Parada, com o motivo |

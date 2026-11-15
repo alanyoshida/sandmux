@@ -4,6 +4,7 @@ use anyhow::{Result, bail};
 use clap::Subcommand;
 use sandmux_proto::Msg;
 use sandmux_proto::msg::DbConn;
+use sandmux_spec::{tr, trf};
 
 use crate::vaultcmd::{Input, call};
 
@@ -49,7 +50,10 @@ pub fn run(c: DbCmd) -> Result<i32> {
             user,
         } => {
             let port = port.unwrap_or(if kind == "mysql" { 3306 } else { 5432 });
-            let password = Input::new().secret(&format!("Senha de {user}@{host}: "))?;
+            let password = Input::new().secret(&trf!(
+                "Senha de {user}@{host}: ",
+                "Password for {user}@{host}: "
+            ))?;
             call(&Msg::DbAdd {
                 conn: DbConn {
                     name: nome.clone(),
@@ -61,14 +65,29 @@ pub fn run(c: DbCmd) -> Result<i32> {
                     password: password.to_string(),
                 },
             })?;
-            eprintln!("sandmux: conexão {nome} guardada no cofre");
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmux: conexão {nome} guardada no cofre",
+                    "sandmux: connection {nome} saved in the vault"
+                )
+            );
         }
         DbCmd::List => {
             let Msg::DbEntries { list } = call(&Msg::DbList)? else {
-                bail!("resposta inesperada do daemon");
+                bail!(tr!(
+                    "resposta inesperada do daemon",
+                    "unexpected reply from the daemon"
+                ));
             };
             if list.is_empty() {
-                println!("Nenhuma conexão de banco no cofre.");
+                println!(
+                    "{}",
+                    tr!(
+                        "Nenhuma conexão de banco no cofre.",
+                        "No database connections in the vault."
+                    )
+                );
             }
             for e in list {
                 println!(
@@ -79,7 +98,13 @@ pub fn run(c: DbCmd) -> Result<i32> {
         }
         DbCmd::Remove { nome } => {
             call(&Msg::VaultRemove { name: nome.clone() })?;
-            eprintln!("sandmux: conexão {nome} apagada do cofre");
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmux: conexão {nome} apagada do cofre",
+                    "sandmux: connection {nome} removed from the vault"
+                )
+            );
         }
         DbCmd::Log { id, days } => return log(id, days),
     }
@@ -119,8 +144,8 @@ fn log(id: Option<u32>, days: u32) -> Result<i32> {
             let hora = l.ts.split('T').nth(1).unwrap_or(&l.ts);
             let s = session(&l.tag).map_or("-".to_string(), |s| s.to_string());
             let r = match (&l.error, l.rows) {
-                (Some(e), _) => format!("erro: {e}"),
-                (None, Some(r)) => format!("{r} linhas"),
+                (Some(e), _) => trf!("erro: {e}", "error: {e}"),
+                (None, Some(r)) => trf!("{r} linhas", "{r} rows"),
                 _ => String::new(),
             };
             println!(
@@ -132,7 +157,7 @@ fn log(id: Option<u32>, days: u32) -> Result<i32> {
         }
     }
     if n == 0 {
-        println!("Nenhuma query registrada.");
+        println!("{}", tr!("Nenhuma query registrada.", "No queries logged."));
     }
     Ok(0)
 }

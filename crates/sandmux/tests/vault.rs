@@ -127,9 +127,15 @@ fn import_pede_os_valores_dos_manifestos() {
         list.contains("opencode:.local/share/opencode/auth.json:openrouter.key  (openrouter.ai)"),
         "{list}"
     );
-    // Na segunda vez, só o que faltou.
-    let o = vault(&e, &["import"], "\n");
-    assert!(stderr(&o).contains("0 de 1"), "{}", stderr(&o));
+    // Na segunda vez, só o que faltou. Uma chave sem domínio pelo nome
+    // pergunta o domínio depois do valor.
+    let o = vault(&e, &["import"], "tok-local\nhost.sandmux.internal\n");
+    assert!(stderr(&o).contains("1 de 1"), "{}", stderr(&o));
+    let list = stdout(&vault(&e, &["list"], ""));
+    assert!(
+        list.contains("opencode:.config/x:<token>  (host.sandmux.internal)"),
+        "{list}"
+    );
 }
 
 fn ls(e: &Env) -> String {
@@ -201,7 +207,7 @@ fn tui_pede_a_senha_e_sobe_as_sessoes_do_cofre() {
     cmd.env("SHELL", "/bin/bash");
     let mut t = Term::spawn_answering(cmd, 100, 30);
     t.wait_text("O cofre de segredos está trancado.");
-    t.wait_text("1:shell:app (cofre)");
+    t.wait_text(&tab(1, "shell:app (cofre)"));
     t.write(b"errada\r");
     t.wait_text("senha não confere");
     t.write(b"s3nha");
@@ -996,4 +1002,336 @@ fn conexoes_de_banco_no_cofre() {
     assert!(vl.contains("app  db"), "{vl}");
     assert!(db(&["remove", "app"], "").status.success());
     assert!(stdout(&db(&["list"], "")).contains("Nenhuma conexão"));
+}
+
+/// Servidor HTTP sem TLS no 127.0.0.1 do host que devolve o `Authorization`.
+fn echo_http() -> u16 {
+    use std::io::Read;
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for c in l.incoming() {
+            let Ok(mut c) = c else { return };
+            std::thread::spawn(move || {
+                let mut buf = vec![0u8; 4096];
+                let n = c.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let auth = req
+                    .lines()
+                    .find_map(|l| {
+                        l.strip_prefix("authorization: ")
+                            .or_else(|| l.strip_prefix("Authorization: "))
+                    })
+                    .unwrap_or("-")
+                    .to_string();
+                let body = format!("auth={auth}\n");
+                let _ = c.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+            });
+        }
+    });
+    port
+}
+
+#[test]
+fn chave_trocada_na_porta_do_host_em_http() {
+    let e = Env::new();
+    let port = echo_http();
+    let fake = "sandmux-fake-porta0do0host0000000000000";
+    let dir = e.data_dir().join("manifests");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("opencode.json"),
+        format!(
+            r#"{{"harness":"opencode","entries":[{{"file":".config/opencode/opencode.json","key":"Authorization","line":10,"fake":"{fake}"}}]}}"#
+        ),
+    )
+    .unwrap();
+    assert!(vault(&e, &["init"], "s\n").status.success());
+    let o = vault(&e, &["import"], "REAL-local-key\nhost.sandmux.internal\n");
+    assert!(stderr(&o).contains("1 de 1"), "{}", stderr(&o));
+    let p = port.to_string();
+    let mut cmd = e.cmd(&e.work, &["run", "shell", "--host-port", &p]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut t = Term::spawn(cmd, 200, 30);
+    t.write(
+        format!(
+            "sleep 1.5; curl -s -H 'Authorization: Bearer {fake}' http://127.0.0.1:{p}/v1/models; echo FIM-$((1+1))\r"
+        )
+        .as_bytes(),
+    );
+    t.wait_text("FIM-2");
+    t.with_screen(|s| {
+        let c = s.contents();
+        assert!(c.contains("auth=Bearer REAL-local-key"), "{c}");
+    });
+    let net = std::fs::read_dir(e.state.join("sandmux/net"))
+        .unwrap()
+        .flatten()
+        .filter(|f| f.path().extension().is_some_and(|x| x == "jsonl"))
+        .map(|f| std::fs::read_to_string(f.path()).unwrap())
+        .collect::<String>();
+    assert!(net.contains("\"proto\":\"http\""), "{net}");
+    assert!(
+        net.contains("\"secret\":\"opencode:.config/opencode/opencode.json:Authorization\""),
+        "{net}"
+    );
+    assert!(!net.contains("REAL-local-key"), "valor real no registro");
+    // Sem o segredo para o host, a cópia é direta: o falso chega como está.
+    assert!(
+        vault(
+            &e,
+            &[
+                "remove",
+                "opencode:.config/opencode/opencode.json:Authorization"
+            ],
+            ""
+        )
+        .status
+        .success()
+    );
+    t.write(
+        format!(
+            "curl -s -H 'Authorization: Bearer {fake}' http://127.0.0.1:{p}/; echo FIM-$((2+2))\r"
+        )
+        .as_bytes(),
+    );
+    t.wait_text("FIM-4");
+    t.with_screen(|s| {
+        let c = s.contents();
+        assert!(c.contains(&format!("auth=Bearer {fake}")), "{c}");
+    });
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+/// Servidor `/v1/models` no 127.0.0.1 do host: a lista só com a chave real.
+fn models_server(real: &'static str) -> u16 {
+    use std::io::Read;
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for c in l.incoming() {
+            let Ok(mut c) = c else { return };
+            let mut buf = vec![0u8; 4096];
+            let n = c.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let ok = req.contains(&format!("Authorization: Bearer {real}"));
+            let (status, body) = if ok {
+                (
+                    "200 OK",
+                    r#"{"data":[{"id":"Bonsai-27B-GGUF"},{"id":"gemma-x"}]}"#,
+                )
+            } else {
+                (
+                    "401 Unauthorized",
+                    r#"{"error":{"message":"Invalid token payload"}}"#,
+                )
+            };
+            let _ = c.write_all(
+                format!(
+                    "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+        }
+    });
+    port
+}
+
+#[test]
+fn modelos_do_servidor_local_cadastrados_no_opencode() {
+    let e = Env::new();
+    let port = models_server("REAL-unsloth");
+    let fake = "sandmux-fake-unsloth0000000000000000000";
+    // opencode falso: roda o comando dado.
+    let exe = e.home.join(".opencode/bin/opencode");
+    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    std::fs::write(&exe, "#!/bin/sh\nexec \"$@\"\n").unwrap();
+    std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let cfg = e.data_dir().join("homes/opencode/.config/opencode");
+    std::fs::create_dir_all(&cfg).unwrap();
+    std::fs::write(
+        cfg.join("opencode.json"),
+        format!(
+            r#"{{"provider":{{"unsloth-local":{{"npm":"@ai-sdk/openai-compatible","options":{{"baseURL":"http://127.0.0.1:{port}/v1","headers":{{"Authorization":"Bearer {fake}"}}}},"models":{{"manual":{{}}}}}}}}}}"#
+        ),
+    )
+    .unwrap();
+    let dir = e.data_dir().join("manifests");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("opencode.json"),
+        format!(
+            r#"{{"harness":"opencode","entries":[{{"file":".config/opencode/opencode.json","key":"Authorization","line":1,"fake":"{fake}"}}]}}"#
+        ),
+    )
+    .unwrap();
+    assert!(vault(&e, &["init"], "s\n").status.success());
+    let o = vault(&e, &["import"], "REAL-unsloth\nhost.sandmux.internal\n");
+    assert!(stderr(&o).contains("1 de 1"), "{}", stderr(&o));
+    let p = port.to_string();
+    let cmd = e.cmd(
+        &e.work,
+        &[
+            "run",
+            "opencode",
+            "--no-import",
+            "--host-port",
+            &p,
+            "--",
+            "sh",
+            "-c",
+            "echo \"CFG=$OPENCODE_CONFIG_CONTENT\"; env | grep -c REAL-unsloth; sleep 30",
+        ],
+    );
+    let mut t = Term::spawn(cmd, 250, 30);
+    t.wait_text("CFG=");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let screen = t.screen().replace('\n', "");
+    assert!(screen.contains("\"Bonsai-27B-GGUF\""), "{screen}");
+    assert!(screen.contains("\"gemma-x\""), "{screen}");
+    assert!(screen.contains("unsloth-local"), "{screen}");
+    // A chave real não entrou no sandbox.
+    assert!(!screen.contains("REAL-unsloth"), "{screen}");
+    t.write(b"\x02d");
+    t.wait_exit();
+    // Depois de um reinício do daemon, o cofre tranca: a aba espera o
+    // cofre, em vez de subir sem a lista, e volta com ela no desbloqueio.
+    assert!(e.run(&e.work, &["daemon", "restart"]).status.success());
+    let ls = stdout(&e.run(&e.work, &["ls"]));
+    assert!(ls.contains("aguardando cofre"), "{ls}");
+    let o = vault(&e, &["unlock"], "s\n");
+    assert!(o.status.success(), "{}", stderr(&o));
+    let mut viva = false;
+    for _ in 0..100 {
+        if stdout(&e.run(&e.work, &["ls"])).contains("viva") {
+            viva = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(viva, "{}", stdout(&e.run(&e.work, &["ls"])));
+    let mut t = Term::spawn(e.cmd(&e.work, &["attach", "1"]), 250, 30);
+    t.wait_text("CFG=");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let screen = t.screen().replace('\n', "");
+    assert!(screen.contains("\"Bonsai-27B-GGUF\""), "{screen}");
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+#[test]
+fn import_deduz_o_dominio_pelo_provedor_em_volta() {
+    let e = Env::new();
+    let auth = e
+        .data_dir()
+        .join("homes/opencode/.local/share/opencode/auth.json");
+    std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+    std::fs::write(
+        &auth,
+        "{\n  \"openrouter\": {\n    \"type\": \"api\",\n    \"key\": \"sandmux-fake-or00000000000000000000000000\"\n  }\n}\n",
+    )
+    .unwrap();
+    let dir = e.data_dir().join("manifests");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("opencode.json"),
+        r#"{"harness":"opencode","entries":[{"file":".local/share/opencode/auth.json","key":"key","line":4,"fake":"sandmux-fake-or00000000000000000000000000"}]}"#,
+    )
+    .unwrap();
+    assert!(vault(&e, &["init"], "s\n").status.success());
+    // Só o valor: o domínio vem do provedor, sem pergunta.
+    let o = vault(&e, &["import"], "sk-or-real\n");
+    let err = stderr(&o);
+    // (A pergunta, com o provedor e a linha, só aparece num terminal.)
+    assert!(
+        err.contains("auth.json:openrouter.key guardado no cofre (openrouter.ai)"),
+        "{err}"
+    );
+    let list = stdout(&vault(&e, &["list"], ""));
+    assert!(
+        list.contains("auth.json:openrouter.key  (openrouter.ai)"),
+        "{list}"
+    );
+}
+
+#[test]
+fn doctor_acha_chaves_reais_e_fix_leva_ao_cofre() {
+    let e = Env::new();
+    let home = e.data_dir().join("homes/opencode");
+    let auth = home.join(".local/share/opencode/auth.json");
+    let cfg = home.join(".config/opencode/opencode.json");
+    std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+    std::fs::write(
+        &auth,
+        "{\n  \"openrouter\": {\n    \"type\": \"api\",\n    \"key\": \"sk-or-v1-REALOPENROUTER99\"\n  },\n  \"unsloth-local\": {\n    \"type\": \"api\",\n    \"key\": \"sk-unsloth-REALPASTED55\"\n  }\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &cfg,
+        "{\n  \"provider\": {\n    \"unsloth-local\": {\n      \"options\": {\n        \"baseURL\": \"http://127.0.0.1:8888/v1\",\n        \"headers\": {\n          \"Authorization\": \"Bearer sk-unsloth-REALUNSLOTH77\"\n        }\n      }\n    }\n  }\n}\n",
+    )
+    .unwrap();
+    let o = e.run(&e.work, &["doctor"]);
+    let out = stdout(&o);
+    assert!(out.contains("Chaves reais dentro do sandbox (3)"), "{out}");
+    assert!(
+        out.contains("opencode: .local/share/opencode/auth.json, provedor `openrouter`, chave `key` (linha 4)"),
+        "{out}"
+    );
+    assert!(
+        out.contains("provedor `unsloth-local`, chave `Authorization`"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("REALOPENROUTER") && !out.contains("REALUNSLOTH"),
+        "{out}"
+    );
+    // Sem cofre, o --fix pede para criar.
+    let o = e.run(&e.work, &["doctor", "--fix"]);
+    assert!(stderr(&o).contains("sandmux vault init"), "{}", stderr(&o));
+    assert!(vault(&e, &["init"], "s\n").status.success());
+    let o = e.run(&e.work, &["doctor", "--fix"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let list = stdout(&vault(&e, &["list"], ""));
+    assert!(
+        list.contains("opencode:.local/share/opencode/auth.json:openrouter.key  (openrouter.ai)"),
+        "{list}"
+    );
+    assert!(
+        list.contains(
+            "opencode:.config/opencode/opencode.json:unsloth-local.Authorization  (host.sandmux.internal)"
+        ),
+        "{list}"
+    );
+    // A chave do `auth.json` acha o domínio pelo `baseURL` do `opencode.json`.
+    assert!(
+        list.contains(
+            "opencode:.local/share/opencode/auth.json:unsloth-local.key  (host.sandmux.internal)"
+        ),
+        "{list}"
+    );
+    let a = std::fs::read_to_string(&auth).unwrap();
+    let c = std::fs::read_to_string(&cfg).unwrap();
+    assert!(
+        a.contains("sandmux-fake-") && !a.contains("REALOPENROUTER") && !a.contains("REALPASTED"),
+        "{a}"
+    );
+    assert!(
+        c.contains("Bearer sandmux-fake-") && !c.contains("REALUNSLOTH"),
+        "{c}"
+    );
+    let out = stdout(&e.run(&e.work, &["doctor"]));
+    assert!(
+        out.contains("Chaves reais dentro do sandbox: nenhuma."),
+        "{out}"
+    );
 }

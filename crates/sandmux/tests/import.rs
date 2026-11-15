@@ -182,7 +182,7 @@ fn harness_sem_estado_nao_pergunta() {
 /// Roda o `sandmux` num pseudoterminal (via `script`), respondendo à pergunta.
 fn interactive(e: &Env, answer: &str, cmd: &str) -> String {
     let full = format!(
-        "env -i HOME={} XDG_DATA_HOME={} XDG_RUNTIME_DIR={} XDG_STATE_HOME={} XDG_CONFIG_HOME={} SANDMUX_DAEMON_START=direct PATH=/usr/bin:/bin TERM=xterm {} {cmd}",
+        "env -i HOME={} XDG_DATA_HOME={} XDG_RUNTIME_DIR={} XDG_STATE_HOME={} XDG_CONFIG_HOME={} SANDMUX_DAEMON_START=direct LANG=pt_BR.UTF-8 PATH=/usr/bin:/bin TERM=xterm {} {cmd}",
         e.home.display(),
         e.data.display(),
         e.runtime.display(),
@@ -230,5 +230,28 @@ fn pergunta_na_primeira_execucao_aceite_e_recusa() {
     assert!(
         !screen.contains("Importar a configuração"),
         "perguntou de novo: {screen}"
+    );
+}
+
+#[test]
+fn import_avisa_servicos_locais_do_host() {
+    let e = with_opencode();
+    std::fs::write(
+        e.home.join(".config/opencode/opencode.json"),
+        r#"{"model": "lmstudio/x", "provider": {"lmstudio": {"options": {"baseURL": "http://127.0.0.1:8888/v1"}}},
+           "mcp": {"local": {"type": "remote", "url": "http://localhost:9000/mcp"}}}"#,
+    )
+    .unwrap();
+    let out = e.run(&e.work, &["import", "opencode"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("serviços locais citados"), "{err}");
+    assert!(
+        err.contains("sandmux config add host-ports 8888 --global"),
+        "{err}"
+    );
+    assert!(
+        err.contains("sandmux config add host-ports 9000 --global"),
+        "{err}"
     );
 }

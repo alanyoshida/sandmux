@@ -10,6 +10,7 @@ use sandmux::client;
 use sandmux_policy::assistant::AssistantConfig;
 use sandmux_policy::{Host, config};
 use sandmux_proto::{LaunchOptions, Msg};
+use sandmux_spec::{tr, trf};
 
 /// Resultado da conferência antes de criar a aba.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,12 +37,16 @@ pub fn check(
         key,
     } = reply
     else {
-        return Err(format!("resposta inesperada do daemon: {reply:?}"));
+        return Err(trf!(
+            "resposta inesperada do daemon: {reply:?}",
+            "unexpected answer from the daemon: {reply:?}"
+        ));
     };
     if !exists {
         if prov.is_known() {
-            return Err(format!(
-                "o cofre não existe: crie com `sandmux vault init` e guarde a chave do provedor com {add}"
+            return Err(trf!(
+                "o cofre não existe: crie com `sandmux vault init` e guarde a chave do provedor com {add}",
+                "the vault does not exist: create it with `sandmux vault init` and store the provider key with {add}"
             ));
         }
         return Ok(Check::Ok);
@@ -50,8 +55,9 @@ pub fn check(
         return Ok(Check::Locked);
     }
     if !key && prov.is_known() {
-        return Err(format!(
+        return Err(trf!(
             "falta a chave do provedor {} no cofre: {add}",
+            "the key for provider {} is missing from the vault: {add}",
             prov.name
         ));
     }
@@ -81,27 +87,39 @@ pub fn run(model: Option<String>, text: Vec<String>) -> Result<i32> {
     let model = model
         .or_else(|| cfg.assistant.chat_model.clone())
         .ok_or_else(|| {
-            anyhow!("falta o modelo: use `--model <provedor>/<modelo>` ou defina `chat-model` em [assistant]")
+            anyhow!(tr!(
+                "falta o modelo: use `--model <provedor>/<modelo>` ou defina `chat-model` em [assistant]",
+                "missing model: use `--model <provider>/<model>` or set `chat-model` in [assistant]"
+            ))
         })?;
     cfg.assistant.resolve(&model).map_err(|e| anyhow!(e))?;
     let text = text.join(" ");
     let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     if !tty && text.trim().is_empty() {
-        bail!("sem terminal, `sandmux chat` precisa do texto da pergunta");
+        bail!(tr!(
+            "sem terminal, `sandmux chat` precisa do texto da pergunta",
+            "without a terminal, `sandmux chat` needs the question text"
+        ));
     }
     let mut conn = client::connect_or_start()?;
     let mut call = |m: &Msg| conn.call(m);
     if check(&mut call, &cfg.assistant, &model).map_err(|e| anyhow!(e))? == Check::Locked {
         if !tty {
-            bail!("o cofre está trancado: rode `sandmux vault unlock` antes");
+            bail!(tr!(
+                "o cofre está trancado: rode `sandmux vault unlock` antes",
+                "the vault is locked: run `sandmux vault unlock` first"
+            ));
         }
         let mut input = crate::vaultcmd::Input::new();
-        let p = input.secret("Senha do cofre: ")?;
+        let p = input.secret(tr!("Senha do cofre: ", "Vault password: "))?;
         call(&Msg::VaultUnlock {
             password: p.to_string(),
         })?;
         if check(&mut call, &cfg.assistant, &model).map_err(|e| anyhow!(e))? != Check::Ok {
-            bail!("o cofre continua trancado");
+            bail!(tr!(
+                "o cofre continua trancado",
+                "the vault is still locked"
+            ));
         }
     }
     if !tty {
@@ -112,7 +130,10 @@ pub fn run(model: Option<String>, text: Vec<String>) -> Result<i32> {
             system: None,
         })?;
         let Msg::Answer { text } = reply else {
-            bail!("resposta inesperada do daemon: {reply:?}");
+            bail!(trf!(
+                "resposta inesperada do daemon: {reply:?}",
+                "unexpected answer from the daemon: {reply:?}"
+            ));
         };
         print!("{text}");
         return Ok(0);

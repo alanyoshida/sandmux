@@ -4,6 +4,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
+use sandmux_spec::trf;
 
 fn uid() -> u32 {
     // SAFETY: getuid não falha.
@@ -52,20 +53,34 @@ pub fn sessions_file(data_dir: &Path) -> PathBuf {
 pub fn check_private_dir(p: &Path, owner: u32) -> Result<()> {
     let m = std::fs::symlink_metadata(p)?;
     if m.file_type().is_symlink() {
-        bail!("{} é um link simbólico", p.display());
+        bail!(trf!(
+            "{} é um link simbólico",
+            "{} is a symbolic link",
+            p.display()
+        ));
     }
     if !m.is_dir() {
-        bail!("{} não é uma pasta", p.display());
+        bail!(trf!(
+            "{} não é uma pasta",
+            "{} is not a folder",
+            p.display()
+        ));
     }
     if m.uid() != owner {
-        bail!("{} pertence a outro usuário (UID {})", p.display(), m.uid());
+        bail!(trf!(
+            "{} pertence a outro usuário (UID {})",
+            "{} belongs to another user (UID {})",
+            p.display(),
+            m.uid()
+        ));
     }
     if m.mode() & 0o077 != 0 {
-        bail!(
+        bail!(trf!(
             "{} tem permissão {:o}; a pasta do daemon precisa ser 700",
+            "{} has mode {:o}; the daemon folder must be 700",
             p.display(),
             m.mode() & 0o777
-        );
+        ));
     }
     Ok(())
 }
@@ -80,7 +95,12 @@ pub fn ensure_runtime_dir(p: &Path) -> Result<()> {
         }
         Err(e) => return Err(e.into()),
     }
-    check_private_dir(p, uid()).map_err(|e| anyhow::anyhow!("pasta do socket recusada: {e}"))
+    check_private_dir(p, uid()).map_err(|e| {
+        anyhow::anyhow!(trf!(
+            "pasta do socket recusada: {e}",
+            "socket folder refused: {e}"
+        ))
+    })
 }
 
 #[cfg(test)]

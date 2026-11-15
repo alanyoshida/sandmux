@@ -29,6 +29,23 @@ sandmux vault remove openrouter
 
 Cada segredo tem um nome, o valor e, se quiser, os domínios donos (padrões como os da [rede](network.md)), que dizem para onde o valor pode ir quando a troca no tráfego existir. Com o cofre desbloqueado, o gateway [decifra o TLS](network.md#decifração-do-tls) desses domínios e registra o método e o caminho de cada pedido. O valor nunca vai num argumento da linha de comando, porque argumentos ficam visíveis para outros processos.
 
+## Pela TUI
+
+A seção Cofre da página de configurações (Ctrl+b `e`) mostra o estado do cofre e a lista de segredos, com o nome, o tipo (token ou SSH) e os domínios. Os valores nunca aparecem. Tab ou → entra na lista, e as teclas fazem o mesmo que os subcomandos:
+
+| Tecla | Ação |
+|---|---|
+| `n` | Cria o cofre (senha e confirmação) |
+| `u` / `l` | Desbloqueia / tranca |
+| `p` | Troca a senha |
+| `a` | Acrescenta um segredo: nome, valor e domínios separados por vírgula (`localhost` vira `host.sandmux.internal`) |
+| `s` | Acrescenta uma chave SSH: nome, arquivo, passphrase (vazia se não tem) e servidores |
+| `d` | Troca os domínios do segredo escolhido, sem pedir o valor de novo |
+| `x` | Apaga o segredo escolhido, depois de `s` para confirmar |
+| `r` | Relê o cofre |
+
+Senhas e valores aparecem como `•` e são apagados da memória da TUI depois de enviados ao daemon. As conexões de banco e a importação de chaves continuam na linha de comando.
+
 ## Troca da chave no tráfego
 
 Cada segredo tem um valor falso (`sandmux-fake-` e 32 caracteres): o que a importação pôs no lugar, ou um gerado no `sandmux vault add`. O `sandmux vault list` mostra o falso, que é o que o agente vê de qualquer jeito.
@@ -100,7 +117,27 @@ O cofre também guarda conexões de PostgreSQL e MySQL (`sandmux db add`), com a
 
 ## Chaves da importação
 
-A [importação](../README.md) troca cada segredo dos arquivos de um harness por um valor falso (`sandmux-fake-...`) e anota a troca num manifesto, sem o valor real. `sandmux vault import` percorre os manifestos e, para cada valor falso ainda sem segredo no cofre, mostra o harness, o arquivo e a chave, e pede o valor real. Uma resposta vazia pula o item. O segredo fica com o nome `<harness>:<arquivo>:<chave>`, ligado ao valor falso e, quando o nome da chave indica o provedor (como `OPENROUTER_API_KEY`), ao domínio dele. Depois disso, o harness usa o arquivo importado como está, e o gateway troca o falso dele pelo real. No hermes, que lê o `.env` por cima do ambiente, é assim que a chave importada passa a valer.
+A [importação](../README.md) troca cada segredo dos arquivos de um harness por um valor falso (`sandmux-fake-...`) e anota a troca num manifesto, sem o valor real. `sandmux vault import` percorre os manifestos e, para cada valor falso ainda sem segredo no cofre, mostra o harness, o arquivo, a chave e a linha do arquivo importado (com o falso como `<falso>`, para você reconhecer o provedor), e pede o valor real. Uma resposta vazia pula o item.
+
+Ao digitar ou colar um segredo ou a senha do cofre, cada caractere aparece como `•`: o valor nunca aparece na tela. Backspace apaga um caractere e Ctrl+U apaga tudo.
+
+### Chaves gravadas dentro do sandbox
+
+Uma chave colada dentro do harness, como no "Connect provider" do opencode ou no assistente de configuração do hermes, fica em claro no HOME sintético, ao alcance do agente.
+
+- **Busca:** o `sandmux doctor` procura credenciais reais nos arquivos de configuração (JSON, YAML, `.env`) que a importação copia, nos HOMEs sintéticos do opencode e do hermes, com as mesmas regras da importação. Ele lista cada uma (harness, arquivo, provedor, chave e linha), sem o valor.
+- **`sandmux doctor --fix`:** leva essas chaves para o cofre, com o domínio descoberto como acima. O arquivo só é regravado com valores falsos depois de o cofre aceitar todas as chaves dele; o real não fica em nenhum arquivo do HOME sintético.
+- **Depois:** reinicie as abas do harness, que pode ter a chave antiga na memória.
+
+Sem cofre, nada troca o falso pelo real, e o harness recebe "chave inválida" do provedor. Por isso o relatório da importação e o `sandmux doctor` lembram de `sandmux vault init` e `sandmux vault import`. O segredo fica com o nome `<harness>:<arquivo>:<provedor>.<chave>` (ou `<harness>:<arquivo>:<chave>`, quando não há provedor em volta), ligado ao valor falso e, quando o nome da chave indica o provedor (como `OPENROUTER_API_KEY`), ao domínio dele. Depois disso, o harness usa o arquivo importado como está, e o gateway troca o falso dele pelo real. No hermes, que lê o `.env` por cima do ambiente, é assim que a chave importada passa a valer.
+
+Cada segredo fica ligado aos domínios para onde ele pode ir: o gateway só troca o falso pelo real num pedido a um deles. Assim, um agente enganado que manda o falso para outro site manda só o falso. O comando descobre o domínio sozinho, nesta ordem:
+
+1. **Nome da chave:** `OPENROUTER_API_KEY` vira `openrouter.ai`.
+2. **Provedor em volta da linha:** o `"openrouter": {` do `auth.json` do opencode vira `openrouter.ai`.
+3. **`baseURL` do provedor na configuração do opencode:** `http://127.0.0.1:8888/v1` vira `host.sandmux.internal` (o nome da sua máquina dentro do sandbox), e `https://llm.empresa.com/v1` vira `llm.empresa.com`.
+
+Só quando nada disso indica o dono, o comando pergunta, depois do valor. A resposta pode ser `localhost`, `127.0.0.1` ou `::1` para um servidor na sua máquina, que viram `host.sandmux.internal`. O mesmo vale para `sandmux vault add --domain localhost`. Ao guardar, ele diz o domínio, ou avisa que o segredo ficou sem domínio. Uma resposta vazia guarda o segredo sem domínio, e então não há troca. Para um servidor local de modelo alcançado pelas [portas do host](network.md#portas-do-host) (LM Studio, Unsloth Studio, Ollama com chave), o domínio é `host.sandmux.internal`.
 
 ## `--pass-env` e a restauração
 

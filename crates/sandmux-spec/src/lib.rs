@@ -7,6 +7,7 @@
 //! uma versão diferente fazem a leitura falhar.
 
 pub mod files;
+pub mod lang;
 pub mod net;
 
 use std::path::{Component, Path, PathBuf};
@@ -287,15 +288,29 @@ pub struct SeccompRules {
 /// Erros de leitura e validação.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SpecError {
-    #[error("especificação malformada: {0}")]
     Malformed(String),
-    #[error(
-        "versão de especificação não suportada: recebida {found}, suportada {supported}",
-        supported = SPEC_VERSION
-    )]
     UnsupportedVersion { found: String },
-    #[error("especificação inválida: {0}")]
     Invalid(String),
+}
+
+impl std::fmt::Display for SpecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let supported = SPEC_VERSION;
+        match self {
+            SpecError::Malformed(m) => f.write_str(&crate::trf!(
+                "especificação malformada: {m}",
+                "malformed specification: {m}"
+            )),
+            SpecError::UnsupportedVersion { found } => f.write_str(&crate::trf!(
+                "versão de especificação não suportada: recebida {found}, suportada {supported}",
+                "unsupported specification version: got {found}, supported {supported}"
+            )),
+            SpecError::Invalid(m) => f.write_str(&crate::trf!(
+                "especificação inválida: {m}",
+                "invalid specification: {m}"
+            )),
+        }
+    }
 }
 
 impl LaunchSpec {
@@ -309,7 +324,7 @@ impl LaunchSpec {
                 None
             }
             Some(other) => Some(other.to_string()),
-            None => Some("ausente".to_string()),
+            None => Some(crate::tr!("ausente", "missing").to_string()),
         };
         if let Some(found) = found {
             return Err(SpecError::UnsupportedVersion { found });
@@ -334,7 +349,9 @@ impl LaunchSpec {
             });
         }
         if self.command.is_empty() || self.command[0].is_empty() {
-            return Err(SpecError::Invalid("comando vazio".into()));
+            return Err(SpecError::Invalid(
+                crate::tr!("comando vazio", "empty command").into(),
+            ));
         }
         check_path("cwd", &self.cwd)?;
         for m in &self.mounts {
@@ -344,7 +361,13 @@ impl LaunchSpec {
             if let Mount::Symlink { target, .. } = m
                 && target.as_os_str().is_empty()
             {
-                return Err(SpecError::Invalid("link simbólico sem destino".into()));
+                return Err(SpecError::Invalid(
+                    crate::tr!(
+                        "link simbólico sem destino",
+                        "symbolic link without a target"
+                    )
+                    .into(),
+                ));
             }
         }
         for p in self.landlock.read.iter().chain(&self.landlock.write) {
@@ -352,14 +375,16 @@ impl LaunchSpec {
         }
         for v in &self.env {
             if v.name.is_empty() || v.name.contains('=') || v.name.contains('\0') {
-                return Err(SpecError::Invalid(format!(
+                return Err(SpecError::Invalid(crate::trf!(
                     "nome de variável inválido: {:?}",
+                    "invalid variable name: {:?}",
                     v.name
                 )));
             }
             if v.value.contains('\0') {
-                return Err(SpecError::Invalid(format!(
+                return Err(SpecError::Invalid(crate::trf!(
                     "valor com byte nulo na variável {}",
+                    "value with a null byte in variable {}",
                     v.name
                 )));
             }
@@ -414,20 +439,23 @@ impl Mount {
 
 fn check_path(label: &str, p: &Path) -> Result<(), SpecError> {
     if !p.is_absolute() {
-        return Err(SpecError::Invalid(format!(
+        return Err(SpecError::Invalid(crate::trf!(
             "{label}: caminho não absoluto: {}",
+            "{label}: path is not absolute: {}",
             p.display()
         )));
     }
     if p.components().any(|c| matches!(c, Component::ParentDir)) {
-        return Err(SpecError::Invalid(format!(
+        return Err(SpecError::Invalid(crate::trf!(
             "{label}: caminho com '..': {}",
+            "{label}: path with '..': {}",
             p.display()
         )));
     }
     if p.as_os_str().as_encoded_bytes().contains(&0) {
-        return Err(SpecError::Invalid(format!(
-            "{label}: caminho com byte nulo"
+        return Err(SpecError::Invalid(crate::trf!(
+            "{label}: caminho com byte nulo",
+            "{label}: path with a null byte"
         )));
     }
     Ok(())

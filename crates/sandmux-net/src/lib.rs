@@ -8,6 +8,7 @@
 //! tudo é registrado. Os metadados de cloud, o QUIC e o ICMP são bloqueados.
 
 pub mod dns;
+pub mod hostports;
 pub mod inject;
 pub mod log;
 pub mod mitm;
@@ -302,6 +303,7 @@ async fn tcp(mut s: ipstack::IpStackTcpStream, st: Arc<State>) {
         };
         let ctx = Arc::new(mitm::Ctx {
             log: st.log.clone(),
+            proto: "https",
             domain: name.clone(),
             ip: ip.clone(),
             port: dst.port(),
@@ -711,9 +713,20 @@ async fn run(
         active,
     });
     if let Some(p) = cfg.ports.take() {
-        let st2 = st.clone();
+        let (st2, st3, st4) = (st.clone(), st.clone(), st.clone());
+        tokio::spawn(hostports::run(
+            p.connector.clone(),
+            Arc::new(move || st4.policy.get()),
+            st.log.clone(),
+            st.vault.clone().map(|access| hostports::Vault {
+                access,
+                tag: st.tag.clone(),
+            }),
+            st.stop.clone(),
+        ));
         let live = ports::Live {
             rules: Box::new(move || st2.policy.get().ports.clone()),
+            host_ports: Box::new(move || st3.policy.get().host_ports.clone()),
             log: Some(st.log.clone()),
         };
         tokio::spawn(ports::run(p, live, st.stop.clone()));
@@ -808,6 +821,7 @@ mod tests {
             decrypt: Vec::new(),
             ssh: Vec::new(),
             ports: Vec::new(),
+            host_ports: Vec::new(),
         };
         let (sni, names) = conn_names(&aliases, mirror, get, Vec::new);
         assert_eq!(

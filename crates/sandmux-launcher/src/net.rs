@@ -93,8 +93,12 @@ impl Ctl {
 /// modo aberta cria `sandmux0` e devolve o descritor do TUN.
 pub fn setup(open: bool) -> io::Result<Option<OwnedFd>> {
     let ctl = Ctl::new()?;
-    ctl.up("lo")
-        .map_err(|e| io::Error::new(e.kind(), format!("subir o lo: {e}")))?;
+    ctl.up("lo").map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            sandmux_spec::trf!("subir o lo: {e}", "bring up lo: {e}"),
+        )
+    })?;
     if !open {
         return Ok(None);
     }
@@ -102,28 +106,40 @@ pub fn setup(open: bool) -> io::Result<Option<OwnedFd>> {
         .read(true)
         .write(true)
         .open("/dev/net/tun")
-        .map_err(|e| io::Error::new(e.kind(), format!("abrir /dev/net/tun: {e}")))?;
+        .map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                sandmux_spec::trf!("abrir /dev/net/tun: {e}", "open /dev/net/tun: {e}"),
+            )
+        })?;
     let tun = OwnedFd::from(tun);
     let mut r = ifreq(IFACE);
     r.ifr_ifru.ifru_flags = (libc::IFF_TUN | libc::IFF_NO_PI) as libc::c_short;
     // SAFETY: TUNSETIFF recebe um ifreq.
-    check(unsafe { libc::ioctl(tun.as_raw_fd(), libc::TUNSETIFF as _, &mut r) })
-        .map_err(|e| io::Error::new(e.kind(), format!("criar {IFACE}: {e}")))?;
+    check(unsafe { libc::ioctl(tun.as_raw_fd(), libc::TUNSETIFF as _, &mut r) }).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            sandmux_spec::trf!("criar {IFACE}: {e}", "create {IFACE}: {e}"),
+        )
+    })?;
 
     let ctx =
         |step: &'static str| move |e: io::Error| io::Error::new(e.kind(), format!("{step}: {e}"));
     let mut a = ifreq(IFACE);
     a.ifr_ifru.ifru_addr = sockaddr(Ipv4Addr::new(10, 0, 2, 100));
     ctl.ioctl(libc::SIOCSIFADDR, &mut a)
-        .map_err(ctx("endereço"))?;
+        .map_err(ctx(sandmux_spec::tr!("endereço", "address")))?;
     let mut m = ifreq(IFACE);
     m.ifr_ifru.ifru_netmask = sockaddr(Ipv4Addr::new(255, 255, 255, 0));
     ctl.ioctl(libc::SIOCSIFNETMASK, &mut m)
-        .map_err(ctx("máscara"))?;
+        .map_err(ctx(sandmux_spec::tr!("máscara", "netmask")))?;
     let mut mtu = ifreq(IFACE);
     mtu.ifr_ifru.ifru_mtu = 1500;
     ctl.ioctl(libc::SIOCSIFMTU, &mut mtu).map_err(ctx("MTU"))?;
-    ctl.up(IFACE).map_err(ctx("subir a interface"))?;
+    ctl.up(IFACE).map_err(ctx(sandmux_spec::tr!(
+        "subir a interface",
+        "bring up the interface"
+    )))?;
 
     let mut rt = RtEntry {
         rt_pad1: 0,
@@ -141,7 +157,7 @@ pub fn setup(open: bool) -> io::Result<Option<OwnedFd>> {
         rt_irtt: 0,
     };
     ctl.ioctl(libc::SIOCADDRT, &mut rt)
-        .map_err(ctx("rota padrão"))?;
+        .map_err(ctx(sandmux_spec::tr!("rota padrão", "default route")))?;
     Ok(Some(tun))
 }
 

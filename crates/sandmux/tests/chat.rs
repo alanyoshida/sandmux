@@ -115,12 +115,22 @@ fn fake_llm() -> (u16, String, Arc<AtomicUsize>, Bodies) {
                         format!("eco: {t}")
                     }
                 };
+                let models = head.starts_with("GET ") && head.contains("/models");
                 let resp = if auth != format!("Bearer {REAL}") {
                     let b =
                         serde_json::json!({"error": {"message": format!("chave errada: {auth}")}})
                             .to_string();
                     format!(
                         "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{b}",
+                        b.len()
+                    )
+                } else if models {
+                    let b = serde_json::json!({"data": [
+                        {"id": "eco"}, {"id": "llama-3-flash"}, {"id": "qwen-coder"}
+                    ]})
+                    .to_string();
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{b}",
                         b.len()
                     )
                 } else if v["stream"] == serde_json::Value::Bool(true) {
@@ -392,7 +402,7 @@ fn modal_de_comando_escreve_sem_executar() {
     let mut cmd = e.cmd(&e.work, &[]);
     cmd.env("SHELL", "/bin/bash");
     let mut t = Term::spawn_answering(cmd, 120, 30);
-    t.wait_text("1:shell:app");
+    t.wait_text(&tab(1, "shell:app"));
     t.write(b"\x02g");
     t.wait_text("Comando");
     t.write(b"mostrar um eco\r");
@@ -475,6 +485,64 @@ fn modal_de_comando_escreve_sem_executar() {
     t.wait_text("chave errada: Bearer OUTRA");
     t.wait_text("Enter pergunta");
     t.write(b"\x1b");
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+// ---- seletor de modelo ----
+
+#[test]
+fn seletor_de_modelo_na_aba_no_modal_e_na_pagina() {
+    let (e, _count) = setup();
+    // Na aba de chat: /modelo sem argumento abre a lista dos provedores.
+    let mut t = Term::spawn(e.cmd(&e.work, &["chat", "primeira"]), 120, 30);
+    t.wait_text("eco: primeira");
+    // A aba diz como sair.
+    t.wait_text("Ctrl+b d sai");
+    t.write(b"/modelo\r");
+    t.wait_text("local/llama-3-flash");
+    t.wait_text("local/qwen-coder");
+    t.write(b"coder");
+    t.wait_text("1 de 3");
+    t.write(b"\r");
+    t.wait_text("modelo trocado para local/qwen-coder");
+    t.write(b"\x02d");
+    t.wait_exit();
+
+    // Na TUI: o modal de chat e a página de configurações.
+    let mut cmd = e.cmd(&e.work, &[]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut t = Term::spawn_answering(cmd, 120, 30);
+    // A aba de chat de antes já está na barra.
+    t.wait_text("chat:local");
+    t.write(b"\x02i");
+    t.wait_text("lista dos provedores");
+    t.write(b"\t");
+    t.write(b"\x1b[C");
+    t.wait_text("Escolher o modelo");
+    t.wait_text("local/llama-3-flash");
+    t.write(b"flash\r");
+    t.wait_for("modelo no campo", |s| {
+        s.contains("local/llama-3-flash") && !s.contains("Escolher o modelo")
+    });
+    t.write(b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+    // Página: Assistente (oitava seção), Enter no modelo do chat.
+    t.write(b"\x02e");
+    t.wait_text("sandmux · configurações");
+    for _ in 0..7 {
+        t.write(b"\x1b[B");
+    }
+    t.write(b"\t");
+    t.write(b"\r");
+    t.wait_text("Escolher o modelo");
+    // A lista já está guardada: aparece na hora.
+    t.wait_text("local/qwen-coder");
+    t.write(b"qwen\r");
+    t.wait_text("chat-model gravado em [assistant]");
+    let cfg = std::fs::read_to_string(e.config_file()).unwrap();
+    assert!(cfg.contains("chat-model = \"local/qwen-coder\""), "{cfg}");
+    t.write(b"q");
     t.write(b"\x02d");
     t.wait_exit();
 }

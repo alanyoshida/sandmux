@@ -2,6 +2,7 @@
 //! (subconjunto do `draft-miller-ssh-agent`: listar e assinar) e a leitura
 //! das chaves no cadastro.
 
+use sandmux_spec::{tr, trf};
 use ssh_key::{Algorithm, EcdsaCurve, HashAlg, PrivateKey, Signature};
 
 const FAILURE: u8 = 5;
@@ -17,9 +18,10 @@ pub const MAX_MSG: usize = 256 * 1024;
 
 /// Lê uma chave privada OpenSSH sem passphrase de um tipo aceito.
 pub fn parse_key(text: &str) -> Result<PrivateKey, String> {
-    let k = PrivateKey::from_openssh(text).map_err(|e| format!("chave OpenSSH inválida: {e}"))?;
+    let k = PrivateKey::from_openssh(text)
+        .map_err(|e| trf!("chave OpenSSH inválida: {e}", "invalid OpenSSH key: {e}"))?;
     if k.is_encrypted() {
-        return Err("a chave ainda está cifrada".into());
+        return Err(tr!("a chave ainda está cifrada", "the key is still encrypted").into());
     }
     check_algorithm(&k)?;
     Ok(k)
@@ -28,24 +30,29 @@ pub fn parse_key(text: &str) -> Result<PrivateKey, String> {
 /// Lê uma chave privada OpenSSH, decifrando-a com `passphrase` quando é
 /// cifrada, e a devolve sem passphrase, no formato OpenSSH.
 pub fn import_key(text: &str, passphrase: Option<&str>) -> Result<String, String> {
-    let k = PrivateKey::from_openssh(text).map_err(|e| format!("chave OpenSSH inválida: {e}"))?;
+    let k = PrivateKey::from_openssh(text)
+        .map_err(|e| trf!("chave OpenSSH inválida: {e}", "invalid OpenSSH key: {e}"))?;
     let k = if k.is_encrypted() {
-        let p = passphrase.ok_or("a chave é cifrada; falta a passphrase")?;
-        k.decrypt(p).map_err(|_| "passphrase errada".to_string())?
+        let p = passphrase.ok_or(tr!(
+            "a chave é cifrada; falta a passphrase",
+            "the key is encrypted; the passphrase is missing"
+        ))?;
+        k.decrypt(p)
+            .map_err(|_| tr!("passphrase errada", "wrong passphrase").to_string())?
     } else {
         k
     };
     check_algorithm(&k)?;
     k.to_openssh(ssh_key::LineEnding::LF)
         .map(|z| z.to_string())
-        .map_err(|e| format!("gravar a chave: {e}"))
+        .map_err(|e| trf!("gravar a chave: {e}", "write the key: {e}"))
 }
 
 /// Se a chave lida de `text` é cifrada.
 pub fn is_encrypted(text: &str) -> Result<bool, String> {
     PrivateKey::from_openssh(text)
         .map(|k| k.is_encrypted())
-        .map_err(|e| format!("chave OpenSSH inválida: {e}"))
+        .map_err(|e| trf!("chave OpenSSH inválida: {e}", "invalid OpenSSH key: {e}"))
 }
 
 fn check_algorithm(k: &PrivateKey) -> Result<(), String> {
@@ -55,8 +62,9 @@ fn check_algorithm(k: &PrivateKey) -> Result<(), String> {
         | Algorithm::Ecdsa {
             curve: EcdsaCurve::NistP256 | EcdsaCurve::NistP384,
         } => Ok(()),
-        a => Err(format!(
+        a => Err(trf!(
             "tipo de chave não aceito: {}; use Ed25519, ECDSA (P-256, P-384) ou RSA",
+            "key type not accepted: {}; use Ed25519, ECDSA (P-256, P-384) or RSA",
             a.as_str()
         )),
     }

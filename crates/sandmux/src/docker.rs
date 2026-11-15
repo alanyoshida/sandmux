@@ -60,13 +60,18 @@ pub fn support(user: &str, uid: u32) -> Result<Support, String> {
     .filter(|b| !in_path(b))
     .collect();
     if !missing.is_empty() {
-        return Err(format!("faltam no PATH: {}", missing.join(", ")));
+        return Err(sandmux_spec::trf!(
+            "faltam no PATH: {}",
+            "missing from PATH: {}",
+            missing.join(", ")
+        ));
     }
     for f in ["/etc/subuid", "/etc/subgid"] {
         let text = std::fs::read_to_string(f).unwrap_or_default();
         if !has_subid(&text, user, uid) {
-            return Err(format!(
-                "o usuário {user} não tem uma faixa de 65536 IDs em {f}"
+            return Err(sandmux_spec::trf!(
+                "o usuário {user} não tem uma faixa de 65536 IDs em {f}",
+                "user {user} has no range of 65536 IDs in {f}"
             ));
         }
     }

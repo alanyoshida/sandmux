@@ -205,7 +205,11 @@ pub fn plan(
                 return Err(PolicyError::NotInstalled {
                     harness: name.into(),
                     searched: vec![exe],
-                    hint: "instale o opencode no host com: curl -fsSL https://opencode.ai/install | bash".into(),
+                    hint: sandmux_spec::tr!(
+                        "instale o opencode no host com: curl -fsSL https://opencode.ai/install | bash",
+                        "install opencode on the host with: curl -fsSL https://opencode.ai/install | bash"
+                    )
+                    .into(),
                 });
             }
             let mut env = vec![("OPENCODE_DISABLE_AUTOUPDATE".to_string(), "1".to_string())];
@@ -229,7 +233,11 @@ pub fn plan(
                 return Err(PolicyError::NotInstalled {
                     harness: name.into(),
                     searched: vec![code, wrapper],
-                    hint: "instale o hermes no host seguindo a documentação oficial do projeto e rode `hermes` uma vez fora do sandbox".into(),
+                    hint: sandmux_spec::tr!(
+                        "instale o hermes no host seguindo a documentação oficial do projeto e rode `hermes` uma vez fora do sandbox",
+                        "install hermes on the host following the project's official documentation and run `hermes` once outside the sandbox"
+                    )
+                    .into(),
                 });
             }
             let mut mounts = vec![ro(&code)];

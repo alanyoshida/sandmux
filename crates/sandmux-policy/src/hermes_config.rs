@@ -157,8 +157,9 @@ pub fn host_gateway_alive(home: &std::path::Path) -> Option<String> {
     let cmd = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
     // O hermes roda `... gateway run`: um argumento exatamente `gateway`.
     cmd.split(|b| *b == 0).any(|a| a == b"gateway").then(|| {
-        format!(
-            "o gateway do hermes do host está rodando (PID {pid}): os dois disputam as mensagens dos mesmos bots; pare o do host com `hermes gateway stop`"
+        sandmux_spec::trf!(
+            "o gateway do hermes do host está rodando (PID {pid}): os dois disputam as mensagens dos mesmos bots; pare o do host com `hermes gateway stop`",
+            "the host's hermes gateway is running (PID {pid}): both compete for the messages of the same bots; stop the host one with `hermes gateway stop`"
         )
     })
 }

@@ -95,15 +95,22 @@ fn deny() -> libc::sock_filter {
 pub fn build(rules: &SeccompRules) -> Result<Vec<libc::sock_filter>, String> {
     let mut syscalls = Vec::new();
     for name in &rules.deny_syscalls {
-        let n = syscall_number(name)
-            .ok_or_else(|| format!("chamada de sistema desconhecida: {name}"))?;
+        let n = syscall_number(name).ok_or_else(|| {
+            sandmux_spec::trf!(
+                "chamada de sistema desconhecida: {name}",
+                "unknown system call: {name}"
+            )
+        })?;
         syscalls.push(n as u32);
     }
     let mut ioctls = Vec::new();
     for name in &rules.deny_ioctls {
-        ioctls.push(
-            ioctl_number(name).ok_or_else(|| format!("comando de ioctl desconhecido: {name}"))?,
-        );
+        ioctls.push(ioctl_number(name).ok_or_else(|| {
+            sandmux_spec::trf!(
+                "comando de ioctl desconhecido: {name}",
+                "unknown ioctl command: {name}"
+            )
+        })?);
     }
 
     let mut p = vec![
@@ -124,7 +131,9 @@ pub fn build(rules: &SeccompRules) -> Result<Vec<libc::sock_filter>, String> {
     if !ioctls.is_empty() {
         // Se não for ioctl, pula o bloco inteiro: carga + 2 por comando + retorno.
         let skip = 1 + 2 * ioctls.len() + 1;
-        let skip = u8::try_from(skip).map_err(|_| "comandos de ioctl demais".to_string())?;
+        let skip = u8::try_from(skip).map_err(|_| {
+            sandmux_spec::tr!("comandos de ioctl demais", "too many ioctl commands").to_string()
+        })?;
         p.push(jump(BPF_JEQ_K, libc::SYS_ioctl as u32, 0, skip));
         p.push(stmt(BPF_LD_W_ABS, OFF_ARG1_LO));
         for cmd in ioctls {
