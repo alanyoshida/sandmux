@@ -197,6 +197,34 @@ pub struct SessionInfo {
     /// harness (protocolo 27).
     #[serde(default)]
     pub keys: KeyNote,
+    /// Grupo da sessão (protocolo 30).
+    #[serde(default = "main_group")]
+    pub group: String,
+}
+
+/// O grupo das sessões criadas sem grupo, sempre presente na lista.
+pub const MAIN_GROUP: &str = "principal";
+
+pub fn main_group() -> String {
+    MAIN_GROUP.to_string()
+}
+
+/// Confere um nome de grupo: de 1 a 32 caracteres, entre letras, dígitos,
+/// `-`, `_` e `.`.
+pub fn check_group(name: &str) -> Result<(), String> {
+    let n = name.chars().count();
+    let ok = (1..=32).contains(&n)
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if ok {
+        Ok(())
+    } else {
+        Err(trf!(
+            "nome de grupo inválido: {name:?}; use de 1 a 32 caracteres, entre letras, dígitos, `-`, `_` e `.`",
+            "invalid group name: {name:?}; use 1 to 32 characters among letters, digits, `-`, `_` and `.`"
+        ))
+    }
 }
 
 /// Chaves reais do HOME sintético de uma sessão, contadas pelo vigia.
@@ -452,6 +480,9 @@ pub enum Msg {
         vars: BTreeMap<String, String>,
         size: Size,
         attach: bool,
+        /// Grupo da sessão (protocolo 30); `None` é o `principal`.
+        #[serde(default)]
+        group: Option<String>,
     },
     Restart {
         id: u32,
@@ -483,6 +514,16 @@ pub enum Msg {
     Rename {
         id: u32,
         name: String,
+    },
+    /// Leva a sessão para outro grupo (protocolo 30).
+    SetGroup {
+        id: u32,
+        group: String,
+    },
+    /// Leva todas as sessões de um grupo para o nome novo.
+    RenameGroup {
+        from: String,
+        to: String,
     },
     /// Últimas linhas do registro de rede (protocolo 7): de uma sessão ou de
     /// todas, só as de `since` em diante (`AAAA-MM-DDTHH:MM:SS`), no máximo

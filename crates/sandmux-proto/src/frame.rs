@@ -142,6 +142,7 @@ mod tests {
                 vars: [("TERM".to_string(), "xterm".to_string())].into(),
                 size: Size { cols: 80, rows: 24 },
                 attach: true,
+                group: Some("estudos".into()),
             }),
             Frame::Data(vec![]),
         ]

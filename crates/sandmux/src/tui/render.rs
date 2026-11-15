@@ -146,8 +146,12 @@ fn draw_simple_bar(f: &mut Frame, bar: Rect, app: &mut App) {
         spans.push(Span::styled(label, style));
     }
     let status = app.status_text();
-    let used: u16 = x;
+    // O grupo de abas mostrado, no fim da barra.
+    let group = format!(" [{}]", app.group);
+    let gw = group.chars().count() as u16;
+    let used: u16 = x + gw;
     let free = bar.width.saturating_sub(used);
+    let mut pad_left = free as usize;
     if !status.is_empty() && free > 2 {
         let s: String = status.chars().take(free as usize - 1).collect();
         let pad = free as usize - s.chars().count();
@@ -155,6 +159,14 @@ fn draw_simple_bar(f: &mut Frame, bar: Rect, app: &mut App) {
         spans.push(Span::styled(
             s,
             themed(&theme, "status-fg", "", Style::default()).add_modifier(Modifier::ITALIC),
+        ));
+        pad_left = 1;
+    }
+    if bar.width >= used {
+        spans.push(Span::raw(" ".repeat(pad_left.saturating_sub(1))));
+        spans.push(Span::styled(
+            group,
+            themed(&theme, "status-fg", "", Style::default()).add_modifier(Modifier::BOLD),
         ));
     }
     let bar_style = themed(&theme, "", "bar-bg", Style::default());
@@ -201,6 +213,10 @@ fn tilde(p: &std::path::Path, home: &std::path::Path) -> String {
 fn chips(app: &App, theme: &Theme, icons: bool) -> Vec<(String, Color)> {
     let ic = |i: &str, s: String| if icons { format!("{i} {s}") } else { s };
     let mut chips: Vec<(String, Color)> = Vec::new();
+    chips.push((
+        ic("\u{f247}", app.group.clone()),
+        pl(theme, "chip-group-bg", "#9399b2"),
+    ));
     if let Some(t) = app.tabs.get(app.active) {
         chips.push((
             ic("\u{f120}", t.opts.harness.clone()),
@@ -1983,6 +1999,48 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
                 l.push(Line::styled(e.clone(), error));
             }
             ("Chat", l, 8)
+        }
+        Modal::Groups(gm) => {
+            let mut l: Vec<Line> = app
+                .groups
+                .iter()
+                .enumerate()
+                .map(|(i, (g, n))| {
+                    let st = if i == gm.sel && gm.edit.is_none() {
+                        selected
+                    } else {
+                        Style::default()
+                    };
+                    let mark = if *g == app.group { "●" } else { " " };
+                    Line::styled(
+                        format!(" {mark} {g}  {}", trf!("{n} aba(s)", "{n} tab(s)")),
+                        st,
+                    )
+                })
+                .collect();
+            match &gm.edit {
+                Some((super::GroupEdit::New, text)) => {
+                    l.push(Line::raw(""));
+                    l.push(Line::raw(trf!("Grupo novo: {text}▏", "New group: {text}▏")));
+                }
+                Some((super::GroupEdit::Rename(old), text)) => {
+                    l.push(Line::raw(""));
+                    l.push(Line::raw(trf!(
+                        "Renomear {old}: {text}▏",
+                        "Rename {old}: {text}▏"
+                    )));
+                }
+                None => {}
+            }
+            let h = l.len() as u16 + 2;
+            (
+                tr!(
+                    "Grupos (Enter troca · n novo · r renomeia · m leva a aba · Esc fecha)",
+                    "Groups (Enter switches · n new · r renames · m moves the tab · Esc closes)"
+                ),
+                l,
+                h,
+            )
         }
         Modal::List(sel) => {
             let l: Vec<Line> = app

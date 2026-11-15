@@ -15,7 +15,8 @@
 
 | Command | Effect |
 |---|---|
-| `sandmux ls` | Lists the sessions with ID, name (`<harness>:<folder>`), state, attached terminals, memory and processes in use with the caps, and folder |
+| `sandmux ls [--group <group>]` | Lists the sessions with ID, name (`<harness>:<folder>`), [group](#tab-groups), state, attached terminals, memory and processes in use with the caps, and folder |
+| `sandmux group list\|move <id> <group>\|rename <group> <new>` | The [tab groups](#tab-groups): list, move a session to another group, rename a group |
 | `sandmux stats <id>` | Usage detail: memory and processes in use, peaks and caps, CPU used, out-of-memory kills and refused process creations ([docs/limits.md](limits.md)), and the ports published on the host ([docs/network.md](network.md)) |
 | `sandmux net [<id>]` | The latest logged network connections, of one session or all ([docs/network.md](network.md)) |
 | `sandmux net deny\|allow\|forget <pattern> <id>` | Changes the network rules of an alive session's tab, taking effect on the next connection |
@@ -40,6 +41,20 @@
 | `sandmux daemon disable` | Stops the daemon and removes the systemd unit |
 
 States of a session: **alive**, **ended** (with the harness's exit code and, when there was an out-of-memory kill, the note "out of memory"), **stopped** (with the reason: missing `--pass-env` after a restore, work folder deleted, failure to relaunch) **waiting for vault** (restored with the `--pass-env` values stored in the [vault](vault.md), or the hermes gateway session or a chat tab with the vault created; starts when the vault is unlocked) and **restarting in N s** (the [hermes gateway](hermes.md) ended and comes back after the wait).
+
+## Tab groups
+
+Each session (tab) belongs to a group, and each TUI shows one group at a time, like tmux sessions:
+
+- **Creating:** `sandmux run <harness> --group studies` creates the session in the `studies` group. Without `--group`, it goes to `principal`. A tab created in the TUI goes to the group the TUI is showing.
+- **Existence:** a group exists while it has tabs; `principal` always exists. There is no command to create or delete a group: it is born with its first tab and goes away with the last one.
+- **Names:** 1 to 32 characters, among letters, digits, `-`, `_` and `.`.
+- **Commands:**
+  - `sandmux group list` lists the groups, with the number of tabs;
+  - `sandmux group move <id> <group>` moves a session to another group;
+  - `sandmux group rename <group> <new>` renames a group; renaming to a name that already exists merges the two.
+- **TUI:** `sandmux tui --group <group>` opens the TUI on the group. Without it, it opens on `principal`, or, with `principal` empty, on the first group with tabs. Inside the TUI, Ctrl+b `(` and `)` switch groups, and Ctrl+b `G` opens the group list ([tui.md](tui.md#tab-groups)).
+- **Outside groups:** `attach <id>` and the other commands by identifier ignore groups. The group comes back with the session on restore.
 
 ## Attached mode
 
@@ -116,7 +131,7 @@ Unix stream socket. Each frame has 4 bytes of length (big-endian, content only, 
 | 0 | Control message in JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Terminal bytes: client input or session output |
 
-The first message is the greeting (`hello`), with the protocol number, the version, the data directory, the configuration folder and the language of the client (the daemon answers in that language). This version uses protocol 29. Different numbers end the connection, and the client shows both versions and points to `sandmux daemon restart`. A different data directory or configuration folder is also refused, with both folders in the message.
+The first message is the greeting (`hello`), with the protocol number, the version, the data directory, the configuration folder and the language of the client (the daemon answers in that language). This version uses protocol 30. Different numbers end the connection, and the client shows both versions and points to `sandmux daemon restart`. A different data directory or configuration folder is also refused, with both folders in the message.
 
 Along with the session request, the client sends the daemon the options given to `run`, the named profile, the current folder, the variables of the safe list, `SHELL` and the `pass-env` values of the effective policy. The daemon resolves the configuration layers ([docs/config.md](config.md)) and composes the launch specification with the same function as the direct `run`.
 

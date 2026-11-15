@@ -13,7 +13,8 @@ O `sandmuxd` é o processo de cada usuário que segura as sessões. Uma sessão 
 
 | Comando | Efeito |
 |---|---|
-| `sandmux ls` | Lista as sessões com identificador, nome (`<harness>:<pasta>`), estado, terminais anexados, memória e processos em uso com os tetos, e pasta |
+| `sandmux ls [--group <grupo>]` | Lista as sessões com identificador, nome (`<harness>:<pasta>`), [grupo](#grupos-de-abas), estado, terminais anexados, memória e processos em uso com os tetos, e pasta |
+| `sandmux group list\|move <id> <grupo>\|rename <grupo> <novo>` | Os [grupos de abas](#grupos-de-abas): listar, levar uma sessão para outro grupo, renomear um grupo |
 | `sandmux stats <id>` | Detalhe do consumo: memória e processos em uso, picos e tetos, CPU usada, mortes por falta de memória e criações de processo recusadas ([docs/limits.md](limits.md)), e as portas publicadas no host ([docs/network.md](network.md)) |
 | `sandmux net [<id>]` | As últimas conexões de rede registradas, de uma sessão ou de todas ([docs/network.md](network.md)) |
 | `sandmux net deny\|allow\|forget <padrão> <id>` | Muda as regras de rede da aba de uma sessão viva, com efeito na conexão seguinte |
@@ -38,6 +39,20 @@ O `sandmuxd` é o processo de cada usuário que segura as sessões. Uma sessão 
 | `sandmux daemon disable` | Para o daemon e remove a unidade systemd |
 
 Estados de uma sessão: **viva**, **encerrada** (com o código de saída do harness e, quando houve morte por falta de memória, a nota "memória esgotada"), **parada** (com o motivo: falta de `--pass-env` depois de uma restauração, pasta de trabalho apagada, falha ao relançar) **aguardando cofre** (restaurada com os valores de `--pass-env` guardados no [cofre](vault.md), ou a sessão do gateway do hermes ou uma aba de chat com o cofre criado; sobe quando o cofre é desbloqueado) e **reiniciando em N s** (o [gateway do hermes](hermes.md) terminou e volta depois da espera).
+
+## Grupos de abas
+
+Cada sessão (aba) pertence a um grupo, e cada TUI mostra um grupo por vez, como as sessões do tmux:
+
+- **Criar:** `sandmux run <harness> --group estudos` cria a sessão no grupo `estudos`. Sem `--group`, ela vai para o `principal`. Uma aba criada na TUI vai para o grupo que a TUI está mostrando.
+- **Existência:** um grupo existe enquanto tem abas; o `principal` existe sempre. Não há comando para criar ou apagar grupo: ele nasce com a primeira aba e some com a última.
+- **Nomes:** de 1 a 32 caracteres, entre letras, dígitos, `-`, `_` e `.`.
+- **Comandos:**
+  - `sandmux group list` lista os grupos, com o número de abas;
+  - `sandmux group move <id> <grupo>` leva uma sessão para outro grupo;
+  - `sandmux group rename <grupo> <novo>` renomeia um grupo; para um nome que já existe, junta os dois.
+- **TUI:** `sandmux tui --group <grupo>` abre a TUI no grupo. Sem ele, abre no `principal`, ou, com o `principal` vazio, no primeiro grupo com abas. Dentro da TUI, Ctrl+b `(` e `)` trocam de grupo, e Ctrl+b `G` abre a lista de grupos ([tui.md](tui.md#grupos-de-abas)).
+- **Fora dos grupos:** o `attach <id>` e os outros comandos por identificador ignoram os grupos. O grupo volta com a sessão na restauração.
 
 ## Modo anexado
 
@@ -114,7 +129,7 @@ Socket Unix de fluxo. Cada quadro tem 4 bytes de tamanho (big-endian, só o cont
 | 0 | Mensagem de controle em JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Bytes de terminal: entrada do cliente ou saída da sessão |
 
-A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados, a pasta de configuração e o idioma do cliente (o daemon responde nesse idioma). Esta versão usa o protocolo 29. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
+A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados, a pasta de configuração e o idioma do cliente (o daemon responde nesse idioma). Esta versão usa o protocolo 30. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
 
 O cliente envia ao daemon, junto com o pedido de sessão, as opções dadas no `run`, o perfil nomeado, a pasta atual, as variáveis da lista segura, o `SHELL` e os valores de `pass-env` da política efetiva. O daemon resolve as camadas de configuração ([docs/config.md](config.md)) e compõe a especificação de lançamento com a mesma função do `run` direto.
 

@@ -45,6 +45,8 @@ pub struct Live {
 pub struct Session {
     pub id: u32,
     pub name: String,
+    /// Grupo de abas (protocolo 30).
+    pub group: String,
     pub opts: LaunchOptions,
     pub state: SessionState,
     pub parser: vt100::Parser,
@@ -118,6 +120,7 @@ impl Session {
         Session {
             id,
             name,
+            group: sandmux_proto::msg::main_group(),
             opts,
             state,
             parser: vt100::Parser::new(nz(size.rows), nz(size.cols), history),
@@ -171,6 +174,7 @@ impl Session {
                 moved: self.keys_moved,
                 ..Default::default()
             },
+            group: self.group.clone(),
         }
     }
 
@@ -1389,11 +1393,12 @@ pub fn register(
     opts: LaunchOptions,
     spawned: Spawned,
     size: Size,
+    group: String,
 ) -> String {
     let name = session_name(&opts);
     {
         let mut st = shared.lock();
-        let s = Session::new(
+        let mut s = Session::new(
             id,
             name.clone(),
             opts,
@@ -1401,6 +1406,7 @@ pub fn register(
             shared.history,
             Some(size),
         );
+        s.group = group;
         st.sessions.insert(id, s);
     }
     attach_process(shared, id, spawned, size);

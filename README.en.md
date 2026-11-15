@@ -74,8 +74,9 @@ sandmux setup
 |---|---|
 | `sandmux` (or `sandmux tui`) | Opens the interface with tabs, one per session, with the bar in colored blocks at the bottom: switch with Ctrl+b n/p/1–9, new tab with Ctrl+b c, list with Ctrl+b w, menu with Ctrl+b `:`, settings with Ctrl+b `e` (toggles and themes such as Catppuccin, Rosé Pine, Tokyo Night, Kanagawa, Gruvbox and Dracula, written to `config.toml`), quit with Ctrl+b d ([docs/en/tui.md](docs/en/tui.md)) |
 | `sandmux run <harness>` | Starts the harness confined in the current folder. Harnesses: `opencode`, `hermes`, `claude` (Claude Code, with the subscription login kept outside the sandbox; [docs/en/claude.md](docs/en/claude.md)) `omp` (oh-my-pi; [docs/en/omp.md](docs/en/omp.md)) and `shell` (a confined shell, without an agent). On the first run, asks whether to import the configuration you already have. In a terminal, creates a session in the daemon and attaches to it; without a terminal (script, pipe, CI), runs directly, in the foreground, without the daemon |
-| `sandmux ls` | Lists the sessions: identifier, name, state (alive, ended with the exit code, stopped with the reason), attached terminals and folder |
+| `sandmux ls` | Lists the sessions: identifier, name, group, state (alive, ended with the exit code, stopped with the reason), attached terminals and folder |
 | `sandmux attach [id]` | Attaches this terminal to a session. Without an identifier, to the only live session |
+| `sandmux group list\|move\|rename` | Tab groups, like tmux sessions: each TUI shows one group, and `sandmux run --group <group>` creates the session in it ([docs/en/sessions.md](docs/en/sessions.md#tab-groups)) |
 | `sandmux enter [id]` | Opens a shell inside the sandbox of a live session, with what the agent sees (Ctrl+b `t` in the TUI; [docs/en/sessions.md](docs/en/sessions.md#shell-inside-a-tabs-sandbox)) |
 | `sandmux detach <id>` | Detaches all terminals from a session, without ending it |
 | `sandmux kill <id>` | Ends the session and removes it from the list |

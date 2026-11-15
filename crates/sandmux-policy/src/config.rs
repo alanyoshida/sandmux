@@ -368,6 +368,9 @@ pub const TUI_ACTIONS: &[(&str, char)] = &[
     ("menu", ':'),
     ("settings", 'e'),
     ("enter", 't'),
+    ("group-prev", '('),
+    ("group-next", ')'),
+    ("groups", 'G'),
 ];
 
 /// Uma cor do tema da TUI.
@@ -453,6 +456,7 @@ pub const THEME_ELEMENTS: &[&str] = &[
     "chip-fg",
     "chip-harness-bg",
     "chip-folder-bg",
+    "chip-group-bg",
     "chip-vault-bg",
     "chip-alert-bg",
     "chip-time-bg",
@@ -539,6 +543,7 @@ impl Palette {
             ("chip-fg", self.bg),
             ("chip-harness-bg", self.accent2),
             ("chip-folder-bg", self.accent),
+            ("chip-group-bg", self.muted),
             ("chip-vault-bg", self.green),
             ("chip-alert-bg", self.yellow),
             ("chip-time-bg", self.cyan),
