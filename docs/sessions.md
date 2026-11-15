@@ -104,8 +104,18 @@ O sandmux em si é atualizado pelo pacote ou pelo `install.sh` ([install.md](ins
 
 ## Histórico e clipboard
 
-- Cada sessão guarda as últimas 10.000 linhas que saíram da tela principal, só em memória (`sandmuxd --history-lines N` muda o limite). Nada da saída das sessões é gravado em disco, nem no log do daemon.
+- Cada sessão guarda as últimas 10.000 linhas que saíram da tela principal, em memória (`sandmuxd --history-lines N` muda o limite). Por padrão, nada da saída das sessões é gravado em disco, nem no log do daemon. A exceção é o [histórico em disco](#histórico-em-disco), que é opcional.
 - A escrita no clipboard pelo harness (OSC 52) é retirada da saída, a menos que a sessão tenha sido criada com `--allow-clipboard`. A consulta do clipboard (`OSC 52 ; … ; ?`) é sempre retirada. O filtro reconhece OSC iniciado por `ESC ]` ou pelo C1 em UTF-8 (`C2 9D`) e terminado por BEL, `ESC \` ou `C2 9C`, mesmo dividido entre leituras; um OSC acima de 1 MiB é descartado.
+
+### Histórico em disco
+
+Com `screen-history = true` em `[global]` ([config.md](config.md)), ou o item Histórico em disco na seção Geral das configurações da TUI, a saída das abas sobrevive ao reinício do daemon e a uma queda. Vem desligado, porque a saída pode mostrar segredos que o agente imprimiu.
+
+- **Cifrado:** a saída de cada aba vai, a cada 2 segundos, para `$XDG_STATE_HOME/sandmux/history/<id>.bin`, cifrada com XChaCha20-Poly1305. A chave é aleatória e fica no [cofre](vault.md), e cada arquivo só decifra na sua aba. Sem cofre, nada é gravado. O arquivo tem modo 600, e a pasta, 700.
+- **Cofre trancado:** a saída espera na memória, até 2 MiB por aba, e é gravada quando o cofre abre. O que passar disso se perde, e o registro do daemon avisa.
+- **Volta:** quando a aba é relançada com o cofre aberto, o histórico vem antes da saída nova, e a linha "sandmux: a aba voltou" marca o reinício. Com o cofre trancado, ele volta no desbloqueio, e os terminais anexados são redesenhados com ele.
+- **Tamanho:** acima de 8 MiB, o arquivo é compactado para os 4 MiB mais recentes.
+- **Limpeza:** fechar a aba apaga o arquivo dela, e desligar a opção apaga todos, em até 12 segundos. Trocar a senha do cofre não muda a chave do histórico.
 
 ## Como o daemon sobe
 

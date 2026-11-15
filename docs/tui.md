@@ -175,7 +175,7 @@ Ctrl+b `e`, ou "configurações" no menu, abre uma página de tela cheia com as 
 
 | Seção | Opções |
 |---|---|
-| Geral | idioma (`auto`, que segue o sistema, `pt` ou `en`; [config.md](config.md#idioma)); notificações do desktop ([veja abaixo](#notificações-do-desktop)) |
+| Geral | idioma (`auto`, que segue o sistema, `pt` ou `en`; [config.md](config.md#idioma)); histórico em disco ([sessions.md](sessions.md#histórico-em-disco)); notificações do desktop ([veja abaixo](#notificações-do-desktop)) |
 | Aparência | tema (com amostras de cor), estilo e posição da barra, painel lateral |
 | Atalhos | tecla de prefixo |
 | Sandbox | repo, KVM, GPU, clipboard, memória, processos, pastas extras, `pass-env`, chaves SSH, bancos |

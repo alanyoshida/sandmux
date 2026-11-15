@@ -42,7 +42,13 @@ pub const NET_LIST_KEYS: &[&str] = &[
     "catalog-off",
     "decrypt",
 ];
-pub const GLOBAL_ONLY_KEYS: &[&str] = &["net-log-days", "net-log-max", "language", "notify"];
+pub const GLOBAL_ONLY_KEYS: &[&str] = &[
+    "net-log-days",
+    "net-log-max",
+    "language",
+    "notify",
+    "screen-history",
+];
 /// Chaves SSH do cofre que a sessão pode usar (`"*"` é todas).
 pub const SSH_KEYS: &str = "ssh-keys";
 /// Conexões de banco do cofre que a sessão pode usar (`"*"` é todas).
@@ -797,6 +803,9 @@ pub struct Config {
     /// Notificações do desktop (`notify`, só em `[global]`); sem a chave,
     /// ligadas.
     pub notify: Option<bool>,
+    /// Histórico de tela cifrado em disco (`screen-history`, só em
+    /// `[global]`); sem a chave, desligado.
+    pub screen_history: Option<bool>,
     pub global: Layer,
     pub profiles: BTreeMap<String, Layer>,
     pub projects: BTreeMap<PathBuf, Layer>,
@@ -895,6 +904,19 @@ impl Config {
                                     )
                                 })?;
                                 cfg.notify = Some(b);
+                            }
+                            "screen-history" => {
+                                let b = item.as_bool().ok_or_else(|| {
+                                    err(
+                                        span,
+                                        tr!(
+                                            "`screen-history` precisa ser true ou false",
+                                            "`screen-history` must be true or false"
+                                        )
+                                        .into(),
+                                    )
+                                })?;
+                                cfg.screen_history = Some(b);
                             }
                             _ => {
                                 let b = item
@@ -2079,6 +2101,15 @@ pub fn rule_origin(o: &Origin) -> String {
 
 /// O nome de exibição de um valor do arquivo (o modo de rede, o estilo da
 /// barra, o tema): em inglês, a tradução; o arquivo continua com o valor.
+/// O histórico de tela em disco está ligado no arquivo (`[global]
+/// screen-history`; desligado sem a chave ou com o arquivo ilegível).
+pub fn screen_history_enabled(path: &Path) -> bool {
+    Config::load(path)
+        .ok()
+        .and_then(|c| c.screen_history)
+        .unwrap_or(false)
+}
+
 /// As notificações do desktop estão ligadas no arquivo (`[global] notify`,
 /// ligadas sem a chave ou com o arquivo ilegível).
 pub fn notify_enabled(path: &Path) -> bool {

@@ -106,8 +106,18 @@ sandmux itself is updated by the package or by `install.sh` ([install.md](instal
 
 ## History and clipboard
 
-- Each session keeps the last 10,000 lines that left the main screen, in memory only (`sandmuxd --history-lines N` changes the limit). Nothing from the sessions' output is written to disk, not even to the daemon's log.
+- Each session keeps the last 10,000 lines that left the main screen, in memory (`sandmuxd --history-lines N` changes the limit). By default, nothing from the sessions' output is written to disk, not even to the daemon's log. The exception is the [history on disk](#history-on-disk), which is optional.
 - Writes to the clipboard by the harness (OSC 52) are stripped from the output, unless the session was created with `--allow-clipboard`. Clipboard queries (`OSC 52 ; … ; ?`) are always stripped. The filter recognizes OSC started by `ESC ]` or by the C1 in UTF-8 (`C2 9D`) and terminated by BEL, `ESC \` or `C2 9C`, even when split across reads; an OSC above 1 MiB is discarded.
+
+### History on disk
+
+With `screen-history = true` in `[global]` ([config.md](config.md)), or the History on disk item in the General section of the TUI settings, the tabs' output survives a daemon restart and a crash. It comes off, because the output can show secrets the agent printed.
+
+- **Encrypted:** each tab's output goes, every 2 seconds, to `$XDG_STATE_HOME/sandmux/history/<id>.bin`, encrypted with XChaCha20-Poly1305. The key is random and kept in the [vault](vault.md), and each file only decrypts for its own tab. Without a vault, nothing is saved. The file has mode 600, and the folder, 700.
+- **Locked vault:** the output waits in memory, up to 2 MiB per tab, and is written when the vault opens. Anything past that is lost, and the daemon log says so.
+- **Coming back:** when the tab is relaunched with the vault open, the history comes before the new output, and the line "sandmux: the tab came back" marks the restart. With the vault locked, it comes back on unlock, and the attached terminals are redrawn with it.
+- **Size:** above 8 MiB, the file is compacted to the most recent 4 MiB.
+- **Cleanup:** closing the tab deletes its file, and turning the option off deletes them all, within 12 seconds. Changing the vault password does not change the history key.
 
 ## How the daemon starts
 

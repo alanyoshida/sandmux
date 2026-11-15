@@ -109,6 +109,17 @@ pub const ITEMS: &[Item] = &[
     ),
     item!(
         0,
+        "screen-history",
+        ["Histórico em disco", "History on disk"],
+        Kind::Toggle,
+        At::GlobalOnly,
+        [
+            "Guarda a saída das abas em disco, cifrada com uma chave do cofre, para ela voltar depois de reiniciar o daemon. Sem cofre, nada é gravado.",
+            "Keeps the tabs' output on disk, encrypted with a key from the vault, so it comes back after restarting the daemon. Without a vault, nothing is saved."
+        ]
+    ),
+    item!(
+        0,
         "notify",
         ["Notificações do desktop", "Desktop notifications"],
         Kind::Toggle,
