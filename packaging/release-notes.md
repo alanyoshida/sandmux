@@ -1,24 +1,23 @@
-sandmux 0.1.5, antes da v1: senha do cofre no keyring do sistema.
+sandmux 0.1.6, antes da v1: notificações do desktop.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Keyring:** `sandmux vault keyring on` guarda a senha do cofre no keyring do sistema, pelo Secret Service (gnome-keyring, KWallet, KeePassXC), e o daemon passa a abrir o cofre sozinho:
-  - ao subir, antes de atender o primeiro cliente, então a TUI já abre com o cofre aberto;
-  - quando um cliente pergunta o estado do cofre trancado, no máximo a cada 5 segundos.
+- **Notificações do desktop:** o daemon avisa pelo serviço de notificações do sistema:
+  - **bloqueio de rede:** a aba, o domínio e o motivo;
+  - **chave real** no sandbox: movida ao cofre (reinicie a aba), esperando o cofre ou esperando um domínio;
+  - **aba encerrada:** o harness terminou sozinho, com o código. Um `sandmux kill` ou um fechamento seu não avisa;
+  - **abas esperando o cofre** depois de um reboot, se ele continua trancado.
 
   Mais detalhes:
-  - O efeito é o do `sandmux vault unlock`: depois de um reboot, as abas que esperavam o cofre sobem sozinhas.
-  - Só a senha vai para o keyring; o cofre continua no arquivo cifrado.
-  - Vem desligado, e, desligado, o sandmux nunca consulta o keyring.
-  - `sandmux vault keyring off` apaga a senha, e `sandmux vault passwd` a atualiza.
-  - Na TUI, a tecla `k` na seção Cofre das configurações liga e desliga.
-  - **O custo:** com o keyring ligado, qualquer programa seu fora do sandbox pode ler a senha enquanto o keyring da sessão está aberto. O agente, dentro do sandbox, não alcança o D-Bus.
+  - Eventos do mesmo tipo na mesma aba, a menos de 60 segundos um do outro, atualizam a mesma notificação, com a contagem.
+  - **Só sem foco:** a TUI liga o aviso de foco do terminal, e o daemon não avisa sobre a aba que uma TUI em foco está mostrando. Com a TUI fechada, numa janela de trás ou em outra aba, ele avisa.
+  - Vêm ligadas; `notify = false` em `[global]`, ou o item na seção Geral das configurações, desliga.
 
-  Detalhes em [docs/vault.md](https://github.com/alanyoshida/sandmux/blob/main/docs/vault.md#keyring).
+  Detalhes em [docs/tui.md](https://github.com/alanyoshida/sandmux/blob/main/docs/tui.md#notificações-do-desktop).
 
-Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 28).
+Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 29).
 
 ## Instalar
 
