@@ -1,18 +1,22 @@
-sandmux 0.1.11, antes da v1: histórico de tela cifrado em disco.
+sandmux 0.1.12, antes da v1: painéis na aba, como no tmux.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Histórico de tela em disco, opcional e cifrado:** com `screen-history = true` em `[global]`, ou o item Histórico em disco na seção Geral das configurações, a saída das abas sobrevive ao reinício do daemon e a uma queda.
-  - Vai para o disco a cada 2 segundos, cifrada com XChaCha20-Poly1305 e uma chave aleatória guardada no cofre. Sem cofre, nada é gravado.
-  - Com o cofre trancado, a saída espera na memória (até 2 MiB por aba) e é gravada quando o cofre abre.
-  - A aba relançada recebe o histórico de volta, com a linha "sandmux: a aba voltou". Com o cofre trancado, ele volta no desbloqueio.
-  - Fechar a aba apaga o arquivo dela, e desligar a opção apaga todos.
+- **Painéis na aba:** uma aba pode ter vários painéis, cada um com a sua sessão.
+  - **Dividir:** Ctrl+b `%` divide o painel ativo lado a lado, e Ctrl+b `"` em cima e embaixo. O modal de nova aba abre com a pasta do painel, e a sessão criada (um harness, o shell ou o chat) ocupa a parte nova.
+  - **Foco:** Ctrl+b com as setas vai ao painel vizinho, e um clique também põe o foco nele.
+  - **Ampliar:** Ctrl+b `z` mostra só o painel ativo; de novo, volta ao layout.
+  - **Tamanho:** Ctrl+b `<` e `>` diminuem e aumentam o painel ativo.
+  - **Fechar:** fechar o painel dá o espaço e o foco ao vizinho, na mesma aba.
+  - **Barra:** uma entrada por aba, com `+N` para os outros painéis.
+  - **Layout:** fica no daemon. Volta ao reabrir a TUI e depois de um reboot.
 
-  Vem desligado: a saída pode mostrar segredos que o agente imprimiu, e por padrão nada dela vai para o disco. Detalhes em [docs/sessions.md](https://github.com/alanyoshida/sandmux/blob/main/docs/sessions.md#histórico-em-disco).
+  Detalhes em [docs/tui.md](https://github.com/alanyoshida/sandmux/blob/main/docs/tui.md#painéis).
+- **Correção:** um `sandmux daemon stop` ou `restart` às vezes não conseguia subir o daemon de novo ("o daemon já está rodando"), porque o anterior ainda segurava a trava por um instante. Agora a troca espera a trava ficar livre.
 
-Depois de atualizar, rode `sandmux daemon restart`.
+Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 32).
 
 ## Instalar
 
