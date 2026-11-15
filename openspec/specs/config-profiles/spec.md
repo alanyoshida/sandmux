@@ -78,6 +78,10 @@ Cada seção MUST aceitar só as chaves do cenário "Chaves aceitas", cada uma c
 - **WHEN** um perfil de projeto tem `net-log-days = 7`
 - **THEN** o arquivo é considerado inválido
 
+#### Scenario: Portas do host
+- **WHEN** o perfil do projeto tem `host-ports = [8888, 9000]`, ou o `run` recebe `--host-port 8888`
+- **THEN** a política efetiva tem essas portas do host, somadas entre as camadas sem repetição, e um número fora de 1 a 65535 torna o arquivo inválido
+
 ### Requirement: Arquivo inválido recusa o lançamento
 Um arquivo de configuração malformado, com seção ou chave desconhecida, valor de tipo errado ou caminho relativo MUST fazer o `run` terminar com erro antes de lançar o sandbox, com o caminho do arquivo, a linha e o motivo na mensagem. O sandmux MUST NOT ignorar uma parte do arquivo e seguir com o resto.
 
@@ -225,6 +229,10 @@ O `run` MUST recusar como pasta de trabalho, e em `--rw` ou na chave `rw`, a pas
 #### Scenario: Escrita recusada
 - **WHEN** o usuário roda `sandmux config add rw ~/.config --global`
 - **THEN** o comando termina com erro e o arquivo não muda
+
+#### Scenario: Chaves fora das camadas
+- **WHEN** a TUI grava `theme = "dracula"` em `[tui]`, `chat-model` em `[assistant]` ou `net-log-days = 30` em `[global]`
+- **THEN** o editor grava só essa chave, preserva o resto do arquivo e recusa um valor que deixaria o arquivo inválido
 
 ### Requirement: Só a diferença é gravada
 Os comandos de escrita MUST gravar só as chaves definidas pelo usuário, nunca os valores padrão das camadas embutidas, e MUST preservar os comentários, a ordem e a formatação do resto do arquivo. `unset` e `remove` MUST apagar a chave que ficou sem valor e a seção que ficou vazia. A gravação MUST ser atômica.

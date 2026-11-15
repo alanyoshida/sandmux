@@ -28,7 +28,7 @@ Numa sessão do opencode, do hermes ou de chat, com o cofre desbloqueado, cada p
 - **THEN** o ambiente do `sandmux-chat` tem `OPENROUTER_API_KEY` com o valor falso
 
 ### Requirement: Troca no tráfego só para o dono
-Num pedido decifrado, o gateway MUST trocar cada valor falso de um segredo pelo valor real, em qualquer cabeçalho, dentro das credenciais de um `Authorization: Basic`, no caminho da URL e nas mensagens de texto de um WebSocket do sandbox ao destino, só quando o domínio do pedido casa com um domínio dono do segredo. O gateway do Docker privado de cada pasta MUST fazer a mesma troca nos pedidos do `dockerd` aos registries. O valor falso num pedido a outro destino MUST seguir falso. O corpo de um pedido HTTP e as mensagens do destino ao sandbox MUST NOT ser alterados. O registro MUST guardar o caminho com o valor falso.
+Num pedido decifrado, ou num pedido HTTP sem TLS por uma porta de `host-ports` (com o host `host.sandmux.internal` como domínio), o gateway MUST trocar cada valor falso de um segredo pelo valor real, em qualquer cabeçalho, dentro das credenciais de um `Authorization: Basic`, no caminho da URL e nas mensagens de texto de um WebSocket do sandbox ao destino, só quando o domínio do pedido casa com um domínio dono do segredo. O gateway do Docker privado de cada pasta MUST fazer a mesma troca nos pedidos do `dockerd` aos registries. O valor falso num pedido a outro destino MUST seguir falso. O corpo de um pedido HTTP e as mensagens do destino ao sandbox MUST NOT ser alterados. O registro MUST guardar o caminho com o valor falso.
 
 #### Scenario: Pedido ao dono
 - **WHEN** o agente manda `Authorization: Bearer <falso>` a `openrouter.ai`
@@ -49,6 +49,10 @@ Num pedido decifrado, o gateway MUST trocar cada valor falso de um segredo pelo 
 #### Scenario: Token no WebSocket do Discord
 - **WHEN** o hermes manda, pelo WebSocket de `gateway.discord.gg`, uma mensagem de texto IDENTIFY com `"token": "<falso>"`
 - **THEN** o servidor recebe a mensagem com o valor real
+
+#### Scenario: Servidor local de modelo pela porta do host
+- **WHEN** o cofre tem o segredo `unsloth` com o domínio `host.sandmux.internal`, a configuração tem `host-ports = [8888]`, e o opencode manda `Authorization: Bearer <falso>` a `http://127.0.0.1:8888/v1/chat/completions`
+- **THEN** o servidor do host recebe `Authorization: Bearer <real>`, e o registro tem uma linha `http` com o segredo `unsloth` e o caminho
 
 ### Requirement: Valores reais pedidos ao daemon
 O gateway MUST obter os valores reais do daemon pelo socket privado do usuário, a cada conexão decifrada, e guardá-los só na memória durante a conexão. Os valores reais MUST NOT ir para a especificação nem para arquivos. Com o cofre trancado, o gateway MUST NOT trocar nada.
