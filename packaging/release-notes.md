@@ -1,14 +1,19 @@
-sandmux 0.1.3, antes da v1: Claude Code e oh-my-pi confinados, e a tela da aba como contexto do modal de comando.
+sandmux 0.1.4, antes da v1: chaves reais levadas ao cofre sozinhas e atualização dos harnesses pelo sandmux.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Claude Code:** o preset `claude` roda o Claude Code instalado no host (`~/.local/bin/claude`) dentro do sandbox, com o binário em somente leitura e a atualização automática desligada. O login da assinatura é feito dentro do sandbox, e os tokens dele ficam no cofre: o harness só vê valores falsos, e o gateway troca pelos reais no tráfego. A importação copia a configuração, sem o `.credentials.json`. Detalhes em [docs/claude.md](https://github.com/alanyoshida/sandmux/blob/main/docs/claude.md).
-- **oh-my-pi:** o preset `omp` roda o oh-my-pi do host (`~/.local/bin/omp`) dentro do sandbox. As chaves dos provedores vêm do cofre, como no opencode e no hermes. A importação copia `config.yml`, extensões, agentes, regras e skills de `~/.omp/agent`, sem o `agent.db` com as credenciais. Detalhes em [docs/omp.md](https://github.com/alanyoshida/sandmux/blob/main/docs/omp.md).
-- **Tela da aba no modal de comando:** no modal de comando da TUI, o campo **tela** (Tab até ele e Espaço) envia as últimas 40 linhas visíveis da aba junto com a pergunta, para pedir o comando que corrige um erro que acabou de aparecer. Começa desligado a cada abertura, e o modal avisa que a tela vai ao provedor.
+- **Chaves reais movidas sozinhas:** quando você conecta um provedor pelo próprio harness (o "Connect provider" do opencode, o assistente do hermes), a chave real ia para um arquivo do HOME sintético, ao alcance do agente, até alguém rodar `sandmux doctor --fix`. Agora o daemon faz isso sozinho:
+  - observa os arquivos de credencial e, segundos depois da gravação, leva a chave ao cofre e deixa um falso no lugar;
+  - também varre ao subir, a cada 60 segundos e logo depois de o cofre ser aberto;
+  - com o cofre trancado, ou com uma chave de domínio desconhecido, o arquivo fica como está e a aba avisa. As que esperam o cofre vão quando ele abre; as sem domínio ficam para o `sandmux doctor --fix`;
+  - a aba avisa para reiniciar, porque o harness ainda tem a chave real na memória. O aviso aparece no `sandmux ls`, na marca `✱` da aba e no painel da TUI.
 
-Depois de atualizar, rode `sandmux daemon restart`.
+  Detalhes em [docs/vault.md](https://github.com/alanyoshida/sandmux/blob/main/docs/vault.md#movimento-automático).
+- **`sandmux update <harness>`:** roda no host, fora do sandbox, o atualizador oficial do harness (`opencode upgrade`, `hermes update`, `claude update`, `omp update`). Com abas vivas do harness, pergunta antes (`--yes` pula) e depois diz quais reiniciar. Detalhes em [docs/sessions.md](https://github.com/alanyoshida/sandmux/blob/main/docs/sessions.md#atualizar-o-harness).
+
+Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 27).
 
 ## Instalar
 
