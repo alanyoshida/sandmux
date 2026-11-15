@@ -438,6 +438,8 @@ Release `v0.1.12` (2026-11-15), com o change 55 e as correções do foco ao fech
 
 Release `v0.1.13` (2026-11-15), com o change 56. Decisão do usuário (2026-11-15): publicar logo depois da pasta atual no modal de comando.
 
+Release `v0.1.14` (2026-11-15), com o change 57. Decisão do usuário (2026-11-15): publicar logo depois da configuração do shell importada.
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
