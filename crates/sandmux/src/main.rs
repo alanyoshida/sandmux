@@ -38,13 +38,24 @@ struct Cli {
 enum Cmd {
     /// Abre a interface com abas, uma por sessão (o mesmo que `sandmux` sem
     /// subcomando).
-    Tui,
+    Tui {
+        /// Grupo de abas mostrado (sem ele, o principal).
+        #[arg(long = "group", value_name = "GRUPO")]
+        group: Option<String>,
+    },
     /// Sobe um harness confinado na pasta atual. Num terminal, cria uma sessão
     /// no daemon e anexa a ela (Ctrl+b d desanexa, Ctrl+b Ctrl+b envia Ctrl+b);
     /// sem terminal, roda direto, em primeiro plano.
     Run(Box<RunArgs>),
     /// Lista as sessões.
-    Ls,
+    Ls {
+        /// Só as sessões deste grupo.
+        #[arg(long = "group", value_name = "GRUPO")]
+        group: Option<String>,
+    },
+    /// Grupos de abas: listar, mover uma sessão e renomear.
+    #[command(subcommand)]
+    Group(sessions::GroupCmd),
     /// Anexa este terminal a uma sessão.
     Attach {
         /// Identificador da sessão (sem ele, a única sessão viva).
@@ -317,6 +328,9 @@ struct RunArgs {
     /// Desabilita um servidor MCP do harness nesta aba. Repetível.
     #[arg(long = "mcp-deny", value_name = "NOME")]
     mcp_deny: Vec<String>,
+    /// Grupo de abas da sessão (sem ele, o principal).
+    #[arg(long = "group", value_name = "GRUPO")]
+    group: Option<String>,
     /// Só estes servidores MCP ficam habilitados nesta aba. Repetível.
     #[arg(long = "mcp-allow", value_name = "NOME")]
     mcp_allow: Vec<String>,
@@ -360,7 +374,7 @@ fn main() -> ExitCode {
         Err(e) => e.exit(),
     };
     let result = match cli.cmd {
-        None | Some(Cmd::Tui) => tui::run(),
+        None => tui::run(None),
         Some(cmd) => dispatch(cmd),
     };
     match result {
@@ -435,6 +449,8 @@ fn help_en(text: &str) -> Option<String> {
 /// Nomes de valor da ajuda (`<PASTA>`), português -> inglês.
 const VALUE_NAMES_EN: &[(&str, &str)] = &[
     ("PASTA", "FOLDER"),
+    ("GRUPO", "GROUP"),
+    ("NOVO", "NEW"),
     ("NOME", "NAME"),
     ("CAMINHO", "PATH"),
     ("TETO", "CAP"),
@@ -926,6 +942,34 @@ const HELP_EN: &[(&str, &str)] = &[
     ("Apaga um segredo.", "Removes a secret."),
     ("Troca a senha do cofre.", "Changes the vault password."),
     (
+        "Grupo de abas mostrado (sem ele, o principal).",
+        "Tab group shown (without it, the main one).",
+    ),
+    (
+        "Só as sessões deste grupo.",
+        "Only the sessions of this group.",
+    ),
+    (
+        "Grupos de abas: listar, mover uma sessão e renomear.",
+        "Tab groups: list, move a session and rename.",
+    ),
+    (
+        "Lista os grupos, com o número de abas.",
+        "Lists the groups, with the number of tabs.",
+    ),
+    (
+        "Leva uma sessão para outro grupo.",
+        "Moves a session to another group.",
+    ),
+    (
+        "Renomeia um grupo (todas as sessões dele).",
+        "Renames a group (all of its sessions).",
+    ),
+    (
+        "Grupo de abas da sessão (sem ele, o principal).",
+        "Tab group of the session (without it, the main one).",
+    ),
+    (
         "Senha do cofre no keyring do sistema, para o daemon abrir o cofre sozinho. Sem subcomando, mostra o estado.",
         "Vault password in the system keyring, so the daemon opens the vault by itself. Without a subcommand, shows the state.",
     ),
@@ -945,16 +989,17 @@ const HELP_EN: &[(&str, &str)] = &[
 
 fn dispatch(cmd: Cmd) -> Result<i32> {
     match cmd {
-        Cmd::Tui => tui::run(),
+        Cmd::Tui { group } => tui::run(group),
         Cmd::Run(a) => cmd_run(*a),
-        Cmd::Ls => sessions::ls(),
+        Cmd::Ls { group } => sessions::ls(group),
+        Cmd::Group(c) => sessions::group(c),
         Cmd::Attach { id } => sessions::attach(id),
         Cmd::Detach { id } => sessions::detach(id),
         Cmd::Kill { id } => sessions::kill(id),
         Cmd::Enter { id } => {
             let mut opts = LaunchOptions::new(launch::ENTER);
             opts.args = id.map(|i| vec![i.to_string()]).unwrap_or_default();
-            sessions::run_session(opts, &[])
+            sessions::run_session(opts, &[], None)
         }
         Cmd::Stats { id } => sessions::stats(id),
         Cmd::Net(a) => match a.cmd {
@@ -1266,6 +1311,9 @@ fn cmd_run(a: RunArgs) -> Result<i32> {
             "only hermes has a gateway: use `sandmux run hermes --gateway`"
         ));
     }
+    if let Some(g) = &a.group {
+        sandmux_proto::msg::check_group(g).map_err(|e| anyhow::anyhow!(e))?;
+    }
     // Recusa cedo um harness não instalado, antes de criar qualquer coisa.
     presets::plan(&a.harness, &host, &[], &[])?;
     let opts = launch_options(&host, &a);
@@ -1279,11 +1327,11 @@ fn cmd_run(a: RunArgs) -> Result<i32> {
         }
         // O gateway vive no daemon, com ou sem terminal.
         if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
-            return sessions::create_detached(opts, &effective.pass_env_names());
+            return sessions::create_detached(opts, &effective.pass_env_names(), a.group.clone());
         }
     }
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-        return sessions::run_session(opts, &effective.pass_env_names());
+        return sessions::run_session(opts, &effective.pass_env_names(), a.group.clone());
     }
     let prepared = launch::prepare(&host, &opts)?;
     prepared.warnings.iter().for_each(warn);

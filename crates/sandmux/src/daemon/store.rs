@@ -30,6 +30,9 @@ pub struct SavedSession {
     /// Os valores de `pass-env` estão no cofre.
     #[serde(default)]
     pub vault_env: bool,
+    /// Grupo da sessão; as gravadas antes dos grupos voltam no `principal`.
+    #[serde(default = "sandmux_proto::msg::main_group")]
+    pub group: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -154,6 +157,7 @@ mod tests {
                 launches: 3,
                 tags: vec!["s2-2".into(), "s2-3".into()],
                 vault_env: true,
+                group: "estudos".into(),
             }],
         };
         save(&p, &s).unwrap();
@@ -235,6 +239,7 @@ mod tests {
                 launches: 0,
                 tags: vec![],
                 vault_env: false,
+                group: sandmux_proto::msg::main_group(),
             }],
         };
         save(&p, &s).unwrap();

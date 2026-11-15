@@ -145,6 +145,7 @@ pub fn run(model: Option<String>, text: Vec<String>) -> Result<i32> {
         vars: client::client_vars(&[])?,
         size: client::terminal_size(),
         attach: true,
+        group: None,
     });
     if let Err(e) = created {
         discard_dir(&dir);

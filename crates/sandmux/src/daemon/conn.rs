@@ -188,6 +188,42 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 };
                 write_control(&mut stream, &reply)?;
             }
+            Msg::SetGroup { id, group } => {
+                let r = sandmux_proto::msg::check_group(&group).and_then(|()| {
+                    let mut st = shared.lock();
+                    match st.sessions.get_mut(&id) {
+                        Some(s) => {
+                            s.group = group;
+                            shared.persist(&st);
+                            Ok(())
+                        }
+                        None => Err(trf!(
+                            "não existe a sessão {id}",
+                            "session {id} does not exist"
+                        )),
+                    }
+                });
+                reply_unit(&mut stream, r)?;
+            }
+            Msg::RenameGroup { from, to } => {
+                let r = sandmux_proto::msg::check_group(&to).and_then(|()| {
+                    let mut st = shared.lock();
+                    let mut n = 0;
+                    for s in st.sessions.values_mut().filter(|s| s.group == from) {
+                        s.group = to.clone();
+                        n += 1;
+                    }
+                    if n == 0 {
+                        return Err(trf!(
+                            "não existe o grupo {from:?}",
+                            "group {from:?} does not exist"
+                        ));
+                    }
+                    shared.persist(&st);
+                    Ok(())
+                });
+                reply_unit(&mut stream, r)?;
+            }
             Msg::Rename { id, name } => {
                 let reply = match sandmux_proto::msg::check_session_name(&name) {
                     Err(e) => Msg::Error { message: e },
@@ -516,7 +552,13 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 vars,
                 size,
                 attach,
+                group,
             } => {
+                let group = group.unwrap_or_else(sandmux_proto::msg::main_group);
+                if let Err(e) = sandmux_proto::msg::check_group(&group) {
+                    error(&mut stream, e)?;
+                    continue;
+                }
                 if opts.gateway
                     && let Some(g) = session::gateway_session(shared)
                 {
@@ -551,7 +593,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                             write_control(&mut stream, &Msg::Warning { message: w.clone() })?;
                         }
                         let names = spawned.pass_env.clone();
-                        let name = session::register(shared, id, *opts, spawned, size);
+                        let name = session::register(shared, id, *opts, spawned, size, group);
                         if let Some(w) = session::store_pass_env(shared, id, &names, &vars) {
                             write_control(&mut stream, &Msg::Warning { message: w })?;
                         }

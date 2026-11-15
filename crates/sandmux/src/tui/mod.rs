@@ -42,6 +42,13 @@ pub const HELP: &[(&str, &str, &str)] = &[
     ("next", "próxima aba", "next tab"),
     ("prev", "aba anterior", "previous tab"),
     ("list", "lista de abas", "tab list"),
+    ("group-prev", "grupo de abas anterior", "previous tab group"),
+    ("group-next", "próximo grupo de abas", "next tab group"),
+    (
+        "groups",
+        "grupos de abas: trocar, criar, renomear, levar a aba",
+        "tab groups: switch, create, rename, move the tab",
+    ),
     ("rename", "renomear a aba", "rename the tab"),
     (
         "restart",
@@ -278,6 +285,21 @@ pub enum Modal {
     Menu(usize),
     /// Página de configurações.
     Settings(Box<settings::Settings>),
+    /// Lista de grupos (Ctrl+b G).
+    Groups(GroupsModal),
+}
+
+/// A lista de grupos: o escolhido e o nome sendo digitado (novo, ou o
+/// renomear de um grupo).
+pub struct GroupsModal {
+    pub sel: usize,
+    pub edit: Option<(GroupEdit, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GroupEdit {
+    New,
+    Rename(String),
 }
 
 /// O que um clique na faixa de uma seção do painel acerta.
@@ -322,6 +344,10 @@ pub struct FolderScreen {
 
 pub struct App {
     pub tabs: Vec<Tab>,
+    /// Grupo de abas mostrado (protocolo 30).
+    pub group: String,
+    /// Os grupos, com o número de abas, do último `sync` (mais o atual).
+    pub groups: Vec<(String, usize)>,
     pub active: usize,
     pub modal: Option<Modal>,
     pub sel: Option<Sel>,
@@ -560,11 +586,59 @@ impl App {
     }
 
     /// Acerta as abas com a lista de sessões do daemon.
+    /// Troca o grupo mostrado: as abas que saem são desanexadas (sem
+    /// encerrar), e as do grupo novo são anexadas pelo `sync`.
+    fn switch_group(&mut self, group: String) {
+        if group == self.group {
+            return;
+        }
+        for t in &mut self.tabs {
+            if let Some((_, s)) = t.conn.take() {
+                let _ = s.shutdown(Shutdown::Both);
+            }
+        }
+        self.tabs.clear();
+        self.active = 0;
+        self.panel_data = None;
+        self.panel_net.clear();
+        self.group = group;
+        self.sync();
+        self.say(trf!("grupo {}", "group {}", self.group));
+    }
+
+    /// O grupo anterior (`-1`) ou o próximo (`1`), em ordem de nome.
+    fn step_group(&mut self, by: isize) {
+        self.sync();
+        let n = self.groups.len() as isize;
+        if n < 2 {
+            return;
+        }
+        let cur = self
+            .groups
+            .iter()
+            .position(|(g, _)| *g == self.group)
+            .unwrap_or(0) as isize;
+        let next = self.groups[((cur + by).rem_euclid(n)) as usize].0.clone();
+        self.switch_group(next);
+    }
+
     fn sync(&mut self) {
         let sessions = match self.call(&Msg::List) {
             Ok(Msg::Sessions { sessions }) => sessions,
             _ => return,
         };
+        let mut groups: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        groups.insert(sandmux_proto::msg::main_group(), 0);
+        groups.insert(self.group.clone(), 0);
+        for s in &sessions {
+            *groups.entry(s.group.clone()).or_default() += 1;
+        }
+        self.groups = groups.into_iter().collect();
+        let sessions: Vec<_> = sessions
+            .into_iter()
+            .filter(|s| s.group == self.group)
+            .collect();
         let active_id = self.tabs.get(self.active).map(|t| t.id);
         self.tabs.retain(|t| sessions.iter().any(|s| s.id == t.id));
         for s in &sessions {
@@ -855,6 +929,17 @@ impl App {
     fn action(&mut self, a: &str) {
         match a {
             "new" => self.open_new(),
+            "group-prev" => self.step_group(-1),
+            "group-next" => self.step_group(1),
+            "groups" => {
+                self.sync();
+                let sel = self
+                    .groups
+                    .iter()
+                    .position(|(g, _)| *g == self.group)
+                    .unwrap_or(0);
+                self.modal = Some(Modal::Groups(GroupsModal { sel, edit: None }));
+            }
             "next" if !self.tabs.is_empty() => self.set_active((self.active + 1) % self.tabs.len()),
             "prev" if !self.tabs.is_empty() => {
                 self.set_active((self.active + self.tabs.len() - 1) % self.tabs.len())
@@ -1180,6 +1265,7 @@ impl App {
             }
             Ok(crate::chatcmd::Check::Ok) => {
                 let size = self.size;
+                let group = self.group.clone();
                 let r = (|| -> Result<(UnixStream, u32, Vec<String>, PathBuf)> {
                     let dir = crate::chatcmd::new_tab_dir(&model, Some(&text))?;
                     let created = (|| -> Result<(UnixStream, u32, Vec<String>)> {
@@ -1189,6 +1275,7 @@ impl App {
                             vars: client::client_vars(&[])?,
                             size,
                             attach: true,
+                            group: Some(group.clone()),
                         })?;
                         let mut s = c.stream;
                         let (id, _, warnings) = Self::until_created(&mut s)?;
@@ -1264,6 +1351,7 @@ impl App {
         opts.args = vec![t.id.to_string()];
         let workdir = t.workdir.clone();
         let size = self.size;
+        let group = self.group.clone();
         let r = (|| -> Result<(UnixStream, u32, Vec<String>)> {
             let mut c = client::connect_or_start()?;
             c.send(&Msg::Create {
@@ -1271,6 +1359,7 @@ impl App {
                 vars: Default::default(),
                 size,
                 attach: true,
+                group: Some(group.clone()),
             })?;
             let mut s = c.stream;
             let (id, _, warnings) = Self::until_created(&mut s)?;
@@ -1380,6 +1469,7 @@ impl App {
         let workdir = sandmux::launch::absolute(std::path::Path::new(n.workdir.trim()), &self.cwd);
         let profile = Some(n.profile.trim().to_string()).filter(|p| !p.is_empty());
         let size = self.size;
+        let group = self.group.clone();
         let r = (|| -> Result<Created> {
             let host = Host::detect()?;
             presets::plan(&harness, &host, &[], &[])?;
@@ -1424,6 +1514,7 @@ impl App {
                 vars,
                 size,
                 attach: true,
+                group: Some(group.clone()),
             })?;
             let mut s = c.stream;
             let (id, _, warnings) = Self::until_created(&mut s)?;
@@ -1857,6 +1948,99 @@ impl App {
                     _ => {}
                 }
             }
+            Modal::Groups(gm) => {
+                if let Some((what, text)) = gm.edit.as_mut() {
+                    match k {
+                        Key::Esc => gm.edit = None,
+                        Key::Backspace => {
+                            text.pop();
+                        }
+                        Key::Char(c) => text.push(c),
+                        Key::Enter => {
+                            let name = text.trim().to_string();
+                            let what = what.clone();
+                            if let Err(e) = sandmux_proto::msg::check_group(&name) {
+                                self.say(e);
+                                return;
+                            }
+                            self.modal = None;
+                            match what {
+                                GroupEdit::New => self.switch_group(name),
+                                GroupEdit::Rename(old) => {
+                                    let has_tabs =
+                                        self.groups.iter().any(|(g, n)| *g == old && *n > 0);
+                                    let r = if has_tabs {
+                                        self.call(&Msg::RenameGroup {
+                                            from: old.clone(),
+                                            to: name.clone(),
+                                        })
+                                        .map(|_| ())
+                                    } else {
+                                        Ok(())
+                                    };
+                                    match r {
+                                        Ok(()) => {
+                                            if self.group == old {
+                                                self.group = name.clone();
+                                            }
+                                            self.sync();
+                                            self.say(trf!(
+                                                "grupo {old} renomeado para {name}",
+                                                "group {old} renamed to {name}"
+                                            ));
+                                        }
+                                        Err(e) => self.say(trf!(
+                                            "renomear o grupo: {e:#}",
+                                            "rename the group: {e:#}"
+                                        )),
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+                let chosen = self.groups.get(gm.sel).map(|(g, _)| g.clone());
+                match k {
+                    Key::Esc => self.modal = None,
+                    Key::Up => gm.sel = gm.sel.saturating_sub(1),
+                    Key::Down => gm.sel = (gm.sel + 1).min(self.groups.len().saturating_sub(1)),
+                    Key::Char('n') => gm.edit = Some((GroupEdit::New, String::new())),
+                    Key::Char('r') => {
+                        if let Some(g) = chosen {
+                            gm.edit = Some((GroupEdit::Rename(g.clone()), g));
+                        }
+                    }
+                    Key::Char('m') => {
+                        let (Some(g), Some(t)) = (chosen, self.tabs.get(self.active)) else {
+                            return;
+                        };
+                        let id = t.id;
+                        self.modal = None;
+                        match self.call(&Msg::SetGroup {
+                            id,
+                            group: g.clone(),
+                        }) {
+                            Ok(_) => {
+                                self.sync();
+                                self.say(trf!(
+                                    "aba {id} levada ao grupo {g}",
+                                    "tab {id} moved to group {g}"
+                                ));
+                            }
+                            Err(e) => self.say(trf!("mover: {e:#}", "move: {e:#}")),
+                        }
+                    }
+                    Key::Enter => {
+                        self.modal = None;
+                        if let Some(g) = chosen {
+                            self.switch_group(g);
+                        }
+                    }
+                    _ => {}
+                }
+            }
             Modal::List(sel) => match k {
                 Key::Esc => self.modal = None,
                 Key::Up => *sel = sel.saturating_sub(1),
@@ -2245,8 +2429,11 @@ impl App {
 }
 
 /// Abre a TUI. Devolve o código de saída do comando.
-pub fn run() -> Result<i32> {
+pub fn run(group: Option<String>) -> Result<i32> {
     use std::io::IsTerminal;
+    if let Some(g) = &group {
+        sandmux_proto::msg::check_group(g).map_err(|e| anyhow::anyhow!(e))?;
+    }
     if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
         bail!(tr!(
             "a TUI precisa de um terminal interativo na entrada e na saída",
@@ -2328,6 +2515,8 @@ pub fn run() -> Result<i32> {
     let assistant = cfg.assistant.clone();
     let mut app = App {
         tabs: Vec::new(),
+        group: sandmux_proto::msg::main_group(),
+        groups: Vec::new(),
         active: 0,
         modal: None,
         sel: None,
@@ -2363,6 +2552,24 @@ pub fn run() -> Result<i32> {
         vault: None,
         bar_row: 1,
         area_dy: 1,
+    };
+    // Sem `--group`: o principal, ou, vazio, o primeiro grupo com abas.
+    app.group = match group {
+        Some(g) => g,
+        None => match app.call(&Msg::List) {
+            Ok(Msg::Sessions { sessions })
+                if !sessions
+                    .iter()
+                    .any(|s| s.group == sandmux_proto::msg::MAIN_GROUP) =>
+            {
+                sessions
+                    .iter()
+                    .map(|s| s.group.clone())
+                    .min()
+                    .unwrap_or_else(sandmux_proto::msg::main_group)
+            }
+            _ => sandmux_proto::msg::main_group(),
+        },
     };
     app.sync();
     if app.tabs.is_empty() {

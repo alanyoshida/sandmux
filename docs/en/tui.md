@@ -54,6 +54,8 @@ All of them start with the prefix key, Ctrl+b by default:
 | `n` / `p` | Next / previous |
 | `1` to `9` | Go to the tab in that position (`0` is the tenth) |
 | `w` | Tab list (arrows, Enter, Esc) |
+| `(` / `)` | Previous / next tab group ([groups](#tab-groups)) |
+| `G` | Group list: switch, create, rename, move the tab |
 | `,` | Rename the tab |
 | `r` | Restart the ended or stopped tab |
 | `x` | Close the tab (ends the session, with confirmation) |
@@ -87,7 +89,7 @@ new = "t"
 close = "q"
 ```
 
-- **Actions:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings` and `enter`.
+- **Actions:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings`, `enter`, `group-prev`, `group-next` and `groups`.
 - **Keys:** a visible character that is not a digit, because digits lead to the tabs.
 - **Two actions on the same key** chosen in `[tui.keys]` make the file invalid. A chosen key that is another action's default wins, and the other action is left without a key (it shows as `—` in the help and stays in the menu). This way a new action in a new version never makes the file invalid.
 - **`[tui]` is not a policy layer:** it changes nothing in the sandboxes.
@@ -244,7 +246,7 @@ In `[tui.colors]`, each element can change color on top of the theme:
 | `tab-index-fg`, `tab-index-bg` | Block with the tabs' number (blocks and Powerline) |
 | `tab-active-index-fg`, `tab-active-index-bg` | Block with the active tab's number and its name's color (blocks and Powerline) |
 | `chip-fg` | Text of the blocks on the right and of the `≡` (blocks and Powerline) |
-| `chip-harness-bg`, `chip-folder-bg`, `chip-vault-bg`, `chip-alert-bg`, `chip-time-bg` | Blocks on the right: harness, folder, vault, alerts and time (blocks and Powerline) |
+| `chip-group-bg`, `chip-harness-bg`, `chip-folder-bg`, `chip-vault-bg`, `chip-alert-bg`, `chip-time-bg` | Blocks on the right: group, harness, folder, vault, alerts and time (blocks and Powerline) |
 | `accent` | Accent: the menu's `≡`, the border and the titles of the settings page |
 | `muted-fg` | Secondary text of the settings page |
 | `ok-fg` | Toggle on and save notice |
@@ -317,6 +319,19 @@ Input goes raw to the active tab: the harness gets the keys as in a direct termi
 With a modal open, the TUI turns those modes off to understand the keys.
 
 Focus events are the exception: the TUI always turns them on, for the [desktop notifications](#desktop-notifications). The tab only gets them when its harness asked for them.
+
+## Tab groups
+
+The TUI only shows the tabs of the current group ([sessions.md](sessions.md#tab-groups)), and the group's name shows in the first block on the right (in the plain style, at the end of the bar).
+
+- **Switching:** Ctrl+b `(` and `)` go to the previous and the next group, in name order. The tabs of the group you leave stay alive; the TUI just stops showing them.
+- **Group list:** Ctrl+b `G` opens the list, with the number of tabs of each group and `●` on the current one:
+  - Enter switches to the chosen group;
+  - `n` asks for a name and switches to a new group, empty until its first tab (Ctrl+b `c`);
+  - `r` renames the chosen group;
+  - `m` moves the active tab to the chosen group;
+  - Esc closes.
+- **Several TUIs:** each one has its own group, so two windows can show different groups at the same time.
 
 ## Desktop notifications
 

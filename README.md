@@ -74,8 +74,9 @@ O `setup` instala o perfil do AppArmor do lançador quando a distro restringe us
 |---|---|
 | `sandmux` (ou `sandmux tui`) | Abre a interface com abas, uma por sessão, com a barra em blocos coloridos embaixo: troca com Ctrl+b n/p/1–9, nova aba com Ctrl+b c, lista com Ctrl+b w, menu com Ctrl+b `:`, configurações com Ctrl+b `e` (toggles e temas como Catppuccin, Rosé Pine, Tokyo Night, Kanagawa, Gruvbox e Dracula, gravados no `config.toml`), sair com Ctrl+b d ([docs/tui.md](docs/tui.md)) |
 | `sandmux run <harness>` | Sobe o harness confinado na pasta atual. Harnesses: `opencode`, `hermes`, `claude` (o Claude Code, com o login da assinatura fora do sandbox; [docs/claude.md](docs/claude.md)) `omp` (o oh-my-pi; [docs/omp.md](docs/omp.md)) e `shell` (um shell confinado, sem agente). Na primeira execução, pergunta se deve importar a configuração que você já tem. Num terminal, cria uma sessão no daemon e anexa a ela; sem terminal (script, pipe, CI), roda direto, em primeiro plano, sem daemon |
-| `sandmux ls` | Lista as sessões: identificador, nome, estado (viva, encerrada com o código, parada com o motivo), terminais anexados e pasta |
+| `sandmux ls` | Lista as sessões: identificador, nome, grupo, estado (viva, encerrada com o código, parada com o motivo), terminais anexados e pasta |
 | `sandmux attach [id]` | Anexa este terminal a uma sessão. Sem identificador, à única sessão viva |
+| `sandmux group list\|move\|rename` | Grupos de abas, como as sessões do tmux: cada TUI mostra um grupo, e `sandmux run --group <grupo>` cria a sessão nele ([docs/sessions.md](docs/sessions.md#grupos-de-abas)) |
 | `sandmux enter [id]` | Abre um shell dentro do sandbox de uma sessão viva, com o que o agente vê (Ctrl+b `t` na TUI; [docs/sessions.md](docs/sessions.md#shell-dentro-do-sandbox-de-uma-aba)) |
 | `sandmux detach <id>` | Desanexa todos os terminais de uma sessão, sem encerrá-la |
 | `sandmux kill <id>` | Encerra a sessão e a tira da lista |

@@ -99,6 +99,7 @@ impl Shared {
                     launches: s.launches,
                     tags: s.tags.clone(),
                     vault_env: s.vault_env,
+                    group: s.group.clone(),
                 })
                 .collect(),
         };
@@ -543,6 +544,7 @@ fn restore(shared: &Arc<Shared>) {
                 }
             }
             let mut sess = Session::new(s.id, s.name, s.opts, state, shared.history, None);
+            sess.group = s.group;
             sess.pass_env = s.pass_env;
             sess.launches = s.launches;
             sess.tags = s.tags;

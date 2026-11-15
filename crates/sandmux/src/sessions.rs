@@ -22,7 +22,7 @@ fn need_terminal(what: &str) -> Result<()> {
 
 /// `run` com terminal: cria a sessão no daemon e anexa. `pass_env` são os
 /// nomes da política efetiva, cujos valores vão ao daemon.
-pub fn run_session(opts: LaunchOptions, pass_env: &[String]) -> Result<i32> {
+pub fn run_session(opts: LaunchOptions, pass_env: &[String], group: Option<String>) -> Result<i32> {
     let vars = client::client_vars(pass_env)?;
     let mut conn = client::connect_or_start()?;
     conn.call(&Msg::Create {
@@ -30,13 +30,18 @@ pub fn run_session(opts: LaunchOptions, pass_env: &[String]) -> Result<i32> {
         vars,
         size: client::terminal_size(),
         attach: true,
+        group,
     })?;
     client::attached(conn)
 }
 
 /// Cria a sessão no daemon sem anexar (o gateway sem terminal) e mostra o
 /// identificador.
-pub fn create_detached(opts: LaunchOptions, pass_env: &[String]) -> Result<i32> {
+pub fn create_detached(
+    opts: LaunchOptions,
+    pass_env: &[String],
+    group: Option<String>,
+) -> Result<i32> {
     let vars = client::client_vars(pass_env)?;
     let mut conn = client::connect_or_start()?;
     match conn.call(&Msg::Create {
@@ -44,6 +49,7 @@ pub fn create_detached(opts: LaunchOptions, pass_env: &[String]) -> Result<i32> 
         vars,
         size: client::terminal_size(),
         attach: false,
+        group,
     })? {
         Msg::Created { id, name } => {
             println!(
@@ -195,14 +201,77 @@ pub fn update(harness: String, yes: bool, args: Vec<String>) -> Result<i32> {
     Ok(code)
 }
 
-pub fn ls() -> Result<i32> {
+/// `sandmux group list|move|rename`.
+pub fn group(cmd: GroupCmd) -> Result<i32> {
     let mut conn = client::connect_or_start()?;
-    let sessions = list(&mut conn)?;
+    match cmd {
+        GroupCmd::List => {
+            let sessions = list(&mut conn)?;
+            let mut groups: std::collections::BTreeMap<String, usize> =
+                std::collections::BTreeMap::new();
+            groups.insert(sandmux_proto::msg::main_group(), 0);
+            for s in &sessions {
+                *groups.entry(s.group.clone()).or_default() += 1;
+            }
+            let w = groups.keys().map(|g| g.chars().count()).max().unwrap_or(0);
+            for (g, n) in groups {
+                println!("{g:<w$}  {}", trf!("{n} aba(s)", "{n} tab(s)"));
+            }
+        }
+        GroupCmd::Move { id, grupo } => {
+            sandmux_proto::msg::check_group(&grupo).map_err(|e| anyhow!(e))?;
+            conn.call(&Msg::SetGroup {
+                id,
+                group: grupo.clone(),
+            })?;
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmux: sessão {id} no grupo {grupo}",
+                    "sandmux: session {id} in group {grupo}"
+                )
+            );
+        }
+        GroupCmd::Rename { grupo, novo } => {
+            sandmux_proto::msg::check_group(&novo).map_err(|e| anyhow!(e))?;
+            conn.call(&Msg::RenameGroup {
+                from: grupo.clone(),
+                to: novo.clone(),
+            })?;
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmux: grupo {grupo} renomeado para {novo}",
+                    "sandmux: group {grupo} renamed to {novo}"
+                )
+            );
+        }
+    }
+    Ok(0)
+}
+
+/// Grupos de abas (protocolo 30).
+#[derive(clap::Subcommand)]
+pub enum GroupCmd {
+    /// Lista os grupos, com o número de abas.
+    List,
+    /// Leva uma sessão para outro grupo.
+    Move { id: u32, grupo: String },
+    /// Renomeia um grupo (todas as sessões dele).
+    Rename { grupo: String, novo: String },
+}
+
+pub fn ls(group: Option<String>) -> Result<i32> {
+    let mut conn = client::connect_or_start()?;
+    let mut sessions = list(&mut conn)?;
+    if let Some(g) = &group {
+        sessions.retain(|s| &s.group == g);
+    }
     if sessions.is_empty() {
         println!("{}", tr!("Não há sessões.", "No sessions."));
         return Ok(0);
     }
-    let rows: Vec<[String; 7]> = sessions
+    let rows: Vec<[String; 8]> = sessions
         .iter()
         .map(|s| {
             let (mem, proc_) = match &s.usage {
@@ -218,6 +287,7 @@ pub fn ls() -> Result<i32> {
             [
                 s.id.to_string(),
                 s.name.clone(),
+                s.group.clone(),
                 state_text(s),
                 s.clients.to_string(),
                 mem,
@@ -229,6 +299,7 @@ pub fn ls() -> Result<i32> {
     let head = [
         "ID",
         tr!("NOME", "NAME"),
+        tr!("GRUPO", "GROUP"),
         tr!("ESTADO", "STATE"),
         tr!("CLIENTES", "CLIENTS"),
         tr!("MEMÓRIA", "MEMORY"),
@@ -241,10 +312,10 @@ pub fn ls() -> Result<i32> {
             w[i] = w[i].max(c.chars().count());
         }
     }
-    let line = |r: [&str; 7]| {
+    let line = |r: [&str; 8]| {
         let mut s = String::new();
         for (i, c) in r.iter().enumerate() {
-            if i == 6 {
+            if i == 7 {
                 s.push_str(c);
             } else {
                 let pad = w[i] - c.chars().count();
@@ -256,7 +327,7 @@ pub fn ls() -> Result<i32> {
     };
     line(head);
     for r in &rows {
-        line([&r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6]]);
+        line([&r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7]]);
     }
     Ok(0)
 }

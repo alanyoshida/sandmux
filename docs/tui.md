@@ -52,6 +52,8 @@ Todos começam pela tecla de prefixo, Ctrl+b por padrão:
 | `n` / `p` | Próxima / anterior |
 | `1` a `9` | Ir para a aba nessa posição (`0` é a décima) |
 | `w` | Lista de abas (setas, Enter, Esc) |
+| `(` / `)` | Grupo de abas anterior / próximo ([grupos](#grupos-de-abas)) |
+| `G` | Lista de grupos: trocar, criar, renomear, levar a aba |
 | `,` | Renomear a aba |
 | `r` | Reiniciar a aba encerrada ou parada |
 | `x` | Fechar a aba (encerra a sessão, com confirmação) |
@@ -85,7 +87,7 @@ new = "t"
 close = "q"
 ```
 
-- **Ações:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings` e `enter`.
+- **Ações:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings`, `enter`, `group-prev`, `group-next` e `groups`.
 - **Teclas:** um caractere visível, que não seja dígito, porque os dígitos levam às abas.
 - **Duas ações na mesma tecla** escolhidas em `[tui.keys]` tornam o arquivo inválido. Uma tecla escolhida que é a padrão de outra ação vence, e a outra ação fica sem tecla (aparece com `—` na ajuda e continua no menu). Assim uma ação nova numa versão nova nunca invalida o arquivo.
 - **`[tui]` não é camada de política:** não muda nada nos sandboxes.
@@ -242,7 +244,7 @@ Em `[tui.colors]`, cada elemento pode trocar de cor por cima do tema:
 | `tab-index-fg`, `tab-index-bg` | Bloco do número das abas (blocos e Powerline) |
 | `tab-active-index-fg`, `tab-active-index-bg` | Bloco do número da aba ativa e cor do nome dela (blocos e Powerline) |
 | `chip-fg` | Texto dos blocos da direita e do `≡` (blocos e Powerline) |
-| `chip-harness-bg`, `chip-folder-bg`, `chip-vault-bg`, `chip-alert-bg`, `chip-time-bg` | Blocos da direita: harness, pasta, cofre, alertas e tempo (blocos e Powerline) |
+| `chip-group-bg`, `chip-harness-bg`, `chip-folder-bg`, `chip-vault-bg`, `chip-alert-bg`, `chip-time-bg` | Blocos da direita: grupo, harness, pasta, cofre, alertas e tempo (blocos e Powerline) |
 | `accent` | Destaque: o `≡` do menu, a borda e os títulos da página de configurações |
 | `muted-fg` | Texto secundário da página de configurações |
 | `ok-fg` | Toggle ligado e aviso de gravação |
@@ -315,6 +317,19 @@ A entrada vai crua para a aba ativa: o harness recebe as teclas como num termina
 Com um modal aberto, a TUI desliga esses modos para entender as teclas.
 
 Os eventos de foco são a exceção: a TUI os liga sempre, para as [notificações do desktop](#notificações-do-desktop). A aba só os recebe quando o harness dela pediu.
+
+## Grupos de abas
+
+A TUI mostra só as abas do grupo atual ([sessions.md](sessions.md#grupos-de-abas)), e o nome do grupo aparece no primeiro bloco da direita (no estilo simples, no fim da barra).
+
+- **Trocar:** Ctrl+b `(` e `)` vão ao grupo anterior e ao próximo, em ordem de nome. As abas do grupo que sai continuam vivas; a TUI só deixa de mostrá-las.
+- **Lista de grupos:** Ctrl+b `G` abre a lista, com o número de abas de cada grupo e `●` no atual:
+  - Enter troca para o grupo escolhido;
+  - `n` pede um nome e troca para um grupo novo, vazio até a primeira aba (Ctrl+b `c`);
+  - `r` renomeia o grupo escolhido;
+  - `m` leva a aba ativa para o grupo escolhido;
+  - Esc fecha.
+- **Várias TUIs:** cada uma tem o seu grupo, então duas janelas podem mostrar grupos diferentes ao mesmo tempo.
 
 ## Notificações do desktop
 
