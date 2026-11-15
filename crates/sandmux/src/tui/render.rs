@@ -1791,10 +1791,32 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
                         tr!("modelo", "model"),
                         format!("{} ", c.model),
                     ));
+                    l.push(field(
+                        c.field == 2,
+                        tr!("tela", "screen"),
+                        if c.screen {
+                            trf!(
+                                "● enviar as últimas {} linhas da aba ",
+                                "● send the tab's last {} lines ",
+                                super::SCREEN_LINES
+                            )
+                        } else {
+                            tr!("○ não enviar ", "○ do not send ").to_string()
+                        },
+                    ));
+                    if c.screen {
+                        l.push(Line::styled(
+                            tr!(
+                                "a tela da aba vai ao provedor junto com a pergunta",
+                                "the tab's screen goes to the provider with the question"
+                            ),
+                            error,
+                        ));
+                    }
                     l.push(Line::raw(""));
                     l.push(Line::raw(tr!(
-                        "Tab troca de campo · ↑ ↓ modelos · → lista dos provedores · Enter pergunta · Esc cancela",
-                        "Tab switches field · ↑ ↓ models · → providers' list · Enter asks · Esc cancels"
+                        "Tab troca de campo · ↑ ↓ modelos · → lista dos provedores · Espaço na tela liga · Enter pergunta · Esc cancela",
+                        "Tab switches field · ↑ ↓ models · → providers' list · Space on screen toggles · Enter asks · Esc cancels"
                     )));
                 }
                 CmdStage::Waiting => {

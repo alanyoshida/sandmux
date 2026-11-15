@@ -171,3 +171,4 @@ crates/sandmux/src/tui/settings.rs	blocos funciona em qualquer fonte; powerline 
 crates/sandmux/src/tui/settings.rs	bottom põe a barra na última linha; top, na primeira.
 crates/sandmux/src/vaultcmd.rs	DOMÍNIO
 crates/sandmux/src/vaultcmd.rs	PADRÃO
+crates/sandmux/src/tui/mod.rs	{question}\n\nÚltimas linhas do terminal da aba, como contexto:\n```\n{shown}\n```
