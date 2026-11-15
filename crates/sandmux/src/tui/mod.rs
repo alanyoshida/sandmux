@@ -169,6 +169,8 @@ pub struct Tab {
     pub ask_restart: bool,
     /// Começo do lançamento atual (segundos Unix), para o tempo na barra.
     pub started_at: Option<u64>,
+    /// Chaves reais achadas pelo vigia do daemon (protocolo 27).
+    pub keys: sandmux_proto::msg::KeyNote,
 }
 
 /// Seleção de texto, em coordenadas da tela da aba.
@@ -549,6 +551,7 @@ impl App {
             blocked: false,
             ask_restart: false,
             started_at: s.started_at,
+            keys: s.keys,
         }
     }
 
@@ -567,6 +570,7 @@ impl App {
                     t.name = s.name.clone();
                     t.opts = s.opts.clone();
                     t.started_at = s.started_at;
+                    t.keys = s.keys;
                     let was_live = t.state == SessionState::Viva;
                     t.state = s.state.clone();
                     if was_live && matches!(t.state, SessionState::Encerrada { .. }) {
@@ -1201,6 +1205,7 @@ impl App {
             blocked: false,
             ask_restart: false,
             started_at: None,
+            keys: Default::default(),
         });
         self.tabs.sort_by_key(|t| t.id);
         let i = self.tabs.iter().position(|t| t.id == id).unwrap_or(0);

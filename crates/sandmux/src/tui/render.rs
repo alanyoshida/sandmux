@@ -221,13 +221,17 @@ fn chips(app: &App, theme: &Theme, icons: bool) -> Vec<(String, Color)> {
     }
     let blocked = app.tabs.iter().filter(|t| t.blocked).count();
     let new = app.tabs.iter().filter(|t| t.new_domain).count();
-    if blocked + new > 0 {
+    let keys = app.tabs.iter().filter(|t| t.keys.any()).count();
+    if blocked + new + keys > 0 {
         let mut parts = Vec::new();
         if blocked > 0 {
             parts.push(format!("! {blocked}"));
         }
         if new > 0 {
             parts.push(format!("• {new}"));
+        }
+        if keys > 0 {
+            parts.push(format!("✱ {keys}"));
         }
         chips.push((
             ic("\u{f071}", parts.join("  ")),
@@ -265,7 +269,17 @@ fn tab_marks(t: &super::Tab) -> String {
         (false, true) => " •",
         _ => "",
     };
-    format!("{mark}{net}")
+    let keys = if t.keys.any() { " ✱" } else { "" };
+    format!("{mark}{net}{keys}")
+}
+
+/// O texto das chaves reais de uma aba, para o painel.
+fn keys_text(k: &sandmux_proto::msg::KeyNote) -> String {
+    if k.any() {
+        k.to_string()
+    } else {
+        tr!("nenhuma", "none").into()
+    }
 }
 
 /// A barra em blocos (o padrão): o `≡` do menu, as abas com o número num
@@ -1466,6 +1480,18 @@ fn draw_panel(f: &mut Frame, r: Rect, app: &App) {
                 oom_kills.to_string(),
                 oom_style,
             );
+            if let Some(t) = app.tabs.get(app.active) {
+                let style = if t.keys.any() {
+                    Style::default().fg(warn).add_modifier(Modifier::BOLD)
+                } else {
+                    plain
+                };
+                rows.extend(row(
+                    tr!("chaves reais", "real keys"),
+                    keys_text(&t.keys),
+                    style,
+                ));
+            }
             match docker {
                 Some(d) => {
                     rows.extend(row(

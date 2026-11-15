@@ -248,6 +248,45 @@ pub fn find_real_secrets(harness: &str, synthetic_home: &Path) -> Vec<RealSecret
     out
 }
 
+/// Harnesses cujos HOMEs sintéticos o `sandmux doctor` e o vigia de chaves
+/// do daemon varrem atrás de chaves reais.
+pub const SCANNED: &[&str] = &["opencode", "hermes"];
+
+/// As pastas do HOME sintético em que um arquivo que [`find_real_secrets`]
+/// lê pode ser gravado, para o vigia de chaves observar. Inclui as que ainda
+/// não existem: o vigia observa a mais funda que existe.
+pub fn watch_dirs(harness: &str, synthetic_home: &Path) -> Vec<PathBuf> {
+    let Some(items) = table(harness) else {
+        return Vec::new();
+    };
+    let mut dirs = BTreeSet::new();
+    for item in items {
+        match *item {
+            Item::File(rel) => {
+                if let Some(parent) = Path::new(rel).parent() {
+                    dirs.insert(synthetic_home.join(parent));
+                }
+            }
+            Item::TopFiles(rel, _) => {
+                dirs.insert(synthetic_home.join(rel));
+            }
+            Item::Dir(_) => {}
+        }
+    }
+    for rel in files_to_copy(items, synthetic_home) {
+        let name = rel
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if format_of(&name) != secrets::Format::Text
+            && let Some(parent) = rel.parent()
+        {
+            dirs.insert(synthetic_home.join(parent));
+        }
+    }
+    dirs.into_iter().collect()
+}
+
 /// Grava o arquivo com os falsos (mesmo modo) e anota as trocas no
 /// manifesto do harness.
 pub fn apply_fakes(

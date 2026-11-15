@@ -129,6 +129,14 @@ Uma chave colada dentro do harness, como no "Connect provider" do opencode ou no
 - **`sandmux doctor --fix`:** leva essas chaves para o cofre, com o domínio descoberto como acima. O arquivo só é regravado com valores falsos depois de o cofre aceitar todas as chaves dele; o real não fica em nenhum arquivo do HOME sintético.
 - **Depois:** reinicie as abas do harness, que pode ter a chave antiga na memória.
 
+#### Movimento automático
+
+O daemon faz o mesmo que o `doctor --fix` sozinho, sem perguntar:
+
+- **Quando:** logo depois de o harness gravar um desses arquivos (o daemon observa as pastas deles), ao subir, a cada 60 segundos e logo depois de o cofre ser aberto.
+- **Como:** com o cofre aberto e o domínio de cada chave descoberto como abaixo, cada chave vai ao cofre com um falso novo, e só depois o arquivo é regravado com os falsos. Se o cofre recusar uma chave, ou se o harness regravou o arquivo durante a varredura, o arquivo fica como estava. O registro do daemon diz o harness, o arquivo e o nome das chaves, nunca os valores.
+- **Avisos:** a aba do harness mostra quantas chaves foram movidas desde o lançamento, e pede para reiniciar a aba, porque o harness ainda tem a real na memória. Ela também mostra quantas esperam o cofre (trancado ou ausente) e quantas esperam um domínio. As que esperam o cofre vão quando ele é aberto. As sem domínio ficam para o `sandmux doctor --fix`, que pergunta. Os avisos aparecem no `sandmux ls`, na marca `✱` da aba, nos alertas da barra e na linha "chaves reais" do painel da TUI ([tui.md](tui.md)).
+
 Sem cofre, nada troca o falso pelo real, e o harness recebe "chave inválida" do provedor. Por isso o relatório da importação e o `sandmux doctor` lembram de `sandmux vault init` e `sandmux vault import`. O segredo fica com o nome `<harness>:<arquivo>:<provedor>.<chave>` (ou `<harness>:<arquivo>:<chave>`, quando não há provedor em volta), ligado ao valor falso e, quando o nome da chave indica o provedor (como `OPENROUTER_API_KEY`), ao domínio dele. Depois disso, o harness usa o arquivo importado como está, e o gateway troca o falso dele pelo real. No hermes, que lê o `.env` por cima do ambiente, é assim que a chave importada passa a valer.
 
 Cada segredo fica ligado aos domínios para onde ele pode ir: o gateway só troca o falso pelo real num pedido a um deles. Assim, um agente enganado que manda o falso para outro site manda só o falso. O comando descobre o domínio sozinho, nesta ordem:

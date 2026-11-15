@@ -8,11 +8,11 @@
  ≡   1  shell:app   2  opencode:api ✕   3  hermes:notas   imagem colada…   shell   ~/projetos/app   cofre aberto   ! 1   1h 20m
 ```
 
-- **Última linha, a barra:** no estilo em blocos (o padrão), o `≡` do começo abre o [menu](#menu). Cada aba é um bloco com a posição (o número dos atalhos), seguido do nome e de uma marca: ✕ para encerrada (um clique nele fecha a aba), ‖ para parada, (cofre) para aguardando cofre e ↻ para o gateway reiniciando. A aba ativa tem o bloco em destaque. No meio aparecem os avisos. À direita, em blocos coloridos:
+- **Última linha, a barra:** no estilo em blocos (o padrão), o `≡` do começo abre o [menu](#menu). Cada aba é um bloco com a posição (o número dos atalhos), seguido do nome e de uma marca: ✕ para encerrada (um clique nele fecha a aba), ‖ para parada, (cofre) para aguardando cofre e ↻ para o gateway reiniciando, e ✱ quando há [chaves reais](vault.md#movimento-automático) movidas ou esperando. A aba ativa tem o bloco em destaque. No meio aparecem os avisos. À direita, em blocos coloridos:
   - o harness da aba ativa;
   - a pasta da aba ativa, num bloco de outra cor;
   - o estado do cofre (aberto, trancado ou sem cofre);
-  - os alertas de rede, quantas abas têm bloqueio (`!`) e domínio novo (`•`), só quando há;
+  - os alertas, quantas abas têm bloqueio (`!`), domínio novo (`•`) e chaves reais (`✱`), só quando há;
   - há quanto tempo a aba ativa está viva.
 
   Sem espaço, os blocos da direita saem da esquerda para a direita, e o tempo fica por último.
@@ -111,6 +111,7 @@ Com o terminal de pelo menos 100 colunas, um painel de 34 colunas fica à direit
 - os processos, também com medidor;
 - o CPU;
 - as mortes por falta de memória;
+- as chaves reais do HOME sintético: movidas ao cofre desde o lançamento (reinicie a aba), esperando o cofre ou esperando um domínio;
 - o Docker privado da pasta.
 
 O medidor fica verde até 75% do teto, amarelo até 90% e vermelho acima disso. Uma morte por falta de memória aparece em vermelho.

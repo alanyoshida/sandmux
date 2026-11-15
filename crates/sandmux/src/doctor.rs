@@ -62,7 +62,7 @@ fn describe(harness: &str, r: &sandmux_import::RealSecrets) -> Vec<String> {
 fn real_secrets(host: &Host) -> Vec<(&'static str, sandmux_import::RealSecrets)> {
     let layout = Layout::new(&host.data_dir);
     let mut out = Vec::new();
-    for h in ["opencode", "hermes"] {
+    for &h in sandmux_import::SCANNED {
         let home = layout.home(h);
         if home.is_dir() {
             out.extend(
@@ -103,8 +103,8 @@ fn secrets_section(host: &Host) -> usize {
     println!(
         "{}",
         tr!(
-            "  Rode `sandmux doctor --fix` para levá-las ao cofre: no lugar fica um valor falso,\n  que o gateway troca pelo real só no tráfego ao dono da chave.",
-            "  Run `sandmux doctor --fix` to move them to the vault: a fake value takes their place,\n  which the gateway swaps for the real one only in traffic to the key's owner."
+            "  Rode `sandmux doctor --fix` para levá-las ao cofre: no lugar fica um valor falso,\n  que o gateway troca pelo real só no tráfego ao dono da chave. Com o cofre aberto,\n  o daemon faz isso sozinho quando o domínio da chave é conhecido.",
+            "  Run `sandmux doctor --fix` to move them to the vault: a fake value takes their place,\n  which the gateway swaps for the real one only in traffic to the key's owner. With the\n  vault open, the daemon does this by itself when the key's domain is known."
         )
     );
     n

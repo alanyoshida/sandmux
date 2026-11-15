@@ -20,4 +20,5 @@ pub mod discover;
 pub mod docker;
 pub mod launch;
 pub mod paths;
+pub mod secretdomains;
 pub mod sshagent;

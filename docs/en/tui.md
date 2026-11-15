@@ -10,11 +10,11 @@
  ≡   1  shell:app   2  opencode:api ✕   3  hermes:notas   image pasted…   shell   ~/projetos/app   vault open   ! 1   1h 20m
 ```
 
-- **Last line, the bar:** in the block style (the default), the `≡` at the start opens the [menu](#menu). Each tab is a block with its position (the number used by the shortcuts), followed by the name and a mark: ✕ for ended (a click on it closes the tab), ‖ for stopped, (vault) for waiting for vault and ↻ for the gateway restarting. The active tab has its block highlighted. Notices show up in the middle. On the right, in colored blocks:
+- **Last line, the bar:** in the block style (the default), the `≡` at the start opens the [menu](#menu). Each tab is a block with its position (the number used by the shortcuts), followed by the name and a mark: ✕ for ended (a click on it closes the tab), ‖ for stopped, (vault) for waiting for vault and ↻ for the gateway restarting, plus ✱ when there are [real keys](vault.md#automatic-move) moved or waiting. The active tab has its block highlighted. Notices show up in the middle. On the right, in colored blocks:
   - the active tab's harness;
   - the active tab's folder, in a block of another color;
   - the vault state (open, locked or no vault);
-  - the network alerts, how many tabs have a block (`!`) and a new domain (`•`), only when there are any;
+  - the alerts, how many tabs have a block (`!`), a new domain (`•`) and real keys (`✱`), only when there are any;
   - how long the active tab has been alive.
 
   Without room, the blocks on the right drop out from left to right, and the time goes last.
@@ -113,6 +113,7 @@ With a terminal at least 100 columns wide, a 34-column panel sits on the right. 
 - processes, also with a gauge;
 - CPU;
 - out-of-memory kills;
+- the real keys in the synthetic HOME: moved to the vault since the launch (restart the tab), waiting for the vault or waiting for a domain;
 - the folder's private Docker.
 
 The gauge stays green up to 75% of the cap, yellow up to 90% and red above that. An out-of-memory kill shows up in red.

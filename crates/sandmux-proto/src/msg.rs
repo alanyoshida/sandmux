@@ -193,6 +193,58 @@ pub struct SessionInfo {
     /// Começo do lançamento atual, em segundos Unix (protocolo 23).
     #[serde(default)]
     pub started_at: Option<u64>,
+    /// Chaves reais achadas pelo vigia do daemon no HOME sintético do
+    /// harness (protocolo 27).
+    #[serde(default)]
+    pub keys: KeyNote,
+}
+
+/// Chaves reais do HOME sintético de uma sessão, contadas pelo vigia.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyNote {
+    /// Movidas ao cofre desde o lançamento: o harness ainda tem a real na
+    /// memória até a aba ser reiniciada.
+    pub moved: u32,
+    /// Esperando o cofre (trancado ou ausente).
+    pub waiting_vault: u32,
+    /// Esperando um domínio (`sandmux doctor --fix`).
+    pub no_domain: u32,
+}
+
+impl KeyNote {
+    /// Há algo a avisar.
+    pub fn any(&self) -> bool {
+        self.moved + self.waiting_vault + self.no_domain > 0
+    }
+}
+
+/// O aviso, para a TUI e o `sandmux ls` (vazio quando não há chaves).
+impl std::fmt::Display for KeyNote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut parts = Vec::new();
+        if self.moved > 0 {
+            parts.push(trf!(
+                "{} chave(s) movida(s) ao cofre: reinicie a aba (Ctrl+b r)",
+                "{} key(s) moved to the vault: restart the tab (Ctrl+b r)",
+                self.moved
+            ));
+        }
+        if self.waiting_vault > 0 {
+            parts.push(trf!(
+                "{} chave(s) esperando o cofre",
+                "{} key(s) waiting for the vault",
+                self.waiting_vault
+            ));
+        }
+        if self.no_domain > 0 {
+            parts.push(trf!(
+                "{} chave(s) sem domínio: sandmux doctor --fix",
+                "{} key(s) without a domain: sandmux doctor --fix",
+                self.no_domain
+            ));
+        }
+        f.write_str(&parts.join(" · "))
+    }
 }
 
 /// Consumo atual de uma sessão, com os tetos (`None` é sem teto).

@@ -12,6 +12,7 @@ mod db;
 mod docker;
 mod folders;
 mod net;
+mod secretwatch;
 mod session;
 mod sshagent;
 pub mod store;
@@ -53,6 +54,8 @@ pub struct Shared {
     pub docker: docker::Engines,
     /// Cofre de segredos, trancado ao subir.
     pub vault: Mutex<vault::VaultState>,
+    /// Vigia das chaves reais nos HOMEs sintéticos.
+    pub secrets: secretwatch::Watch,
 }
 
 pub struct State {
@@ -103,7 +106,16 @@ impl Shared {
     }
 
     pub fn list(&self, st: &State) -> Vec<SessionInfo> {
-        st.sessions.values().map(Session::info).collect()
+        st.sessions
+            .values()
+            .map(|s| {
+                let mut i = s.info();
+                let w = self.secrets.waiting(&i.harness);
+                i.keys.waiting_vault = w.vault;
+                i.keys.no_domain = w.domain;
+                i
+            })
+            .collect()
     }
 
     /// Para o daemon: encerra os harnesses mantendo as sessões vivas
@@ -333,6 +345,7 @@ fn run(history: usize) -> Result<()> {
         pid: std::process::id(),
         docker: docker::Engines::default(),
         vault: Mutex::new(vault::VaultState::new(&base_data)),
+        secrets: secretwatch::Watch::default(),
     });
     eprintln!(
         "{}",
@@ -364,6 +377,7 @@ fn run(history: usize) -> Result<()> {
         .name("slices-velhas".into())
         .spawn(docker::stop_empty_slices);
     net::start_policy_watch(shared.clone());
+    secretwatch::start(shared.clone());
 
     // SAFETY: getuid não falha.
     let me = unsafe { libc::getuid() };
