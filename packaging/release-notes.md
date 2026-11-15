@@ -1,16 +1,19 @@
-sandmux 0.1.9, antes da v1: modais do assistente com as cores do tema.
+sandmux 0.1.10, antes da v1: aba de chat em cartões, com o tema.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Modais de comando e de chat com o tema:** o modal de comando (Ctrl+b `g`) e o de chat (Ctrl+b `i`) passam a seguir as cores do tema ativo:
-  - o fundo e o texto da página;
-  - o título num bloco da cor de destaque, como os blocos da barra;
-  - os rótulos na cor secundária, e o campo ativo sublinhado no destaque.
-- **Botão novo:** `⏎ Enviar` ao perguntar e `⏎ Inserir` com o comando pronto, em dois tons e alinhado à direita. O Tab chega ao botão, e o clique tem o mesmo efeito do Enter.
+- **Aba de chat em cartões:** a aba de chat com o modelo segue as cores do tema ativo.
+  - Cada mensagem fica num cartão de borda arredondada: as suas na segunda cor de destaque, as do modelo na cor de destaque, com o tempo de resposta no canto.
+  - O campo da mensagem é um cartão com as dicas no rodapé e o botão `⏎ Enviar` em dois tons, como nos modais.
+  - O seletor de `/modelo` também segue o tema.
+  - As respostas guardam o tempo que levaram; as conversas de antes abrem sem ele.
+- **Chat no modal de nova aba:** o modal de nova aba (Ctrl+b `c`) passa a oferecer `chat` depois dos harnesses. Enter abre o modal de chat, com o modelo e a mensagem.
 
 Detalhes em [docs/chat.md](https://github.com/alanyoshida/sandmux/blob/main/docs/chat.md).
+
+Depois de atualizar, rode `sandmux daemon restart`: a aba de chat é desenhada pelo programa que o daemon lança.
 
 ## Instalar
 
