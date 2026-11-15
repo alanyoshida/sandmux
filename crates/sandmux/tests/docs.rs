@@ -624,7 +624,7 @@ fn documentacao_do_chat_acompanha_o_codigo() {
         "protocolo 20",
         "Ctrl+b `g`",
         "command-model",
-        "`[ Inserir ]`",
+        "`⏎ Inserir`",
         "ESC[200~",
         "protocolo 21",
     ] {

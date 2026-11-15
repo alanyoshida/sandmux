@@ -11,7 +11,14 @@ In the TUI, Ctrl+b `i` opens the chat modal:
 - **message:** the first question;
 - **model:** starts with `chat-model` from `[assistant]`. The ↑ ↓ arrows go through the models in `models`, → opens the [providers' list](#model-list), and any other name can be typed.
 
-Tab switches fields, Enter sends and Esc cancels. The answer opens in a new chat tab, named `chat:<model>`.
+Tab switches fields and reaches the `⏎ Send` button; Enter, or a click on the button, sends, and Esc cancels. The answer opens in a new chat tab, named `chat:<model>`.
+
+The chat and command dialogs follow the [theme](tui.md#color-theme):
+
+- the page background and text;
+- the title in an accent-colored block, like the bar's blocks;
+- the labels in the secondary color, and the active field underlined in the accent;
+- the two-tone button, with `⏎` in a dark block and the label in the accent. With the Tab focus, the `⏎` block also turns accent.
 
 From the command line:
 
@@ -119,9 +126,9 @@ This is an exception to the screen history rule, which never goes to disk, and i
 Ctrl+b `g` opens the command modal over the active tab: a question like "compress the logs folder without the .tmp files" becomes a command written on the tab's line.
 
 1. **Question and model:** the model starts with `command-model` from `[assistant]` or, without it, with `chat-model`. Tab and the arrows work as in the chat modal.
-2. **Enter asks.** Only the question, the tab's work folder and the shell name go to the model (the user's `SHELL` when it is in the system folders; otherwise, `bash`), with a system prompt that asks for a single command, without explanation. Nothing from the tab's screen is sent, unless the **screen** field is on (see below). The TUI keeps responding while the modal shows "waiting for the model".
+2. **Enter, or a click on the `⏎ Send` button, asks.** Only the question, the tab's work folder and the shell name go to the model (the user's `SHELL` when it is in the system folders; otherwise, `bash`), with a system prompt that asks for a single command, without explanation. Nothing from the tab's screen is sent, unless the **screen** field is on (see below). The TUI keeps responding while the modal shows "waiting for the model".
 3. **The suggested command** appears in an editable field, without the code fences and without a leading `$ `. Tab goes back to the question.
-4. **Enter, or a click on `[ Insert ]`,** writes the command into the tab's input, without Enter: it only runs when the user presses Enter in the tab.
+4. **Enter, or a click on the `⏎ Insert` button,** writes the command into the tab's input, without Enter: it only runs when the user presses Enter in the tab.
 
 **Screen field:** with Tab to it and Space, it turns on sending the tab's last 40 visible lines, without the scrolled history and without the trailing empty lines, along with the question. It is for asking for the command that fixes an error that just showed up. The field starts off every time the modal opens, and, when on, the modal warns that the screen goes to the provider.
 

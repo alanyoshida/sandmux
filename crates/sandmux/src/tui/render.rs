@@ -1828,42 +1828,63 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
         Style::default().add_modifier(Modifier::REVERSED),
     );
     let error = themed(theme, "error-fg", "", Style::default().fg(Color::Red));
-    // Botão do modal de comando: linha e coluna dentro do quadro, e largura.
+    // Botão do modal: linha e coluna dentro do quadro, e largura.
     let mut button: Option<(u16, u16, u16)> = None;
-    let (title, lines, h): (&str, Vec<Line>, u16) = match m {
+    // Desenho em blocos (modais do assistente): o fundo e o texto da página,
+    // o título num bloco de destaque, e o botão em dois tons.
+    let mut blocks = false;
+    // O botão: a linha, o rótulo e se tem o foco.
+    let mut btn: Option<(usize, &str, bool)> = None;
+    let accent = pl(theme, "accent", "#cba6f7");
+    let page_bg = pl(theme, "page-bg", "#1e1e2e");
+    let page_fg = pl(theme, "page-fg", "#cdd6f4");
+    let muted = pl(theme, "muted-fg", "#6c7086");
+    let chip_fg = pl(theme, "chip-fg", "#1e1e2e");
+    let idx_bg = pl(theme, "tab-index-bg", "#45475a");
+    let idx_fg = pl(theme, "tab-index-fg", "#cdd6f4");
+    let hint = Style::default().fg(muted);
+    let bfield = |sel: bool, label: &str, value: String| {
+        let st = if sel {
+            Style::default()
+                .fg(page_fg)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                .underline_color(accent)
+        } else {
+            Style::default().fg(page_fg)
+        };
+        Line::from(vec![
+            Span::styled(format!("{label:<10}"), Style::default().fg(muted)),
+            Span::styled(format!("{value}{}", if sel { "▏" } else { " " }), st),
+        ])
+    };
+    let (title, mut lines, h): (&str, Vec<Line>, u16) = match m {
         Modal::Command(c) => {
             use super::CmdStage;
-            let field = |sel: bool, label: &str, value: String| {
-                let st = if sel { selected } else { Style::default() };
-                Line::from(vec![
-                    Span::raw(format!("{label:<10}")),
-                    Span::styled(value, st),
-                ])
-            };
+            blocks = true;
             let mut l = Vec::new();
             match c.stage {
                 CmdStage::Ask => {
-                    l.push(field(
+                    l.push(bfield(
                         c.field == 0,
                         tr!("pergunta", "question"),
-                        format!("{} ", c.question),
+                        c.question.clone(),
                     ));
-                    l.push(field(
+                    l.push(bfield(
                         c.field == 1,
                         tr!("modelo", "model"),
-                        format!("{} ", c.model),
+                        format!("‹ {} ›", c.model),
                     ));
-                    l.push(field(
+                    l.push(bfield(
                         c.field == 2,
                         tr!("tela", "screen"),
                         if c.screen {
                             trf!(
-                                "● enviar as últimas {} linhas da aba ",
-                                "● send the tab's last {} lines ",
+                                "● enviar as últimas {} linhas da aba",
+                                "● send the tab's last {} lines",
                                 super::SCREEN_LINES
                             )
                         } else {
-                            tr!("○ não enviar ", "○ do not send ").to_string()
+                            tr!("○ não enviar", "○ do not send").to_string()
                         },
                     ));
                     if c.screen {
@@ -1876,31 +1897,37 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
                         ));
                     }
                     l.push(Line::raw(""));
-                    l.push(Line::raw(tr!(
-                        "Tab troca de campo · ↑ ↓ modelos · → lista dos provedores · Espaço na tela liga · Enter pergunta · Esc cancela",
-                        "Tab switches field · ↑ ↓ models · → providers' list · Space on screen toggles · Enter asks · Esc cancels"
-                    )));
+                    btn = Some((l.len(), tr!("Enviar", "Send"), c.field == 3));
+                    l.push(Line::raw(""));
+                    l.push(Line::styled(
+                        tr!(
+                            "Tab troca de campo · ↑ ↓ modelos · → lista dos provedores · Espaço na tela liga · Enter pergunta · Esc cancela",
+                            "Tab switches field · ↑ ↓ models · → providers' list · Space on screen toggles · Enter asks · Esc cancels"
+                        ),
+                        hint,
+                    ));
                 }
                 CmdStage::Waiting => {
-                    l.push(Line::raw(trf!("pergunta  {}", "question  {}", c.question)));
-                    l.push(Line::raw(trf!("modelo    {}", "model     {}", c.model)));
+                    l.push(bfield(
+                        false,
+                        tr!("pergunta", "question"),
+                        c.question.clone(),
+                    ));
+                    l.push(bfield(
+                        false,
+                        tr!("modelo", "model"),
+                        format!("‹ {} ›", c.model),
+                    ));
                     l.push(Line::raw(""));
-                    l.push(Line::raw(tr!(
-                        "esperando o modelo… (Esc cancela)",
-                        "waiting for the model… (Esc cancels)"
-                    )));
+                    l.push(Line::styled(
+                        tr!(
+                            "esperando o modelo… (Esc cancela)",
+                            "waiting for the model… (Esc cancels)"
+                        ),
+                        Style::default().fg(accent).add_modifier(Modifier::ITALIC),
+                    ));
                 }
                 CmdStage::Command => {
-                    let insert = tr!("[ Inserir ]", "[ Insert ]");
-                    button = Some((0, 0, insert.chars().count() as u16));
-                    l.push(Line::from(vec![
-                        Span::styled(insert, selected),
-                        Span::raw(tr!(
-                            "  escreve na aba, sem executar",
-                            "  types it into the tab, without running"
-                        )),
-                    ]));
-                    l.push(Line::raw(""));
                     for (i, line) in c.command.split('\n').enumerate() {
                         let label = if i == 0 {
                             tr!("comando", "command")
@@ -1908,18 +1935,23 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
                             ""
                         };
                         l.push(Line::from(vec![
-                            Span::raw(format!("{label:<10}")),
+                            Span::styled(format!("{label:<10}"), Style::default().fg(muted)),
                             Span::styled(
                                 line.to_string(),
-                                Style::default().add_modifier(Modifier::BOLD),
+                                Style::default().fg(page_fg).add_modifier(Modifier::BOLD),
                             ),
                         ]));
                     }
                     l.push(Line::raw(""));
-                    l.push(Line::raw(tr!(
-                        "Enter insere · edite antes, se quiser · Tab refaz a pergunta · Esc cancela",
-                        "Enter inserts · edit it first if you like · Tab redoes the question · Esc cancels"
-                    )));
+                    btn = Some((l.len(), tr!("Inserir", "Insert"), true));
+                    l.push(Line::raw(""));
+                    l.push(Line::styled(
+                        tr!(
+                            "Enter insere, sem executar · edite antes, se quiser · Tab refaz a pergunta · Esc cancela",
+                            "Enter inserts, without running · edit it first if you like · Tab redoes the question · Esc cancels"
+                        ),
+                        hint,
+                    ));
                 }
             }
             if let Some(e) = &c.error {
@@ -1983,30 +2015,30 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
             )
         }
         Modal::Chat(c) => {
-            let field = |i: usize, label: &str, value: String| {
-                let st = if c.field == i {
-                    selected
-                } else {
-                    Style::default()
-                };
-                Line::from(vec![
-                    Span::raw(format!("{label:<10}")),
-                    Span::styled(value, st),
-                ])
-            };
+            blocks = true;
             let mut l = vec![
-                field(0, tr!("mensagem", "message"), format!("{} ", c.text)),
-                field(1, tr!("modelo", "model"), format!("{} ", c.model)),
+                bfield(c.field == 0, tr!("mensagem", "message"), c.text.clone()),
+                bfield(
+                    c.field == 1,
+                    tr!("modelo", "model"),
+                    format!("‹ {} ›", c.model),
+                ),
                 Line::raw(""),
-                Line::raw(tr!(
+            ];
+            btn = Some((l.len(), tr!("Enviar", "Send"), c.field == 2));
+            l.push(Line::raw(""));
+            l.push(Line::styled(
+                tr!(
                     "Tab troca de campo · ↑ ↓ modelos da configuração · → lista dos provedores · Enter envia · Esc cancela",
                     "Tab switches field · ↑ ↓ configured models · → providers' list · Enter sends · Esc cancels"
-                )),
-            ];
+                ),
+                hint,
+            ));
             if let Some(e) = &c.error {
                 l.push(Line::styled(e.clone(), error));
             }
-            ("Chat", l, 8)
+            let h = l.len() as u16 + 2;
+            ("Chat", l, h)
         }
         Modal::Groups(gm) => {
             let mut l: Vec<Line> = app
@@ -2402,20 +2434,62 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
         .unwrap_or(20)
         .max(title.chars().count() as u16 + 4)
         + 4;
-    let r = centered(full, width.max(50), h.max(3));
+    let width = width.max(50);
+    // O botão em dois tons, alinhado à direita da área de texto.
+    if let Some((li, label, focus)) = btn {
+        let icon = if focus {
+            Style::default().fg(chip_fg).bg(accent)
+        } else {
+            Style::default().fg(idx_fg).bg(idx_bg)
+        };
+        let text = format!(" {label} ");
+        let w = 3 + text.chars().count() as u16;
+        let inner = width.saturating_sub(4);
+        let pad = inner.saturating_sub(w);
+        lines[li] = Line::from(vec![
+            Span::raw(" ".repeat(pad as usize)),
+            Span::styled(" ⏎ ", icon),
+            Span::styled(
+                text,
+                Style::default()
+                    .fg(chip_fg)
+                    .bg(accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]);
+        button = Some((li as u16, pad, w));
+    }
+    let r = centered(full, width, h.max(3));
     app.modal_button
         .set(button.map(|(li, col, w)| (r.x + 2 + col, r.y + 1 + li, w)));
     f.render_widget(Clear, r);
+    let block = if blocks {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .padding(Padding::horizontal(1))
+            .title(Line::from(Span::styled(
+                format!(" ≡ {title} "),
+                Style::default()
+                    .fg(chip_fg)
+                    .bg(accent)
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .border_style(Style::default().fg(idx_bg).bg(page_bg))
+            .style(Style::default().fg(page_fg).bg(page_bg))
+    } else {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .padding(Padding::horizontal(1))
+            .title(format!(" {title} "))
+            .border_style(themed(theme, "modal-border", "", Style::default()))
+            .title_style(themed(theme, "modal-title", "", Style::default()))
+    };
     f.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .padding(Padding::horizontal(1))
-                .title(format!(" {title} "))
-                .border_style(themed(theme, "modal-border", "", Style::default()))
-                .title_style(themed(theme, "modal-title", "", Style::default())),
-        ),
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(block),
         r,
     );
 }
