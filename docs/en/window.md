@@ -54,6 +54,16 @@ With the window on, in either mode, your user's `pipewire-0` and `pulse/native` 
 
 X11 never goes in: `DISPLAY` does not exist, and no X11 socket is mounted, because X11 allows capturing the whole desktop's keyboard. A program that only speaks X11 does not open. The GPU already goes in by default ([config.md](config.md)).
 
+## Browsers
+
+Chrome, Chromium and Electron apps start with their own sandbox (namespaces and seccomp), without `--no-sandbox`: sandmux lets a sandbox process create user and pid namespaces and map its own uid in them, as outside the sandbox. The profile stays in the harness's synthetic HOME, and the network goes through the gateway, with the tab's policy.
+
+```sh
+google-chrome https://localhost:3000
+```
+
+In `--headless` mode, the browser works without the window.
+
 ## Limits
 
 - No D-Bus and no portals: an app that asks for a system dialog, the theme through the portal or a link opened in the host browser cannot get it. The portal with appearance, notifications and link opening filtered by the network policy is the next step.

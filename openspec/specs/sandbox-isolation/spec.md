@@ -100,7 +100,7 @@ Um processo confinado MUST NOT conseguir inserir caracteres na fila de entrada d
 - **THEN** a chamada devolve erro e nada é inserido no terminal
 
 ### Requirement: User namespaces aninhados permitidos, sem montagem
-Um processo confinado MUST poder criar user namespaces próprios, para que programas que se isolam continuem funcionando. Dentro de um namespace aninhado, o processo MUST continuar sem conseguir montar nada nem alcançar o que o sandbox esconde.
+Um processo confinado MUST poder criar user namespaces próprios e mapear neles o próprio uid, para que programas que se isolam continuem funcionando. Dentro de um namespace aninhado, o processo MUST continuar sem conseguir montar nada nem alcançar o que o sandbox esconde.
 
 #### Scenario: Navegador headless
 - **WHEN** um navegador headless que cria o próprio isolamento é iniciado dentro do sandbox
@@ -109,6 +109,10 @@ Um processo confinado MUST poder criar user namespaces próprios, para que progr
 #### Scenario: Montagem em namespace aninhado
 - **WHEN** um processo confinado cria um user namespace e tenta montar um sistema de arquivos
 - **THEN** a montagem falha
+
+#### Scenario: Chrome com o sandbox dele
+- **WHEN** o `google-chrome` é iniciado no sandbox, sem `--no-sandbox`
+- **THEN** ele inicia com o sandbox de namespaces e seccomp dele
 
 ### Requirement: Ambiente construído do zero
 O comando confinado MUST receber apenas as variáveis de ambiente de uma lista segura, as que o preset define e as passadas com `--pass-env`. A lista segura é: `TERM`, `COLORTERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `LANG`, `LC_*`, `TZ`, `NO_COLOR`, `USER`, `LOGNAME`, `SHELL`, `HOME`, `PATH` reconstruído e as variáveis XDG apontando para o HOME sintético. Com a opção `window`, entram também as variáveis gráficas que ela define.

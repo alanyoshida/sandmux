@@ -54,6 +54,16 @@ Com a janela ligada, em qualquer modo, os sockets `pipewire-0` e `pulse/native` 
 
 O X11 nunca entra: `DISPLAY` não existe, e nenhum socket do X11 é montado, porque o X11 permite capturar o teclado do desktop inteiro. Um programa que só fala X11 não abre. A GPU já entra por padrão ([config.md](config.md)).
 
+## Navegadores
+
+O Chrome, o Chromium e os apps em Electron sobem com o sandbox deles (namespaces e seccomp), sem `--no-sandbox`: o sandmux deixa um processo do sandbox criar user e pid namespaces e mapear neles o próprio uid, como fora do sandbox. O perfil fica no HOME sintético do harness, e a rede passa pelo gateway, com a política da aba.
+
+```sh
+google-chrome https://localhost:3000
+```
+
+No modo `--headless`, o navegador funciona sem a janela.
+
 ## Limites
 
 - Sem D-Bus e sem portais: um app que pede um diálogo do sistema, o tema pelo portal ou um link aberto no navegador do host não consegue. O portal com aparência, notificações e abrir link filtrado pela política de rede é o próximo passo.
