@@ -474,7 +474,7 @@ struct Ctx {
     listener: OwnedFd,
     live: Mutex<Live>,
     /// O auxiliar que faz `rename`, `link` e `symlink` dentro do sandbox.
-    namer: Option<Mutex<Namer>>,
+    namer: Option<Arc<Mutex<Namer>>>,
     /// A raiz do sandbox, aberta na primeira notificação (é a mesma para
     /// todos os processos: `chroot` e `pivot_root` são negados).
     root: std::sync::OnceLock<OwnedFd>,
@@ -483,9 +483,13 @@ struct Ctx {
 }
 
 /// Começa a atender as notificações de `listener` em [`THREADS`] threads.
-pub fn spawn(listener: OwnedFd, spec: &LaunchSpec, namer: Option<Namer>) -> io::Result<()> {
+pub fn spawn(
+    listener: OwnedFd,
+    spec: &LaunchSpec,
+    namer: Option<Arc<Mutex<Namer>>>,
+) -> io::Result<()> {
     let ctx = Arc::new(Ctx {
-        namer: namer.map(Mutex::new),
+        namer,
         live: Mutex::new(Live::new(spec.files.as_ref())),
         listener,
         root: std::sync::OnceLock::new(),

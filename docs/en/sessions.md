@@ -56,6 +56,19 @@ Closing the terminal, or sending SIGTERM to the client, only detaches. On detach
 
 Several terminals can attach to the same session; all of them get the output and all of them type. The session's screen has the smallest number of columns and rows among the attached terminals.
 
+## Shell inside a tab's sandbox
+
+`sandmux enter [id]` (without an identifier, the only live session), or Ctrl+b `t` in the TUI, opens a new session, `dentro:<folder>`, with a shell inside the target tab's sandbox. The shell sees exactly what the agent sees:
+
+- **files:** the same view, the same starting folder, the same Landlock;
+- **file rules:** opens go through the same rules and into the same log (a `.env` is still denied);
+- **network and restrictions:** the same network and the same seccomp;
+- **processes:** the same ones, because the shell is in the same pid namespace (`ps` shows the agent).
+
+The shell counts against the target tab's caps, and what it does on the network and with files shows up in that tab's logs.
+
+The inside tab ends when the shell exits, or when the target sandbox ends. After a daemon restart, it comes back stopped, because the target sandbox is a different one; Ctrl+b `r` enters again. An inside tab does not open another one. A tab launched by an older sandmux version must be restarted first.
+
 ## History and clipboard
 
 - Each session keeps the last 10,000 lines that left the main screen, in memory only (`sandmuxd --history-lines N` changes the limit). Nothing from the sessions' output is written to disk, not even to the daemon's log.

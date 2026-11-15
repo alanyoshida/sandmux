@@ -66,6 +66,7 @@ Todos começam pela tecla de prefixo, Ctrl+b por padrão:
 | `i` | Modal de chat: uma pergunta a um modelo, que abre uma aba de chat ([chat.md](chat.md)) |
 | `g` | Modal de comando: o modelo gera um comando, escrito na aba sem executar ([chat.md](chat.md#modal-de-comando)) |
 | `e` | [Configurações](#configurações) |
+| `t` | Shell dentro do sandbox da aba ([sessions.md](sessions.md#shell-dentro-do-sandbox-de-uma-aba)) |
 | `:` | [Menu](#menu) com todas as ações |
 | o prefixo de novo | Envia o prefixo ao harness |
 
@@ -84,9 +85,9 @@ new = "t"
 close = "q"
 ```
 
-- **Ações:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu` e `settings`.
+- **Ações:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings` e `enter`.
 - **Teclas:** um caractere visível, que não seja dígito, porque os dígitos levam às abas.
-- **Duas ações na mesma tecla** tornam o arquivo inválido.
+- **Duas ações na mesma tecla** escolhidas em `[tui.keys]` tornam o arquivo inválido. Uma tecla escolhida que é a padrão de outra ação vence, e a outra ação fica sem tecla (aparece com `—` na ajuda e continua no menu). Assim uma ação nova numa versão nova nunca invalida o arquivo.
 - **`[tui]` não é camada de política:** não muda nada nos sandboxes.
 
 ## Painel lateral

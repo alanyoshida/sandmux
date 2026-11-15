@@ -50,6 +50,12 @@ enum Cmd {
         /// Identificador da sessão (sem ele, a única sessão viva).
         id: Option<u32>,
     },
+    /// Abre um shell dentro do sandbox de uma sessão viva, com a mesma visão,
+    /// rede e restrições do agente.
+    Enter {
+        /// Identificador da sessão (sem ele, a única sessão viva).
+        id: Option<u32>,
+    },
     /// Desanexa todos os terminais de uma sessão, sem encerrá-la.
     Detach { id: u32 },
     /// Encerra uma sessão e a tira da lista.
@@ -452,6 +458,10 @@ const HELP_EN: &[(&str, &str)] = &[
         "Starts a confined harness in the current folder. In a terminal, creates a session in the daemon and attaches to it (Ctrl+b d detaches, Ctrl+b Ctrl+b sends Ctrl+b); without a terminal, runs directly, in the foreground.",
     ),
     ("Lista as sessões.", "Lists the sessions."),
+    (
+        "Abre um shell dentro do sandbox de uma sessão viva, com a mesma visão, rede e restrições do agente.",
+        "Opens a shell inside the sandbox of a live session, with the agent's view, network and restrictions.",
+    ),
     (
         "Anexa este terminal a uma sessão.",
         "Attaches this terminal to a session.",
@@ -902,6 +912,11 @@ fn dispatch(cmd: Cmd) -> Result<i32> {
         Cmd::Attach { id } => sessions::attach(id),
         Cmd::Detach { id } => sessions::detach(id),
         Cmd::Kill { id } => sessions::kill(id),
+        Cmd::Enter { id } => {
+            let mut opts = LaunchOptions::new(launch::ENTER);
+            opts.args = id.map(|i| vec![i.to_string()]).unwrap_or_default();
+            sessions::run_session(opts, &[])
+        }
         Cmd::Stats { id } => sessions::stats(id),
         Cmd::Net(a) => match a.cmd {
             None => sessions::net(a.id),

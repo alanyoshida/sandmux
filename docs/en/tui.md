@@ -68,6 +68,7 @@ All of them start with the prefix key, Ctrl+b by default:
 | `i` | Chat modal: a question to a model, which opens a chat tab ([chat.md](chat.md)) |
 | `g` | Command modal: the model generates a command, written into the tab without running it ([chat.md](chat.md#command-modal)) |
 | `e` | [Settings](#settings) |
+| `t` | Shell inside the tab's sandbox ([sessions.md](sessions.md#shell-inside-a-tabs-sandbox)) |
 | `:` | [Menu](#menu) with all actions |
 | the prefix again | Sends the prefix to the harness |
 
@@ -86,9 +87,9 @@ new = "t"
 close = "q"
 ```
 
-- **Actions:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu` and `settings`.
+- **Actions:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings` and `enter`.
 - **Keys:** a visible character that is not a digit, because digits lead to the tabs.
-- **Two actions on the same key** make the file invalid.
+- **Two actions on the same key** chosen in `[tui.keys]` make the file invalid. A chosen key that is another action's default wins, and the other action is left without a key (it shows as `—` in the help and stays in the menu). This way a new action in a new version never makes the file invalid.
 - **`[tui]` is not a policy layer:** it changes nothing in the sandboxes.
 
 ## Side panel

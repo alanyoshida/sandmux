@@ -452,6 +452,8 @@ fn menu_abre_as_configuracoes_e_a_pagina_grava_o_toml() {
     t.write(b"\x02:");
     t.wait_text("Menu");
     t.wait_text("configurações");
+    // "configurações" é a penúltima (a última é o shell de dentro).
+    t.write(UP);
     t.write(UP);
     t.write(b"\r");
     t.wait_text("sandmux · configurações");
@@ -1265,6 +1267,23 @@ fn cofre_gerenciado_pela_pagina() {
     assert!(!list.contains("lmstudio"), "{list}");
     t.write(b"\x1b");
     t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
+fn ctrl_b_t_abre_shell_dentro_da_aba() {
+    let e = Env::new();
+    sessao(&e, &e.work);
+    let mut t = tui_cols(&e, 120);
+    t.wait_text(&tab(1, "shell:app"));
+    t.write(b"\x02t");
+    t.wait_text(&tab(2, "dentro:app"));
+    t.write(b"echo dentro-$((2+3))\r");
+    t.wait_text("dentro-5");
+    // Um shell de dentro não abre outro.
+    t.write(b"\x02t");
+    t.wait_text("esta aba já é um shell de dentro");
     t.write(b"\x02d");
     assert_eq!(t.wait_exit(), 0);
 }
