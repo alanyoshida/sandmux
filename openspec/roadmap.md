@@ -416,6 +416,8 @@ Release `v0.1.5` (2026-11-15), com o change 47. Decisão do usuário (2026-11-15
 
 Release `v0.1.6` (2026-11-15), com o change 48. Decisão do usuário (2026-11-15): publicar logo depois das notificações.
 
+Release `v0.1.7` (2026-11-15), com o change 49. Decisão do usuário (2026-11-15): publicar logo depois dos grupos de abas.
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.

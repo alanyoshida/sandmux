@@ -1,23 +1,24 @@
-sandmux 0.1.6, antes da v1: notificações do desktop.
+sandmux 0.1.7, antes da v1: grupos de abas.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Notificações do desktop:** o daemon avisa pelo serviço de notificações do sistema:
-  - **bloqueio de rede:** a aba, o domínio e o motivo;
-  - **chave real** no sandbox: movida ao cofre (reinicie a aba), esperando o cofre ou esperando um domínio;
-  - **aba encerrada:** o harness terminou sozinho, com o código. Um `sandmux kill` ou um fechamento seu não avisa;
-  - **abas esperando o cofre** depois de um reboot, se ele continua trancado.
+- **Grupos de abas,** como as sessões do tmux. Toda aba pertence a um grupo, e cada TUI mostra um grupo por vez:
+  - `sandmux run <harness> --group estudos` cria a aba no grupo; sem `--group`, ela vai para o `principal`, onde também ficam as abas que já existiam;
+  - `sandmux ls` ganha a coluna GRUPO, e `--group` filtra;
+  - `sandmux group list`, `group move <id> <grupo>` e `group rename <grupo> <novo>`;
+  - `sandmux tui --group estudos` abre a TUI no grupo.
 
-  Mais detalhes:
-  - Eventos do mesmo tipo na mesma aba, a menos de 60 segundos um do outro, atualizam a mesma notificação, com a contagem.
-  - **Só sem foco:** a TUI liga o aviso de foco do terminal, e o daemon não avisa sobre a aba que uma TUI em foco está mostrando. Com a TUI fechada, numa janela de trás ou em outra aba, ele avisa.
-  - Vêm ligadas; `notify = false` em `[global]`, ou o item na seção Geral das configurações, desliga.
+  Na TUI:
+  - Ctrl+b `(` e `)` trocam de grupo, e as abas do grupo que sai continuam vivas;
+  - Ctrl+b `G` abre a lista de grupos: Enter troca, `n` cria, `r` renomeia, `m` leva a aba ativa;
+  - uma aba nova vai para o grupo atual;
+  - duas janelas podem mostrar grupos diferentes.
 
-  Detalhes em [docs/tui.md](https://github.com/alanyoshida/sandmux/blob/main/docs/tui.md#notificações-do-desktop).
+  Um grupo existe enquanto tem abas, e volta com elas depois de um reboot. Detalhes em [docs/sessions.md](https://github.com/alanyoshida/sandmux/blob/main/docs/sessions.md#grupos-de-abas).
 
-Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 29).
+Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 30).
 
 ## Instalar
 
