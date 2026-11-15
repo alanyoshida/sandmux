@@ -177,7 +177,7 @@ Ctrl+b `e`, or "settings" in the menu, opens a full-screen page with the options
 
 | Section | Options |
 |---|---|
-| General | language (`auto`, which follows the system, `pt` or `en`; [config.md](config.md#language)); desktop notifications ([see below](#desktop-notifications)) |
+| General | language (`auto`, which follows the system, `pt` or `en`; [config.md](config.md#language)); history on disk ([sessions.md](sessions.md#history-on-disk)); desktop notifications ([see below](#desktop-notifications)) |
 | Appearance | theme (with color samples), bar style and position, side panel |
 | Shortcuts | prefix key |
 | Sandbox | repo, KVM, GPU, clipboard, memory, processes, extra folders, `pass-env`, SSH keys, databases |

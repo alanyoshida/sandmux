@@ -68,6 +68,10 @@ pub struct Session {
     pub oom_kills: u64,
     /// Chaves reais movidas ao cofre pelo vigia desde o lançamento.
     pub keys_moved: u32,
+    /// Saída ainda não gravada no histórico em disco.
+    pub hist_buf: Vec<u8>,
+    /// Há histórico em disco esperando o cofre abrir.
+    pub hist_pending: bool,
     pub fork_refusals: u64,
     /// Socket do Docker privado do lançamento atual.
     pub docker: Option<super::docker::SessionSocket>,
@@ -136,6 +140,8 @@ impl Session {
             cgroup: None,
             oom_kills: 0,
             keys_moved: 0,
+            hist_buf: Vec::new(),
+            hist_pending: false,
             fork_refusals: 0,
             docker: None,
             ssh_agent: None,
@@ -212,6 +218,15 @@ impl Session {
         self.parser = vt100::Parser::new(nz(size.rows), nz(size.cols), self.history);
         self.tracker = ModeTracker::new();
         self.filter = OscFilter::new(self.clipboard);
+    }
+
+    /// Um parser novo, do tamanho atual, com o histórico do disco e a tela
+    /// atual por cima.
+    pub fn rebuild_parser(&mut self, history: &[u8]) {
+        let (rows, cols) = (self.size.rows, self.size.cols);
+        let mut p = vt100::Parser::new(nz(rows), nz(cols), self.history);
+        p.process(history);
+        self.parser = p;
     }
 
     /// Envia a todos os clientes; quem tem a fila cheia é desanexado.
@@ -983,6 +998,8 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
         ..
     } = spawned;
     let pid = child.id() as i32;
+    // O histórico em disco, antes da trava do estado (pede o cofre).
+    let preload = super::history::preload(shared, id);
     {
         let mut st = shared.lock();
         if let Some(s) = st.sessions.get_mut(&id) {
@@ -1009,6 +1026,19 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
             s.keys_moved = 0;
             s.fork_refusals = 0;
             s.reset_terminal(size);
+            match preload {
+                super::history::Preload::Bytes(b) => {
+                    s.parser.process(&b);
+                    let sep = super::history::separator();
+                    s.parser.process(&sep);
+                    s.hist_buf.extend_from_slice(&sep);
+                }
+                super::history::Preload::Pending => {
+                    s.hist_pending = true;
+                    s.hist_buf.extend_from_slice(&super::history::separator());
+                }
+                super::history::Preload::None => {}
+            }
             s.state = SessionState::Viva;
             s.killing = false;
             s.started = Some(std::time::Instant::now());
@@ -1154,6 +1184,13 @@ fn reader(shared: Arc<Shared>, id: u32, pid: i32, master: Arc<File>, mut child: 
                     }
                     s.parser.process(&data);
                     s.tracker.feed(&data);
+                    if shared.disk_history.enabled() {
+                        s.hist_buf.extend_from_slice(&data);
+                        let over = s.hist_buf.len().saturating_sub(super::history::BUF_CAP);
+                        if over > 0 {
+                            s.hist_buf.drain(..over);
+                        }
+                    }
                     s.broadcast(|| Out::Data(data.clone()));
                 }
             }

@@ -76,6 +76,10 @@ pub struct Contents {
     /// Valores de `--pass-env` por sessão.
     #[serde(default)]
     pub pass_env: BTreeMap<u32, BTreeMap<String, String>>,
+    /// Chave do histórico de tela em disco (base64 de 32 bytes), criada no
+    /// primeiro uso.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_key: Option<String>,
 }
 
 impl Drop for Contents {
@@ -84,6 +88,9 @@ impl Drop for Contents {
             for v in vars.values_mut() {
                 v.zeroize();
             }
+        }
+        if let Some(k) = self.history_key.as_mut() {
+            k.zeroize();
         }
     }
 }
@@ -337,6 +344,22 @@ impl Unlocked {
         Ok(())
     }
 
+    /// A chave do histórico de tela, criada se ainda não existe. Devolve a
+    /// chave e se o conteúdo mudou (para gravar o cofre).
+    pub fn history_key(&mut self) -> (Zeroizing<[u8; 32]>, bool) {
+        if let Some(k) = &self.contents.history_key
+            && let Ok(b) = B64.decode(k)
+            && b.len() == 32
+        {
+            let mut out = Zeroizing::new([0u8; 32]);
+            out.copy_from_slice(&b);
+            return (out, false);
+        }
+        let k = Zeroizing::new(random::<32>());
+        self.contents.history_key = Some(B64.encode(k.as_ref()));
+        (k, true)
+    }
+
     /// Dá um valor falso aos segredos que não têm. Devolve se mudou algo.
     pub fn fill_fakes(&mut self) -> bool {
         let mut changed = false;
@@ -363,6 +386,62 @@ impl Unlocked {
         let n = self.contents.secrets.len();
         self.contents.secrets.retain(|x| x.name != name);
         n != self.contents.secrets.len()
+    }
+}
+
+/// Histórico de tela cifrado: registros `nonce(24) | tamanho(u32 LE) |
+/// cifra`, com XChaCha20-Poly1305 e o AAD da aba.
+pub mod history {
+    use super::{Aead, KeyInit, Payload, VaultError, XChaCha20Poly1305, XNonce, random};
+
+    fn aad(id: u32) -> Vec<u8> {
+        format!("sandmux-history:{id}").into_bytes()
+    }
+
+    /// Um registro com o trecho `plain` da aba `id`.
+    pub fn seal(key: &[u8; 32], id: u32, plain: &[u8]) -> Vec<u8> {
+        let nonce = random::<24>();
+        let cipher = XChaCha20Poly1305::new(key.into());
+        let ct = cipher
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: plain,
+                    aad: &aad(id),
+                },
+            )
+            .unwrap_or_default();
+        let mut out = Vec::with_capacity(28 + ct.len());
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&(ct.len() as u32).to_le_bytes());
+        out.extend_from_slice(&ct);
+        out
+    }
+
+    /// Os trechos do arquivo, em ordem. Um registro cortado no fim (queda no
+    /// meio da gravação) é ignorado; um registro que não decifra (chave ou
+    /// aba errada) é erro.
+    pub fn open(key: &[u8; 32], id: u32, mut bytes: &[u8]) -> Result<Vec<u8>, VaultError> {
+        let cipher = XChaCha20Poly1305::new(key.into());
+        let mut out = Vec::new();
+        while bytes.len() >= 28 {
+            let len = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]) as usize;
+            if bytes.len() < 28 + len {
+                break;
+            }
+            let plain = cipher
+                .decrypt(
+                    XNonce::from_slice(&bytes[..24]),
+                    Payload {
+                        msg: &bytes[28..28 + len],
+                        aad: &aad(id),
+                    },
+                )
+                .map_err(|_| VaultError::WrongPassword)?;
+            out.extend_from_slice(&plain);
+            bytes = &bytes[28 + len..];
+        }
+        Ok(out)
     }
 }
 
@@ -445,5 +524,33 @@ mod tests {
             "{f}"
         );
         assert_ne!(new_fake(), new_fake());
+    }
+
+    #[test]
+    fn historico_cifrado_ida_e_volta() {
+        let k = random::<32>();
+        let mut f = history::seal(&k, 3, b"linha um\r\n");
+        f.extend(history::seal(&k, 3, b"linha dois\r\n"));
+        assert!(!f.windows(8).any(|w| w == b"linha um"));
+        assert_eq!(
+            history::open(&k, 3, &f).unwrap(),
+            b"linha um\r\nlinha dois\r\n"
+        );
+        // Registro cortado no fim: ignorado.
+        let cut = &f[..f.len() - 5];
+        assert_eq!(history::open(&k, 3, cut).unwrap(), b"linha um\r\n");
+        // Chave ou aba errada: erro.
+        assert!(history::open(&random::<32>(), 3, &f).is_err());
+        assert!(history::open(&k, 4, &f).is_err());
+    }
+
+    #[test]
+    fn chave_do_historico_criada_uma_vez() {
+        let mut u = Unlocked::create("s").unwrap();
+        let (a, changed) = u.history_key();
+        assert!(changed);
+        let (b, changed) = u.history_key();
+        assert!(!changed);
+        assert_eq!(*a, *b);
     }
 }

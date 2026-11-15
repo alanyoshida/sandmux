@@ -11,6 +11,7 @@ mod conn;
 mod db;
 mod docker;
 mod folders;
+mod history;
 mod keyring;
 mod net;
 pub mod notify;
@@ -64,6 +65,8 @@ pub struct Shared {
     pub keyring_note: Mutex<Option<String>>,
     /// Notificações do desktop.
     pub notify: notify::Notifier,
+    /// Histórico de tela em disco.
+    pub disk_history: history::History,
 }
 
 pub struct State {
@@ -379,6 +382,7 @@ fn run(history: usize) -> Result<()> {
         keyring_last: Mutex::new(None),
         keyring_note: Mutex::new(None),
         notify: notify::Notifier::default(),
+        disk_history: history::History::default(),
     });
     eprintln!(
         "{}",
@@ -413,7 +417,9 @@ fn run(history: usize) -> Result<()> {
             )
         );
     }
+    history::init(&shared);
     restore(&shared, logged_in);
+    history::start(shared.clone());
     net::start_retention(shared.clone());
     // Slices do Docker que ficaram de um daemon derrubado, já sem processos.
     let _ = std::thread::Builder::new()

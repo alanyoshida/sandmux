@@ -63,6 +63,16 @@ impl VaultState {
         self.open.is_some()
     }
 
+    /// A chave do histórico de tela, com o cofre aberto; criada (e o cofre
+    /// gravado) no primeiro uso.
+    pub fn history_key(&mut self) -> Option<zeroize::Zeroizing<[u8; 32]>> {
+        let (k, changed) = self.open.as_mut()?.history_key();
+        if changed {
+            let _ = self.save();
+        }
+        Some(k)
+    }
+
     pub fn count(&self) -> usize {
         self.open.as_ref().map_or(0, |o| o.contents.secrets.len())
     }
