@@ -546,3 +546,45 @@ fn seletor_de_modelo_na_aba_no_modal_e_na_pagina() {
     t.write(b"\x02d");
     t.wait_exit();
 }
+
+#[test]
+fn modal_de_comando_manda_a_tela_so_quando_pedida() {
+    let (e, _, bodies) = setup_with_bodies();
+    let mut cmd = e.cmd(&e.work, &["run", "shell"]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut t = Term::spawn_answering(cmd, 120, 30);
+    t.write(b"echo erro-arquivo-$((40+3))\r");
+    t.wait_text("erro-arquivo-43");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+
+    let mut cmd = e.cmd(&e.work, &[]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut t = Term::spawn_answering(cmd, 120, 30);
+    t.wait_text(&tab(1, "shell:app"));
+    // O campo começa desligado; Tab até ele, Espaço liga.
+    t.write(b"\x02g");
+    t.wait_text("○ não enviar");
+    t.write(b"corrigir o erro");
+    t.write(b"\t\t ");
+    t.wait_text("● enviar as últimas 40 linhas da aba");
+    t.wait_text("a tela da aba vai ao provedor");
+    t.write(b"\r");
+    t.wait_text("[ Inserir ]");
+    let body = bodies.lock().unwrap().last().cloned().unwrap();
+    assert!(body.contains("corrigir o erro"), "{body}");
+    assert!(body.contains("erro-arquivo-43"), "{body}");
+    // Ao abrir de novo, volta desligado, e nada da tela vai.
+    t.write(b"\x1b");
+    t.write(b"\x02g");
+    t.wait_text("○ não enviar");
+    t.write(b"outra coisa\r");
+    t.wait_for("segunda resposta", |_| bodies.lock().unwrap().len() >= 2);
+    t.wait_text("[ Inserir ]");
+    let body = bodies.lock().unwrap().last().cloned().unwrap();
+    assert!(body.contains("outra coisa"), "{body}");
+    assert!(!body.contains("erro-arquivo-43"), "{body}");
+    t.write(b"\x1b");
+    t.write(b"\x02d");
+    t.wait_exit();
+}

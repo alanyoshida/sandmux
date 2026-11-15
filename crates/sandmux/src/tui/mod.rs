@@ -101,6 +101,26 @@ pub fn help_label(item: &(&'static str, &'static str, &'static str)) -> &'static
     tr!(item.1, item.2)
 }
 
+/// Linhas da tela da aba mandadas com a pergunta do modal de comando.
+pub const SCREEN_LINES: usize = 40;
+
+/// A pergunta com as últimas `max` linhas da tela (sem as vazias do fim),
+/// como contexto para o modelo.
+pub fn with_screen(question: &str, screen: &str, max: usize) -> String {
+    let lines: Vec<&str> = screen.lines().map(str::trim_end).collect();
+    let end = lines
+        .iter()
+        .rposition(|l| !l.is_empty())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let start = end.saturating_sub(max);
+    let shown = lines[start..end].join("\n");
+    if shown.trim().is_empty() {
+        return question.to_string();
+    }
+    format!("{question}\n\nÚltimas linhas do terminal da aba, como contexto:\n```\n{shown}\n```")
+}
+
 /// As ações do menu: as da ajuda, sem o próprio menu, com a descrição no
 /// idioma atual.
 pub fn menu_items() -> Vec<(&'static str, &'static str)> {
@@ -211,8 +231,11 @@ pub enum CmdStage {
 /// Modal de comando: a pergunta, o modelo e o comando sugerido.
 pub struct CommandModal {
     pub stage: CmdStage,
-    /// 0 = pergunta, 1 = modelo.
+    /// 0 = pergunta, 1 = modelo, 2 = tela.
     pub field: usize,
+    /// Mandar as últimas linhas da tela da aba com a pergunta (desligado ao
+    /// abrir; só vai quando o usuário liga).
+    pub screen: bool,
     pub question: String,
     pub model: String,
     pub choice: Option<usize>,
@@ -937,6 +960,7 @@ impl App {
             error: None,
             token: 0,
             tab,
+            screen: false,
         })));
     }
 
@@ -945,10 +969,11 @@ impl App {
         let Some(Modal::Command(c)) = &self.modal else {
             return;
         };
-        let (question, model, tab) = (
+        let (question, model, tab, screen) = (
             c.question.trim().to_string(),
             c.model.trim().to_string(),
             c.tab,
+            c.screen,
         );
         let fail = |app: &mut App, e: String| {
             if let Some(Modal::Command(c)) = &mut app.modal {
@@ -998,6 +1023,13 @@ impl App {
             c.token = token;
             c.error = None;
         }
+        // A tela só vai quando o usuário pediu, nesta pergunta.
+        let question = match self.tabs.iter().find(|t| t.id == tab) {
+            Some(t) if screen => {
+                with_screen(&question, &t.parser.screen().contents(), SCREEN_LINES)
+            }
+            _ => question,
+        };
         let tx = self.tx.clone();
         let system = sandmux_policy::assistant::command_prompt(&folder, &shell);
         std::thread::spawn(move || {
@@ -1885,7 +1917,9 @@ impl App {
                 match (c.stage, k) {
                     (_, Key::Esc) => self.modal = None,
                     (CmdStage::Waiting, _) => {}
-                    (CmdStage::Ask, Key::Tab) => c.field = 1 - c.field.min(1),
+                    (CmdStage::Ask, Key::Tab) => c.field = (c.field + 1) % 3,
+                    (CmdStage::Ask, Key::Char(' ')) if c.field == 2 => c.screen = !c.screen,
+                    (CmdStage::Ask, Key::Char(_) | Key::Backspace) if c.field == 2 => {}
                     (CmdStage::Ask, Key::Right) if c.field == 1 => {
                         self.open_picker(picker::PickFor::CommandModal)
                     }
