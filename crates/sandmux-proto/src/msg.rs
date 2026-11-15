@@ -43,6 +43,10 @@ pub struct LaunchOptions {
     pub kvm: Option<bool>,
     pub gpu: Option<bool>,
     pub allow_clipboard: Option<bool>,
+    /// Janela dada no `run` (`--window`, `--no-window`, `--window-direct`;
+    /// protocolo 34).
+    #[serde(default)]
+    pub window: Option<sandmux_spec::window::WindowMode>,
     /// Tetos dados no `run` (`--memory`, `--processes`), como texto.
     #[serde(default)]
     pub memory: Option<String>,
@@ -107,6 +111,7 @@ impl LaunchOptions {
             kvm: None,
             gpu: None,
             allow_clipboard: None,
+            window: None,
             memory: None,
             processes: None,
             network: None,
@@ -206,6 +211,9 @@ pub struct SessionInfo {
     /// Grupo da sessão (protocolo 30).
     #[serde(default = "main_group")]
     pub group: String,
+    /// Janela do último lançamento, para a marca na barra (protocolo 34).
+    #[serde(default)]
+    pub window: sandmux_spec::window::WindowMode,
 }
 
 /// O grupo das sessões criadas sem grupo, sempre presente na lista.
@@ -309,6 +317,9 @@ pub struct PolicySummary {
     pub memory_max: Option<u64>,
     pub processes_max: Option<u64>,
     pub network: String,
+    /// Janela do lançamento (protocolo 34).
+    #[serde(default)]
+    pub window: sandmux_spec::window::WindowMode,
 }
 
 /// Consumo do Docker privado da pasta de uma sessão.

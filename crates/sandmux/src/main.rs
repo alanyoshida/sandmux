@@ -277,6 +277,15 @@ struct RunArgs {
     /// Não expõe a GPU dentro do sandbox.
     #[arg(long = "no-gpu")]
     no_gpu: bool,
+    /// Deixa o agente abrir janelas no desktop e usar o áudio, pelo socket restrito do compositor.
+    #[arg(long, conflicts_with_all = ["no_window", "window_direct"])]
+    window: bool,
+    /// Como --window, pelo socket comum do compositor, que também dá acesso ao clipboard.
+    #[arg(long = "window-direct", conflicts_with = "no_window")]
+    window_direct: bool,
+    /// Sem janela nem áudio, mesmo que a configuração peça.
+    #[arg(long = "no-window")]
+    no_window: bool,
     /// Deixa o harness gravar no clipboard do seu terminal (OSC 52).
     #[arg(long = "allow-clipboard", conflicts_with = "no_allow_clipboard")]
     allow_clipboard: bool,
@@ -737,6 +746,18 @@ const HELP_EN: &[(&str, &str)] = &[
     (
         "Expõe a GPU, mesmo que a configuração a desligue.",
         "Exposes the GPU, even if the configuration turns it off.",
+    ),
+    (
+        "Deixa o agente abrir janelas no desktop e usar o áudio, pelo socket restrito do compositor.",
+        "Lets the agent open windows on the desktop and use audio, through the compositor's restricted socket.",
+    ),
+    (
+        "Como --window, pelo socket comum do compositor, que também dá acesso ao clipboard.",
+        "Like --window, through the compositor's plain socket, which also gives access to the clipboard.",
+    ),
+    (
+        "Sem janela nem áudio, mesmo que a configuração peça.",
+        "No window or audio, even if the configuration asks for it.",
     ),
     (
         "Não expõe a GPU dentro do sandbox.",
@@ -1288,6 +1309,12 @@ fn launch_options(host: &Host, a: &RunArgs) -> LaunchOptions {
         kvm: flag(a.kvm, a.no_kvm),
         gpu: flag(a.gpu, a.no_gpu),
         allow_clipboard: flag(a.allow_clipboard, a.no_allow_clipboard),
+        window: match (a.window, a.window_direct, a.no_window) {
+            (_, true, _) => Some(sandmux_spec::window::WindowMode::Direct),
+            (true, _, _) => Some(sandmux_spec::window::WindowMode::On),
+            (_, _, true) => Some(sandmux_spec::window::WindowMode::Off),
+            _ => None,
+        },
         memory: a.memory.clone(),
         processes: a.processes.clone(),
         network: a.network.clone(),
@@ -1346,6 +1373,9 @@ fn cmd_run(a: RunArgs) -> Result<i32> {
     let effective = launch::effective(&host, &opts)?;
     let layout = Layout::new(&host.data_dir);
     first_run(&host, &layout, &a)?;
+    if let Some(w) = sandmux::window::warning(effective.window.value) {
+        warn(&w);
+    }
     if a.gateway {
         if let Some(w) = sandmux_policy::hermes_config::host_gateway_alive(&host.home) {
             warn(&w);

@@ -103,6 +103,7 @@ sandmux setup
 | `--repo`, `--no-repo` | In a repository subfolder, mounts (or not) the whole repository read-only so git works |
 | `--kvm`, `--no-kvm` | Allows (or not) `/dev/kvm` |
 | `--gpu`, `--no-gpu` | Exposes (or not) the GPU, exposed by default when there is one |
+| `--window`, `--window-direct`, `--no-window` | Lets (or not) the agent open windows on the desktop and use audio: through the compositor's restricted socket, with the privileged protocols hidden, or through the plain socket; never X11 ([docs/en/window.md](docs/en/window.md)) |
 | `--memory <cap>`, `--processes <cap>` | Changes the memory cap (`50%`, `16G`, `max`) or the process cap (`512`, `max`) |
 | `--network <mode>` | `aberta` (default), `inferencia`, `custom` or `sem-rede` |
 | `--deny <pattern>`, `--allow <pattern>` | Denies or allows (in `custom` mode) a destination in this tab: `exemplo.com`, `*.exemplo.com`, IPv4 or CIDR |
@@ -283,6 +284,7 @@ The project uses [OpenSpec](https://github.com/Fission-AI/OpenSpec) to plan each
 | [docs/en/tui.md](docs/en/tui.md) | Interface with tabs: shortcuts and `[tui]`, modals, ended tab, mouse, selection and image paste |
 | [docs/en/docker.md](docs/en/docker.md) | Private Docker per folder: file view, socket, lifecycle, persistence, ports and caps |
 | [docs/en/limits.md](docs/en/limits.md) | Memory and process caps: defaults, tuning, systemd scope and measurement |
+| [docs/en/window.md](docs/en/window.md) | Desktop windows and audio: restricted mode through the security-context and the Wayland relay, direct mode, audio and limits |
 | [docs/en/vault.md](docs/en/vault.md) | Secret vault: creating, unlocking, secrets, swapping in the traffic, tools (`gh`, `git`, `npm`, `pip`, `cargo`, `docker`), SSH keys and the SSH agent, import keys, `--pass-env` on restore and how it is stored |
 | [docs/en/database.md](docs/en/database.md) | Database MCP: connections in the vault, `--db`, the tools, the query log and the limits |
 | [docs/en/chat.md](docs/en/chat.md) | Chat with the models: the Ctrl+b `i` modal, `sandmux chat`, the chat tab, the Ctrl+b `g` command modal, models and providers, `[assistant]`, the confinement and the stored conversation |

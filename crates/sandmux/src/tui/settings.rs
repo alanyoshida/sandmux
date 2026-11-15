@@ -81,6 +81,7 @@ const LANGUAGES: &[&str] = &["auto", "pt", "en"];
 const STYLES: &[&str] = &["blocos", "powerline", "simples"];
 const BARS: &[&str] = &["bottom", "top"];
 const NETWORK: &[&str] = &["aberta", "inferencia", "custom", "sem-rede"];
+const WINDOW: &[&str] = &["false", "true", "direct"];
 
 macro_rules! item {
     ($s:expr, $k:expr, $l:expr, $kind:expr, $at:expr, $h:expr) => {
@@ -215,6 +216,17 @@ pub const ITEMS: &[Item] = &[
         [
             "Dá acesso à placa de vídeo (/dev/dri e NVIDIA).",
             "Gives access to the graphics card (/dev/dri and NVIDIA)."
+        ]
+    ),
+    item!(
+        3,
+        "window",
+        ["Janela", "Window"],
+        Kind::Choice(WINDOW),
+        At::Layer,
+        [
+            "Janelas e áudio do desktop: true pelo socket restrito do compositor (security-context); direct pelo socket comum, que também dá o clipboard. O agente pode gravar o microfone.",
+            "Desktop windows and audio: true through the compositor's restricted socket (security-context); direct through the plain socket, which also gives the clipboard. The agent can record the microphone."
         ]
     ),
     item!(
@@ -1585,6 +1597,7 @@ mod tests {
                         c::DB_KEY,
                         c::PORTS_KEY,
                         c::HOST_PORTS_KEY,
+                        c::WINDOW_KEY,
                         "network"
                     ]
                     .contains(&k),

@@ -24,3 +24,5 @@ pub mod login;
 pub mod paths;
 pub mod secretdomains;
 pub mod sshagent;
+pub mod window;
+pub mod wlproxy;

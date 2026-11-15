@@ -196,6 +196,8 @@ pub struct Tab {
     pub started_at: Option<u64>,
     /// Chaves reais achadas pelo vigia do daemon (protocolo 27).
     pub keys: sandmux_proto::msg::KeyNote,
+    /// Janela do último lançamento (protocolo 34).
+    pub window: sandmux_spec::window::WindowMode,
 }
 
 /// Seleção de texto, em coordenadas da tela da aba.
@@ -615,6 +617,7 @@ impl App {
             ask_restart: false,
             started_at: s.started_at,
             keys: s.keys,
+            window: s.window,
         }
     }
 
@@ -694,6 +697,7 @@ impl App {
                     t.opts = s.opts.clone();
                     t.started_at = s.started_at;
                     t.keys = s.keys;
+                    t.window = s.window;
                     let was_live = t.state == SessionState::Viva;
                     t.state = s.state.clone();
                     if was_live && matches!(t.state, SessionState::Encerrada { .. }) {
@@ -1626,6 +1630,7 @@ impl App {
             ask_restart: false,
             started_at: None,
             keys: Default::default(),
+            window: Default::default(),
         });
         self.tabs.sort_by_key(|t| t.id);
         let i = self.tabs.iter().position(|t| t.id == id).unwrap_or(0);

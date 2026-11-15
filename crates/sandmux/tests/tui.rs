@@ -470,8 +470,8 @@ fn menu_abre_as_configuracoes_e_a_pagina_grava_o_toml() {
     assert!(text.starts_with("# do usuário"), "{text}");
     assert!(text.contains("kvm = true"), "{text}");
     t.wait_text("● ligado");
-    // Memória recusada: nada muda.
-    for _ in 0..3 {
+    // Memória recusada: nada muda (depois de GPU, janela e clipboard).
+    for _ in 0..4 {
         t.write(DOWN);
     }
     t.write(b"\r");

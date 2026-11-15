@@ -103,6 +103,7 @@ Opções de `run`:
 | `--repo`, `--no-repo` | Numa subpasta de repositório, monta (ou não) o repositório inteiro em somente leitura para o git funcionar |
 | `--kvm`, `--no-kvm` | Libera (ou não) `/dev/kvm` |
 | `--gpu`, `--no-gpu` | Expõe (ou não) a GPU, exposta por padrão quando existe |
+| `--window`, `--window-direct`, `--no-window` | Deixa (ou não) o agente abrir janelas no desktop e usar o áudio: pelo socket restrito do compositor, com os protocolos privilegiados escondidos, ou pelo socket comum; nunca X11 ([docs/window.md](docs/window.md)) |
 | `--memory <teto>`, `--processes <teto>` | Muda o teto de memória (`50%`, `16G`, `max`) ou de processos (`512`, `max`) |
 | `--network <modo>` | `aberta` (padrão), `inferencia`, `custom` ou `sem-rede` |
 | `--deny <padrão>`, `--allow <padrão>` | Nega ou libera (no modo `custom`) um destino nesta aba: `exemplo.com`, `*.exemplo.com`, IPv4 ou CIDR |
@@ -283,6 +284,7 @@ O projeto usa [OpenSpec](https://github.com/Fission-AI/OpenSpec) para planejar c
 | [docs/tui.md](docs/tui.md) | Interface com abas: atalhos e `[tui]`, modais, aba encerrada, mouse, seleção e colagem de imagem |
 | [docs/docker.md](docs/docker.md) | Docker privado por pasta: visão de arquivos, socket, ciclo de vida, persistência, portas e tetos |
 | [docs/limits.md](docs/limits.md) | Tetos de memória e de processos: padrões, ajuste, escopo do systemd e medição |
+| [docs/window.md](docs/window.md) | Janelas e áudio do desktop: modo restrito pelo security-context e o repassador do Wayland, modo direto, áudio e limites |
 | [docs/vault.md](docs/vault.md) | Cofre de segredos: criar, desbloquear, segredos, troca no tráfego, ferramentas (`gh`, `git`, `npm`, `pip`, `cargo`, `docker`), chaves SSH e o agente SSH, chaves da importação, `--pass-env` na restauração e como é guardado |
 | [docs/database.md](docs/database.md) | MCP de banco: conexões no cofre, `--db`, as ferramentas, o registro das queries e os limites |
 | [docs/chat.md](docs/chat.md) | Chat com os modelos: o modal Ctrl+b `i`, `sandmux chat`, a aba de chat, o modal de comando Ctrl+b `g`, modelos e provedores, `[assistant]`, o confinamento e a conversa guardada |

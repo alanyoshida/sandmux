@@ -33,6 +33,8 @@ toml_edit = "0.25"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 crossterm = "0.29"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control", "image-data"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 png = "0.18"
 ipstack = "1.0"
 argon2 = "0.5"

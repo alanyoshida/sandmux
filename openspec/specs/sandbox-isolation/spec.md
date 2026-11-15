@@ -52,7 +52,7 @@ Um processo confinado MUST enxergar apenas os processos do próprio sandbox e MU
 - **THEN** a operação funciona
 
 ### Requirement: Sockets do host fora do alcance
-Um processo confinado MUST NOT conseguir se conectar a sockets Unix do host, nem por caminho nem por nome abstrato. Isso inclui ssh-agent, D-Bus, Docker, Wayland e X11.
+Um processo confinado MUST NOT conseguir se conectar a sockets Unix do host, nem por caminho nem por nome abstrato. Isso inclui ssh-agent, D-Bus, Docker, Wayland e X11. A exceção são os sockets do compositor e do áudio que a opção `window` monta.
 
 #### Scenario: Socket por caminho
 - **WHEN** um processo confinado tenta abrir o socket do Docker, do ssh-agent ou do D-Bus do host pelo caminho
@@ -65,6 +65,10 @@ Um processo confinado MUST NOT conseguir se conectar a sockets Unix do host, nem
 #### Scenario: Socket próprio
 - **WHEN** dois processos do mesmo sandbox se comunicam por um socket Unix criado lá dentro
 - **THEN** a comunicação funciona
+
+#### Scenario: Janela ligada
+- **WHEN** a aba tem a opção `window`
+- **THEN** só o socket do compositor da aba e os do áudio entram; o D-Bus e o X11 continuam fora
 
 ### Requirement: Sem privilégio dentro do sandbox
 O comando confinado MUST rodar com a mesma identidade numérica do usuário, sem capabilities e sem possibilidade de ganhar privilégio. Programas setuid MUST NOT elevar privilégio dentro do sandbox.
@@ -107,14 +111,14 @@ Um processo confinado MUST poder criar user namespaces próprios, para que progr
 - **THEN** a montagem falha
 
 ### Requirement: Ambiente construído do zero
-O comando confinado MUST receber apenas as variáveis de ambiente de uma lista segura, as que o preset define e as passadas com `--pass-env`. A lista segura é: `TERM`, `COLORTERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `LANG`, `LC_*`, `TZ`, `NO_COLOR`, `USER`, `LOGNAME`, `SHELL`, `HOME`, `PATH` reconstruído e as variáveis XDG apontando para o HOME sintético.
+O comando confinado MUST receber apenas as variáveis de ambiente de uma lista segura, as que o preset define e as passadas com `--pass-env`. A lista segura é: `TERM`, `COLORTERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `LANG`, `LC_*`, `TZ`, `NO_COLOR`, `USER`, `LOGNAME`, `SHELL`, `HOME`, `PATH` reconstruído e as variáveis XDG apontando para o HOME sintético. Com a opção `window`, entram também as variáveis gráficas que ela define.
 
 #### Scenario: Variável com segredo no terminal do usuário
 - **WHEN** o usuário tem uma variável de API key exportada no terminal e roda `sandmux run` sem `--pass-env`
 - **THEN** a variável não existe dentro do sandbox
 
 #### Scenario: Variáveis de sessão do desktop
-- **WHEN** o terminal do usuário tem `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY` e `WAYLAND_DISPLAY` definidas
+- **WHEN** o terminal do usuário tem `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY` e `WAYLAND_DISPLAY` definidas e a aba não tem a opção `window`
 - **THEN** nenhuma delas existe dentro do sandbox
 
 #### Scenario: Ambiente do processo pai

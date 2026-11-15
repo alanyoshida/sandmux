@@ -10,7 +10,7 @@
  ≡   1  shell:app   2  opencode:api ✕   3  hermes:notas   image pasted…   shell   ~/projetos/app   vault open   ! 1   1h 20m
 ```
 
-- **Last line, the bar:** in the block style (the default), the `≡` at the start opens the [menu](#menu). Each tab is a block with its position (the number used by the shortcuts), followed by the name and a mark: ✕ for ended (a click on it closes the tab), ‖ for stopped, (vault) for waiting for vault and ↻ for the gateway restarting, plus ✱ when there are [real keys](vault.md#automatic-move) moved or waiting. The active tab has its block highlighted. Notices show up in the middle. On the right, in colored blocks:
+- **Last line, the bar:** in the block style (the default), the `≡` at the start opens the [menu](#menu). Each tab is a block with its position (the number used by the shortcuts), followed by the name and a mark: ✕ for ended (a click on it closes the tab), ‖ for stopped, (vault) for waiting for vault and ↻ for the gateway restarting, plus ✱ when there are [real keys](vault.md#automatic-move) moved or waiting, and ▣ when the tab has a [window](window.md). The active tab has its block highlighted. Notices show up in the middle. On the right, in colored blocks:
   - the active tab's harness;
   - the active tab's folder, in a block of another color;
   - the vault state (open, locked or no vault);
@@ -184,7 +184,7 @@ Ctrl+b `e`, or "settings" in the menu, opens a full-screen page with the options
 | General | language (`auto`, which follows the system, `pt` or `en`; [config.md](config.md#language)); history on disk ([sessions.md](sessions.md#history-on-disk)); desktop notifications ([see below](#desktop-notifications)) |
 | Appearance | theme (with color samples), bar style and position, side panel |
 | Shortcuts | prefix key |
-| Sandbox | repo, KVM, GPU, clipboard, memory, processes, extra folders, `pass-env`, SSH keys, databases |
+| Sandbox | repo, KVM, GPU, window, clipboard, memory, processes, extra folders, `pass-env`, SSH keys, databases |
 | Network | mode, denylist, allowlist, catalogs, decryption, inbound ports, host ports |
 | Files | denied and allowed files, secret files |
 | MCP | denied and allowed servers |

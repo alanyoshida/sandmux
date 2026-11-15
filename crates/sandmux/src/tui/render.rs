@@ -301,7 +301,8 @@ fn tab_marks(t: &super::Tab) -> String {
         _ => "",
     };
     let keys = if t.keys.any() { " ✱" } else { "" };
-    format!("{mark}{net}{keys}")
+    let window = if t.window.is_on() { " ▣" } else { "" };
+    format!("{mark}{net}{keys}{window}")
 }
 
 /// O texto das chaves reais de uma aba, para o painel.

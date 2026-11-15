@@ -9,6 +9,7 @@
 pub mod files;
 pub mod lang;
 pub mod net;
+pub mod window;
 
 use std::path::{Component, Path, PathBuf};
 

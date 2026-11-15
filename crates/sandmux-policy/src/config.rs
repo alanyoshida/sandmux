@@ -18,6 +18,7 @@ use crate::host::Host;
 use crate::limits::{self, Limits, MemoryLimit, ProcessLimit};
 use crate::netcatalog;
 use sandmux_spec::net::{NetPolicy, Pattern, Rule, RuleKind};
+use sandmux_spec::window::WindowMode;
 use sandmux_spec::{tr, trf};
 
 /// Nome do arquivo dentro da pasta de configuração.
@@ -32,6 +33,8 @@ pub const LIMIT_KEYS: &[&str] = &["memory", "processes"];
 /// Chaves da rede: o modo, em qualquer seção; a retenção do registro, só em
 /// `[global]`.
 pub const NET_KEYS: &[&str] = &["network"];
+/// Janelas e áudio do desktop: `true`, `false` ou `"direct"`.
+pub const WINDOW_KEY: &str = "window";
 /// Listas da política de rede: padrões de destino, e os grupos do catálogo
 /// comum em `catalog`.
 pub const NET_LIST_KEYS: &[&str] = &[
@@ -192,6 +195,7 @@ pub struct Layer {
     pub memory: Option<MemoryLimit>,
     pub processes: Option<ProcessLimit>,
     pub network: Option<NetworkMode>,
+    pub window: Option<WindowMode>,
     pub deny: Vec<Pattern>,
     pub allow: Vec<Pattern>,
     pub allow_off: Vec<Pattern>,
@@ -300,6 +304,9 @@ impl Layer {
         }
         if let Some(n) = self.network {
             out.push(format!("network = \"{n}\""));
+        }
+        if let Some(w) = self.window {
+            out.push(format!("window = {}", w.toml()));
         }
         let pats = |v: &[Pattern]| v.iter().map(|p| p.to_string()).collect::<Vec<_>>();
         for (k, v) in [
@@ -1148,6 +1155,14 @@ fn layer_in(
                 let s = item.as_str().unwrap_or("");
                 l.network = Some(NetworkMode::parse(s).map_err(|m| err(vspan.clone(), m))?);
             }
+            "window" => {
+                let s = match (item.as_bool(), item.as_str()) {
+                    (Some(b), _) => b.to_string(),
+                    (None, Some(s)) => s.to_string(),
+                    _ => String::new(),
+                };
+                l.window = Some(WindowMode::parse(&s).map_err(|m| err(vspan.clone(), m))?);
+            }
             "deny" | "allow" | "allow-off" | "catalog-off" | "decrypt" => {
                 let mut out = Vec::new();
                 for (s, span) in strings(item, key, vspan.clone(), err)? {
@@ -1291,6 +1306,7 @@ fn layer_in(
                             .chain(BOOL_KEYS)
                             .chain(LIMIT_KEYS)
                             .chain(NET_KEYS)
+                            .chain([&WINDOW_KEY])
                             .chain(NET_LIST_KEYS)
                             .chain([&SSH_KEYS, &DB_KEY, &PORTS_KEY, &HOST_PORTS_KEY])
                             .chain(FILE_LIST_KEYS)
@@ -1860,6 +1876,7 @@ pub struct Effective {
     pub memory: LimitSetting<MemoryLimit>,
     pub processes: LimitSetting<ProcessLimit>,
     pub network: LimitSetting<NetworkMode>,
+    pub window: LimitSetting<WindowMode>,
     /// Todas as regras de rede, com a origem e o estado, inclusive as que o
     /// modo atual não usa (para `sandmux net rules`).
     pub net_rules: Vec<Rule>,
@@ -1904,6 +1921,10 @@ impl Effective {
         self.host_ports.clear();
         self.network = LimitSetting {
             value: NetworkMode::Inferencia,
+            origin: Origin::Default,
+        };
+        self.window = LimitSetting {
+            value: WindowMode::Off,
             origin: Origin::Default,
         };
         for p in a.all_providers().iter().filter(|p| !p.is_known()) {
@@ -2004,6 +2025,7 @@ impl Effective {
             tool_secrets: Vec::new(),
             ssh_agent_socket: None,
             ssh_servers: Vec::new(),
+            window: None,
             files_log: None,
             file_policy: Default::default(),
             file_policy_file: None,
@@ -2132,6 +2154,7 @@ pub fn value_label(key: &str, v: &str) -> String {
         ("network", "aberta") => "open",
         ("network", "inferencia") => "inference",
         ("network", "sem-rede") => "no network",
+        ("window", "direct") => "direct",
         ("style", "blocos") => "blocks",
         ("style", "simples") => "plain",
         ("theme", "padrao") => "default",
@@ -2311,6 +2334,10 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
             value: NetworkMode::Aberta,
             origin: Origin::Default,
         },
+        window: LimitSetting {
+            value: WindowMode::Off,
+            origin: Origin::Default,
+        },
         net_rules: Vec::new(),
         decrypt: Vec::new(),
         ssh_keys: Vec::new(),
@@ -2409,6 +2436,12 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
         if let Some(n) = l.network {
             eff.network = LimitSetting {
                 value: n,
+                origin: origin.clone(),
+            };
+        }
+        if let Some(w) = l.window {
+            eff.window = LimitSetting {
+                value: w,
                 origin: origin.clone(),
             };
         }
@@ -3188,5 +3221,43 @@ repo = true
             Origin::Project("/home/ana/proj".into()).to_string(),
             "modificada (projeto /home/ana/proj)"
         );
+    }
+
+    #[test]
+    fn janela_em_tres_estados_e_precedencia() {
+        let c = parse("[global]\nwindow = true\n[project.\"/p\"]\nwindow = \"direct\"\n").unwrap();
+        assert_eq!(c.global.window, Some(WindowMode::On));
+        assert!(c.global.describe().contains(&"window = true".to_string()));
+        let e = parse("[global]\nwindow = \"sim\"\n").unwrap_err();
+        assert!(e.message.contains("`window` precisa ser"), "{e}");
+        let e = parse("[global]\nwindow = 1\n").unwrap_err();
+        assert!(e.message.contains("`window` precisa ser"), "{e}");
+        let mut l = Layer {
+            window: Some(WindowMode::Direct),
+            ..Default::default()
+        };
+        assert!(l.describe().contains(&"window = \"direct\"".to_string()));
+        l.window = Some(WindowMode::Off);
+        assert!(l.describe().contains(&"window = false".to_string()));
+
+        // O projeto vence o global, e o `run` vence os dois; a aba de chat
+        // nunca tem janela.
+        let h = host(Path::new("/home/ana"));
+        let none = Layer::default();
+        let e = resolve(&c, &h, &req(Path::new("/w"), None, &none)).unwrap();
+        assert_eq!(e.window.value, WindowMode::On);
+        let e = resolve(&c, &h, &req(Path::new("/p"), None, &none)).unwrap();
+        assert_eq!(e.window.value, WindowMode::Direct);
+        let off = Layer {
+            window: Some(WindowMode::Off),
+            ..Default::default()
+        };
+        let e = resolve(&c, &h, &req(Path::new("/p"), None, &off)).unwrap();
+        assert_eq!(e.window.value, WindowMode::Off);
+        let mut r = req(Path::new("/w"), None, &none);
+        r.harness = crate::assistant::HARNESS;
+        assert_eq!(resolve(&c, &h, &r).unwrap().window.value, WindowMode::Off);
+        let e = resolve(&Config::default(), &h, &req(Path::new("/w"), None, &none)).unwrap();
+        assert_eq!(e.window.value, WindowMode::Off);
     }
 }

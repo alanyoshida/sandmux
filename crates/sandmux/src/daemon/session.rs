@@ -79,6 +79,8 @@ pub struct Session {
     pub ssh_agent: Option<super::sshagent::AgentSocket>,
     /// Socket do MCP de banco do lançamento atual.
     pub db: Option<super::db::DbSocket>,
+    /// Socket da janela do lançamento atual.
+    pub window: Option<crate::window::WindowSocket>,
     /// Proteção aplicada no último lançamento.
     pub policy: Option<sandmux_proto::msg::PolicySummary>,
     /// Lançamentos feitos, para numerar as etiquetas de rede.
@@ -146,6 +148,7 @@ impl Session {
             docker: None,
             ssh_agent: None,
             db: None,
+            window: None,
             policy: None,
             launches: 0,
             tags: Vec::new(),
@@ -181,6 +184,7 @@ impl Session {
                 ..Default::default()
             },
             group: self.group.clone(),
+            window: self.policy.as_ref().map(|p| p.window).unwrap_or_default(),
         }
     }
 
@@ -453,6 +457,7 @@ pub struct Spawned {
     pub docker: Option<super::docker::SessionSocket>,
     pub ssh_agent: Option<super::sshagent::AgentSocket>,
     pub db: Option<super::db::DbSocket>,
+    pub window: Option<crate::window::WindowSocket>,
     pub policy: sandmux_proto::msg::PolicySummary,
     /// Número deste lançamento na sessão e a etiqueta de rede dele.
     pub launch: u32,
@@ -682,6 +687,7 @@ pub fn spawn(
         docker,
         ssh_agent,
         db,
+        window: prepared.window,
         policy: prepared.summary,
         launch,
         tag,
@@ -824,6 +830,7 @@ fn spawn_enter(
         docker: None,
         ssh_agent: None,
         db: None,
+        window: None,
         policy,
         launch,
         policy_file: super::net::policy_path(&tag),
@@ -1002,6 +1009,7 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
         docker,
         ssh_agent,
         db,
+        window,
         policy,
         launch,
         tag,
@@ -1021,6 +1029,7 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
             s.docker = docker;
             s.ssh_agent = ssh_agent;
             s.db = db;
+            s.window = window;
             s.policy = Some(policy);
             s.launches = s.launches.max(launch);
             if let Some(old) = s.policy_file.take() {
@@ -1261,6 +1270,7 @@ fn reader(shared: Arc<Shared>, id: u32, pid: i32, master: Arc<File>, mut child: 
         s.docker = None;
         s.ssh_agent = None;
         s.db = None;
+        s.window = None;
         if let Some(f) = s.policy_file.take() {
             let _ = std::fs::remove_file(f);
         }

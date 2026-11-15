@@ -34,6 +34,42 @@ pub fn host_nameservers(host: &Host) -> Vec<String> {
 
 /// Onde o socket do Docker privado aparece dentro do sandbox.
 pub const DOCKER_SOCKET: &str = "/run/sandmux/docker.sock";
+
+/// Sockets do desktop que a opção `window` leva ao sandbox, já resolvidos
+/// no host: o do compositor (o da aba, pelo security-context, ou o comum) e
+/// os do áudio, quando existem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowMounts {
+    pub wayland: PathBuf,
+    pub pipewire: Option<PathBuf>,
+    pub pulse: Option<PathBuf>,
+}
+
+/// `XDG_RUNTIME_DIR` dentro do sandbox, com a opção `window`.
+pub fn window_runtime_dir(uid: u32) -> PathBuf {
+    PathBuf::from(format!("/run/user/{uid}"))
+}
+
+/// Variáveis da opção `window`: o Wayland e as dicas para os toolkits o
+/// usarem. Nunca `DISPLAY`.
+pub fn window_env(uid: u32) -> Vec<(String, String)> {
+    [
+        (
+            "XDG_RUNTIME_DIR",
+            window_runtime_dir(uid).to_string_lossy().into_owned(),
+        ),
+        ("WAYLAND_DISPLAY", "wayland-0".into()),
+        ("XDG_SESSION_TYPE", "wayland".into()),
+        ("GDK_BACKEND", "wayland".into()),
+        ("QT_QPA_PLATFORM", "wayland".into()),
+        ("MOZ_ENABLE_WAYLAND", "1".into()),
+        ("ELECTRON_OZONE_PLATFORM_HINT", "wayland".into()),
+        ("SDL_VIDEODRIVER", "wayland".into()),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect()
+}
 /// Caminho do socket do agente SSH dentro do sandbox.
 pub const SSH_AGENT_SOCKET: &str = "/run/sandmux/ssh-agent.sock";
 /// Socket do MCP de banco e o repassador, dentro do sandbox.
@@ -77,6 +113,8 @@ pub struct RunOptions {
     pub ssh_agent_socket: Option<PathBuf>,
     /// Servidores das chaves SSH escolhidas, para o `known_hosts` da sessão.
     pub ssh_servers: Vec<String>,
+    /// Sockets do desktop (`window`), quando a opção está ligada.
+    pub window: Option<WindowMounts>,
     /// Pasta do registro de arquivos (`None`: sem registro).
     pub files_log: Option<PathBuf>,
     /// Política de arquivos compilada e o arquivo que o daemon regrava.
@@ -142,6 +180,7 @@ impl RunOptions {
             docker_socket: None,
             ssh_agent_socket: None,
             ssh_servers: Vec::new(),
+            window: None,
             files_log: None,
             file_policy: Default::default(),
             file_policy_file: None,
@@ -865,6 +904,19 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     if let Some(sock) = &opts.docker_socket {
         b.bind(sock, Path::new(DOCKER_SOCKET), true);
     }
+    // Janela: uma pasta privada em memória como `XDG_RUNTIME_DIR`, com o
+    // socket do compositor e os do áudio.
+    if let Some(w) = &opts.window {
+        let rt = window_runtime_dir(host.uid);
+        b.tmpfs(&rt.to_string_lossy(), 0o700);
+        b.bind(&w.wayland, &rt.join("wayland-0"), true);
+        if let Some(p) = &w.pipewire {
+            b.bind(p, &rt.join("pipewire-0"), true);
+        }
+        if let Some(p) = &w.pulse {
+            b.bind(p, &rt.join("pulse/native"), true);
+        }
+    }
     // MCP de banco: o socket do daemon e o repassador, em somente leitura.
     if let (Some(sock), Some(bin)) = (&opts.db_socket, &opts.db_mcp) {
         b.bind(sock, Path::new(DB_SOCKET), true);
@@ -938,6 +990,9 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     }
     if opts.ssh_agent_socket.is_some() {
         env.push(("SSH_AUTH_SOCK".into(), SSH_AGENT_SOCKET.into()));
+    }
+    if opts.window.is_some() {
+        env.extend(window_env(host.uid));
     }
     let db = opts.db_socket.is_some() && opts.db_mcp.is_some();
     if db {
@@ -1736,6 +1791,67 @@ mod docker_view_tests {
         assert!(c.spec.landlock.write.iter().any(|w| w == mnt));
         o.folders[0].path = home.clone();
         assert!(compose(&h, &o).is_err(), "o HOME é perigoso");
+    }
+
+    #[test]
+    fn janela_monta_os_sockets_e_as_variaveis() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let (sys, home) = (base.join("sys"), base.join("home"));
+        std::fs::create_dir_all(sys.join("etc")).unwrap();
+        std::fs::create_dir_all(home.join("proj")).unwrap();
+        let h = rede_host(&sys, &home);
+        std::fs::create_dir_all(Layout::new(&h.data_dir).home("shell")).unwrap();
+        let mut o = RunOptions::new("shell");
+        o.layer = LayerMode::ReadOnlyFallback;
+        let c = compose(&h, &o).unwrap();
+        for k in [
+            "WAYLAND_DISPLAY",
+            "XDG_RUNTIME_DIR",
+            "DISPLAY",
+            "GDK_BACKEND",
+        ] {
+            assert_eq!(c.spec.env_value(k), None, "{k}");
+        }
+        let rt = window_runtime_dir(h.uid);
+        assert!(!c.spec.mounts.iter().any(|m| m.dest().starts_with(&rt)));
+        o.window = Some(WindowMounts {
+            wayland: base.join("wl.sock"),
+            pipewire: Some(base.join("pw.sock")),
+            pulse: None,
+        });
+        let c = compose(&h, &o).unwrap();
+        assert_eq!(c.spec.env_value("WAYLAND_DISPLAY"), Some("wayland-0"));
+        assert_eq!(
+            c.spec.env_value("XDG_RUNTIME_DIR"),
+            Some(rt.to_str().unwrap())
+        );
+        assert_eq!(c.spec.env_value("QT_QPA_PLATFORM"), Some("wayland"));
+        assert_eq!(c.spec.env_value("DISPLAY"), None);
+        let binds: Vec<(PathBuf, PathBuf)> = c
+            .spec
+            .mounts
+            .iter()
+            .filter_map(|m| match m {
+                Mount::Bind { source, dest, .. } if dest.starts_with(&rt) => {
+                    Some((source.clone(), dest.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            binds,
+            [
+                (base.join("wl.sock"), rt.join("wayland-0")),
+                (base.join("pw.sock"), rt.join("pipewire-0")),
+            ]
+        );
+        assert!(
+            c.spec
+                .mounts
+                .iter()
+                .any(|m| matches!(m, Mount::Tmpfs { dest, mode: 0o700 } if *dest == rt))
+        );
     }
 
     #[test]

@@ -35,6 +35,7 @@ pass-env = ["OPENROUTER_API_KEY"]
 | `kvm` | true or false | `--kvm` / `--no-kvm` |
 | `gpu` | true or false | `--gpu` / `--no-gpu` |
 | `clipboard` | true or false | `--allow-clipboard` / `--no-allow-clipboard` |
+| `window` | true, false or `"direct"` | `--window` / `--window-direct` / `--no-window` (see [window.md](window.md)) |
 | `memory` | text: `"50%"`, `"16G"` or `"max"` | `--memory` (see [limits.md](limits.md)) |
 | `processes` | number or `"max"` | `--processes` |
 | `network` | `"aberta"`, `"inferencia"`, `"custom"` or `"sem-rede"` | `--network` (see [network.md](network.md)) |

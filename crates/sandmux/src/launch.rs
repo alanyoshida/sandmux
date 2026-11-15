@@ -124,6 +124,8 @@ pub struct Prepared {
     pub net_policy: Option<sandmux_spec::net::NetPolicy>,
     /// Descrição do escopo.
     scope_name: String,
+    /// Socket da janela da aba, que precisa viver enquanto ela vive.
+    pub window: Option<crate::window::WindowSocket>,
 }
 
 impl Prepared {
@@ -179,6 +181,13 @@ impl Prepared {
 /// vazio se não existir (a pergunta da importação é feita antes, por quem
 /// tem terminal).
 pub fn prepare(host: &Host, opts: &LaunchOptions) -> Result<Prepared> {
+    // O repassador do Wayland vive no daemon.
+    if effective(host, opts)?.window.value.is_on() {
+        bail!(tr!(
+            "a janela só funciona nas abas do daemon: rode num terminal ou abra pela TUI",
+            "the window only works in daemon tabs: run it in a terminal or open it from the TUI"
+        ));
+    }
     prepare_with(
         host,
         opts,
@@ -362,6 +371,8 @@ pub fn prepare_with(
     run.tool_secrets = vault.tool_secrets;
     run.ssh_agent_socket = vault.ssh_agent_socket;
     run.ssh_servers = vault.ssh_servers;
+    let window = crate::window::open(eff.window.value, &host.env, net_tag)?;
+    run.window = window.as_ref().map(|w| w.mounts.clone());
     if let Some(sock) = vault.db_socket {
         // O repassador fica ao lado do `sandmux-run`.
         let bin = runner_path().with_file_name("sandmux-db-mcp");
@@ -452,6 +463,7 @@ pub fn prepare_with(
         memory_max: limits.and_then(|l| l.memory),
         processes_max: limits.and_then(|l| l.processes),
         network: eff.network.value.describe().into(),
+        window: eff.window.value,
     };
     for d in &composed.dirs_to_create {
         if d.starts_with(&host.data_dir) {
@@ -485,6 +497,7 @@ pub fn prepare_with(
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "/".into())
         ),
+        window: window.and_then(|w| w.socket),
     })
 }
 
@@ -603,6 +616,7 @@ pub fn run_layer(opts: &LaunchOptions) -> Result<config::Layer> {
     };
     Ok(config::Layer {
         network,
+        window: opts.window,
         deny: pats(&opts.deny, "--deny")?,
         allow: pats(&opts.allow, "--allow")?,
         allow_off: vec![],

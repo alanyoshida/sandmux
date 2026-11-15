@@ -199,6 +199,7 @@ pub fn home() -> PathBuf {
 
 pub mod cli;
 pub mod pty;
+pub mod wayland;
 
 /// Roda um comando cuja preparação cria um user namespace no processo de
 /// teste, que não tem perfil AppArmor. Com a restrição do AppArmor ligada,

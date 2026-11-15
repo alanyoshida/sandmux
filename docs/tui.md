@@ -8,7 +8,7 @@
  ≡   1  shell:app   2  opencode:api ✕   3  hermes:notas   imagem colada…   shell   ~/projetos/app   cofre aberto   ! 1   1h 20m
 ```
 
-- **Última linha, a barra:** no estilo em blocos (o padrão), o `≡` do começo abre o [menu](#menu). Cada aba é um bloco com a posição (o número dos atalhos), seguido do nome e de uma marca: ✕ para encerrada (um clique nele fecha a aba), ‖ para parada, (cofre) para aguardando cofre e ↻ para o gateway reiniciando, e ✱ quando há [chaves reais](vault.md#movimento-automático) movidas ou esperando. A aba ativa tem o bloco em destaque. No meio aparecem os avisos. À direita, em blocos coloridos:
+- **Última linha, a barra:** no estilo em blocos (o padrão), o `≡` do começo abre o [menu](#menu). Cada aba é um bloco com a posição (o número dos atalhos), seguido do nome e de uma marca: ✕ para encerrada (um clique nele fecha a aba), ‖ para parada, (cofre) para aguardando cofre e ↻ para o gateway reiniciando, ✱ quando há [chaves reais](vault.md#movimento-automático) movidas ou esperando, e ▣ quando a aba tem [janela](window.md). A aba ativa tem o bloco em destaque. No meio aparecem os avisos. À direita, em blocos coloridos:
   - o harness da aba ativa;
   - a pasta da aba ativa, num bloco de outra cor;
   - o estado do cofre (aberto, trancado ou sem cofre);
@@ -182,7 +182,7 @@ Ctrl+b `e`, ou "configurações" no menu, abre uma página de tela cheia com as 
 | Geral | idioma (`auto`, que segue o sistema, `pt` ou `en`; [config.md](config.md#idioma)); histórico em disco ([sessions.md](sessions.md#histórico-em-disco)); notificações do desktop ([veja abaixo](#notificações-do-desktop)) |
 | Aparência | tema (com amostras de cor), estilo e posição da barra, painel lateral |
 | Atalhos | tecla de prefixo |
-| Sandbox | repo, KVM, GPU, clipboard, memória, processos, pastas extras, `pass-env`, chaves SSH, bancos |
+| Sandbox | repo, KVM, GPU, janela, clipboard, memória, processos, pastas extras, `pass-env`, chaves SSH, bancos |
 | Rede | modo, denylist, allowlist, catálogos, decifração, portas de entrada, portas do host |
 | Arquivos | arquivos negados e liberados, arquivos de segredo |
 | MCP | servidores negados e liberados |
