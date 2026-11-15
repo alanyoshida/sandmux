@@ -308,6 +308,8 @@ async fn tcp(mut s: ipstack::IpStackTcpStream, st: Arc<State>) {
             ip: ip.clone(),
             port: dst.port(),
             injections,
+            vault: st.vault.clone(),
+            tag: st.tag.clone(),
         });
         let guest = mitm::Prefixed::new(first, s);
         let (read, written) = (guest.read.clone(), guest.written.clone());

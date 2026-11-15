@@ -154,3 +154,17 @@ Com `--pass-env`, o harness MUST conseguir chamar o modelo usando a chave passad
 #### Scenario: Sem chave
 - **WHEN** o usuário roda um harness sem `--pass-env` depois de importar
 - **THEN** o harness inicia e a chamada ao modelo falha por credencial inválida, sem que nenhuma chave real exista no sandbox
+
+### Requirement: Preset do Claude Code
+O preset `claude` MUST rodar o Claude Code instalado no host (`~/.local/bin/claude`, com a instalação em `~/.local/share/claude`) em somente leitura, com a atualização automática desligada. Sem a instalação, o `run` MUST terminar com a dica de instalar. A importação MUST copiar `~/.claude.json` e as configurações, agentes, comandos, skills, hooks e plugins de `~/.claude`, e MUST deixar de fora `~/.claude/.credentials.json`, as conversas e os caches.
+
+#### Scenario: Importação sem o token do host
+- **WHEN** o usuário importa o Claude Code, e `~/.claude/.credentials.json` existe
+- **THEN** o HOME sintético tem `settings.json` e `.claude.json`, e não tem `.credentials.json`
+
+### Requirement: Preset do oh-my-pi
+O preset `omp` MUST rodar o binário `~/.local/bin/omp` do host em somente leitura e MUST receber as chaves falsas dos provedores com segredo no cofre por variável de ambiente. Sem o binário, o `run` MUST terminar com a dica de instalar. A importação MUST copiar o `config.yml` e as pastas de extensões, agentes, regras e skills de `~/.omp/agent`, e MUST deixar de fora o `agent.db` (credenciais), os outros bancos, as sessões e os caches.
+
+#### Scenario: Importação sem o banco de credenciais
+- **WHEN** o usuário importa o oh-my-pi, e `~/.omp/agent/agent.db` existe
+- **THEN** o HOME sintético tem `~/.omp/agent/config.yml` e as extensões, e não tem `agent.db`

@@ -36,10 +36,13 @@ fn run(e: &Env, args: &[&str]) -> std::process::Output {
 #[test]
 fn preset_desconhecido_lista_os_disponiveis() {
     let e = Env::new();
-    let out = run(&e, &["run", "claude"]);
+    let out = run(&e, &["run", "inexistente"]);
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
-    assert!(err.contains("opencode, hermes, shell"), "{err}");
+    assert!(
+        err.contains("opencode, hermes, claude, omp, shell"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -306,4 +309,84 @@ fn docker_do_host_nao_e_alcancado() {
     let e = Env::new();
     let out = e.shell(&[], "ls /var/run/docker.sock /run/docker.sock 2>/dev/null || echo sem-socket; docker ps >/dev/null 2>&1 && echo alcancou || echo negado");
     assert_eq!(stdout(&out), "sem-socket\nnegado\n");
+}
+
+fn fake_claude(e: &Env) {
+    let real = e.home.join(".local/share/claude/versions/9.9.9");
+    exe(&real, "exec \"$@\"");
+    std::fs::create_dir_all(e.home.join(".local/bin")).unwrap();
+    std::os::unix::fs::symlink(&real, e.home.join(".local/bin/claude")).unwrap();
+    std::fs::create_dir_all(e.home.join(".claude/projects/x")).unwrap();
+    std::fs::write(e.home.join(".claude/settings.json"), "{\"theme\":\"dark\"}").unwrap();
+    std::fs::write(
+        e.home.join(".claude/.credentials.json"),
+        "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-REAL\"}}",
+    )
+    .unwrap();
+    std::fs::write(e.home.join(".claude/projects/x/conversa.jsonl"), "{}").unwrap();
+    std::fs::write(e.home.join(".claude.json"), "{\"numStartups\":3}").unwrap();
+}
+
+#[test]
+fn claude_sem_o_token_do_host_e_atualizacao_desligada() {
+    let e = Env::new();
+    // Sem a instalação: a dica de instalar.
+    let out = run(&e, &["run", "claude"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("claude.ai/install.sh"),
+        "{}",
+        stderr(&out)
+    );
+    fake_claude(&e);
+    let out = run(
+        &e,
+        &[
+            "run",
+            "claude",
+            "--import",
+            "--",
+            "sh",
+            "-c",
+            "test -e ~/.claude/.credentials.json && echo TEM || echo SEM; test -e ~/.claude/settings.json && echo SET; test -e ~/.claude.json && echo JSON; test -e ~/.claude/projects && echo CONVERSAS || echo SEM-CONVERSAS; echo $DISABLE_AUTOUPDATER",
+        ],
+    );
+    assert_eq!(
+        stdout(&out),
+        "SEM\nSET\nJSON\nSEM-CONVERSAS\n1\n",
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn omp_sem_os_bancos_e_com_a_chave_falsa() {
+    let e = Env::new();
+    let out = run(&e, &["run", "omp"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("oh-my-pi"), "{}", stderr(&out));
+    exe(&e.home.join(".local/bin/omp"), "exec \"$@\"");
+    std::fs::create_dir_all(e.home.join(".omp/agent/extensions")).unwrap();
+    std::fs::write(e.home.join(".omp/agent/config.yml"), "theme:\n  dark: x\n").unwrap();
+    std::fs::write(e.home.join(".omp/agent/extensions/e.ts"), "//").unwrap();
+    std::fs::write(e.home.join(".omp/agent/agent.db"), "CREDENCIAIS").unwrap();
+    std::fs::write(e.home.join(".omp/agent/history.db"), "H").unwrap();
+    let out = run(
+        &e,
+        &[
+            "run",
+            "omp",
+            "--import",
+            "--",
+            "sh",
+            "-c",
+            "cd ~/.omp/agent; ls; echo x > ~/.local/bin/omp 2>/dev/null && echo ALTEROU || echo NEGADO",
+        ],
+    );
+    assert_eq!(
+        stdout(&out),
+        "config.yml\nextensions\nNEGADO\n",
+        "{}",
+        stderr(&out)
+    );
 }

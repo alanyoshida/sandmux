@@ -8,7 +8,7 @@ use crate::PolicyError;
 use crate::host::Host;
 
 /// Nomes dos presets, na ordem em que aparecem nas mensagens.
-pub const PRESETS: &[&str] = &["opencode", "hermes", "shell"];
+pub const PRESETS: &[&str] = &["opencode", "hermes", "claude", "omp", "shell"];
 
 /// O que um preset acrescenta à baseline.
 #[derive(Debug, Clone, Default)]
@@ -29,7 +29,7 @@ pub fn exists(name: &str) -> bool {
 
 /// O preset tem estado real que pode ser importado.
 pub fn importable(name: &str) -> bool {
-    matches!(name, "opencode" | "hermes")
+    matches!(name, "opencode" | "hermes" | "claude" | "omp")
 }
 
 /// Shell de sistema para o sandbox: o do usuário quando está nas pastas de
@@ -155,7 +155,7 @@ pub fn tools_for(domains: &[String]) -> Vec<String> {
 }
 
 /// Os harnesses que recebem as chaves falsas dos provedores.
-pub const FAKE_KEY_HARNESSES: &[&str] = &["opencode", "hermes", "chat"];
+pub const FAKE_KEY_HARNESSES: &[&str] = &["opencode", "hermes", "omp", "chat"];
 
 /// Configuração injetada no opencode para que a chave passada por
 /// `--pass-env` vença o valor falso do `auth.json` importado.
@@ -259,6 +259,58 @@ pub fn plan(
                 layered,
                 env: vec![],
                 command: std::iter::once(wrapper.to_string_lossy().into_owned())
+                    .chain(args.iter().cloned())
+                    .collect(),
+                shell: system_shell(host),
+            })
+        }
+        "claude" => {
+            // Instalação nativa: o link em ~/.local/bin aponta para a versão
+            // em ~/.local/share/claude/versions.
+            let link = host.h(".local/bin/claude");
+            let share = host.h(".local/share/claude");
+            let exe = std::fs::canonicalize(&link).unwrap_or_else(|_| link.clone());
+            if !executable(&exe) || !exe.starts_with(&share) {
+                return Err(PolicyError::NotInstalled {
+                    harness: name.into(),
+                    searched: vec![link, share],
+                    hint: sandmux_spec::tr!(
+                        "instale o Claude Code no host com: curl -fsSL https://claude.ai/install.sh | bash",
+                        "install Claude Code on the host with: curl -fsSL https://claude.ai/install.sh | bash"
+                    )
+                    .into(),
+                });
+            }
+            Ok(PresetPlan {
+                mounts: vec![ro(&share)],
+                layered: vec![],
+                env: vec![("DISABLE_AUTOUPDATER".to_string(), "1".to_string())],
+                command: std::iter::once(exe.to_string_lossy().into_owned())
+                    .chain(args.iter().cloned())
+                    .collect(),
+                shell: system_shell(host),
+            })
+        }
+        "omp" => {
+            // oh-my-pi: um binário só; a biblioteca nativa é extraída no
+            // HOME sintético na primeira execução.
+            let exe = host.h(".local/bin/omp");
+            if !executable(&exe) {
+                return Err(PolicyError::NotInstalled {
+                    harness: name.into(),
+                    searched: vec![exe],
+                    hint: sandmux_spec::tr!(
+                        "instale o oh-my-pi no host seguindo a documentação do projeto (o binário omp em ~/.local/bin)",
+                        "install oh-my-pi on the host following the project's documentation (the omp binary in ~/.local/bin)"
+                    )
+                    .into(),
+                });
+            }
+            Ok(PresetPlan {
+                mounts: vec![ro(&exe)],
+                layered: vec![],
+                env: vec![],
+                command: std::iter::once(exe.to_string_lossy().into_owned())
                     .chain(args.iter().cloned())
                     .collect(),
                 shell: system_shell(host),

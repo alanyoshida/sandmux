@@ -517,6 +517,13 @@ pub enum Msg {
     VaultInject {
         tag: String,
     },
+    /// Tokens reais capturados numa resposta de login (papel e valor), do
+    /// gateway de um lançamento ao daemon, que os guarda e devolve os falsos
+    /// (protocolo 26).
+    VaultCapture {
+        tag: String,
+        items: Vec<(String, String)>,
+    },
 
     /// O cofre e a chave do host de um provedor, para o chat (protocolo 20).
     ChatCheck {
@@ -597,6 +604,10 @@ pub enum Msg {
     /// Resposta ao `Ask`.
     Answer {
         text: String,
+    },
+    /// Resposta ao `VaultCapture`: os falsos, na ordem dos itens.
+    Captured {
+        fakes: Vec<String>,
     },
     /// Resposta ao `ListModels`: `provedor/modelo` e os avisos dos
     /// provedores que falharam.
