@@ -6,7 +6,9 @@ The chat tab talks to a model whose key is in the [vault](vault.md), without ope
 
 ## Opening a conversation
 
-In the TUI, Ctrl+b `i` opens the chat modal:
+In the TUI, Ctrl+b `i` opens the chat modal. It also opens from the `chat` choice of the new tab modal (Ctrl+b `c`) and from the menu (Ctrl+b `:`).
+
+The chat modal has two fields:
 
 - **message:** the first question;
 - **model:** starts with `chat-model` from `[assistant]`. The ↑ ↓ arrows go through the models in `models`, → opens the [providers' list](#model-list), and any other name can be typed.

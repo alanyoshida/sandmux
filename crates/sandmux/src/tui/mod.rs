@@ -213,8 +213,14 @@ pub struct NewTab {
 }
 
 impl NewTab {
+    /// Escolhas do modal: os harnesses e, por último, o chat.
+    pub const KINDS: usize = presets::PRESETS.len() + 1;
+
     pub fn harness(&self) -> &'static str {
-        presets::PRESETS[self.harness % presets::PRESETS.len()]
+        presets::PRESETS
+            .get(self.harness % Self::KINDS)
+            .copied()
+            .unwrap_or("chat")
     }
 }
 
@@ -1488,6 +1494,11 @@ impl App {
         let Some(Modal::New(n)) = &self.modal else {
             return;
         };
+        // O chat não é harness: abre o modal de chat, que cria a aba.
+        if n.harness() == "chat" {
+            self.open_chat();
+            return;
+        }
         let harness = n.harness().to_string();
         let workdir = sandmux::launch::absolute(std::path::Path::new(n.workdir.trim()), &self.cwd);
         let profile = Some(n.profile.trim().to_string()).filter(|p| !p.is_empty());
@@ -1945,12 +1956,9 @@ impl App {
                     Key::Tab | Key::Down => n.field = (n.field + 1) % 3,
                     Key::Up => n.field = (n.field + 2) % 3,
                     Key::Left if n.field == 0 => {
-                        n.harness =
-                            (n.harness + presets::PRESETS.len() - 1) % presets::PRESETS.len()
+                        n.harness = (n.harness + NewTab::KINDS - 1) % NewTab::KINDS
                     }
-                    Key::Right if n.field == 0 => {
-                        n.harness = (n.harness + 1) % presets::PRESETS.len()
-                    }
+                    Key::Right if n.field == 0 => n.harness = (n.harness + 1) % NewTab::KINDS,
                     Key::Enter => self.create(None),
                     Key::Backspace => {
                         match n.field {

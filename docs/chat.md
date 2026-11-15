@@ -4,7 +4,9 @@ A aba de chat conversa com um modelo cuja chave está no [cofre](vault.md), sem 
 
 ## Abrir uma conversa
 
-Na TUI, Ctrl+b `i` abre o modal de chat:
+Na TUI, Ctrl+b `i` abre o modal de chat. Ele também abre pela escolha `chat` do modal de nova aba (Ctrl+b `c`) e pelo menu (Ctrl+b `:`).
+
+O modal de chat tem dois campos:
 
 - **mensagem:** a primeira pergunta;
 - **modelo:** começa com `chat-model` de `[assistant]`. As setas ↑ ↓ passam pelos modelos de `models`, → abre a [lista dos provedores](#lista-de-modelos), e qualquer outro nome pode ser escrito.
