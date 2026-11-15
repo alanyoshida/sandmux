@@ -1,24 +1,18 @@
-sandmux 0.1.7, antes da v1: grupos de abas.
+sandmux 0.1.8, antes da v1: daemon no boot.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Grupos de abas,** como as sessões do tmux. Toda aba pertence a um grupo, e cada TUI mostra um grupo por vez:
-  - `sandmux run <harness> --group estudos` cria a aba no grupo; sem `--group`, ela vai para o `principal`, onde também ficam as abas que já existiam;
-  - `sandmux ls` ganha a coluna GRUPO, e `--group` filtra;
-  - `sandmux group list`, `group move <id> <grupo>` e `group rename <grupo> <novo>`;
-  - `sandmux tui --group estudos` abre a TUI no grupo.
+- **Daemon no boot:** `sandmux daemon boot on` liga o linger do systemd para o seu usuário (`loginctl enable-linger`, sem sudo), e o daemon passa a subir no boot, sem login.
+  - `sandmux daemon boot off` desliga, e `sandmux daemon boot`, `daemon status` e `doctor` mostram o estado.
+  - No boot, sem ninguém logado, nenhuma aba volta: elas ficam **aguardando o login**, e o daemon não consulta o keyring, que está trancado.
+  - No primeiro login, as abas voltam sozinhas, o daemon tenta abrir o cofre pelo keyring e avisa no desktop as que continuam esperando o cofre.
+  - Com o linger já ligado, isso vale também para quem não roda o comando.
 
-  Na TUI:
-  - Ctrl+b `(` e `)` trocam de grupo, e as abas do grupo que sai continuam vivas;
-  - Ctrl+b `G` abre a lista de grupos: Enter troca, `n` cria, `r` renomeia, `m` leva a aba ativa;
-  - uma aba nova vai para o grupo atual;
-  - duas janelas podem mostrar grupos diferentes.
+  Detalhes em [docs/sessions.md](https://github.com/alanyoshida/sandmux/blob/main/docs/sessions.md#início-no-boot).
 
-  Um grupo existe enquanto tem abas, e volta com elas depois de um reboot. Detalhes em [docs/sessions.md](https://github.com/alanyoshida/sandmux/blob/main/docs/sessions.md#grupos-de-abas).
-
-Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 30).
+Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 31).
 
 ## Instalar
 
