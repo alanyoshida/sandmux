@@ -29,7 +29,7 @@ pub fn exists(name: &str) -> bool {
 
 /// O preset tem estado real que pode ser importado.
 pub fn importable(name: &str) -> bool {
-    matches!(name, "opencode" | "hermes" | "claude" | "omp")
+    matches!(name, "opencode" | "hermes" | "claude" | "omp" | "shell")
 }
 
 /// Shell de sistema para o sandbox: o do usuário quando está nas pastas de

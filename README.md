@@ -85,7 +85,7 @@ O `setup` instala o perfil do AppArmor do lançador quando a distro restringe us
 | `sandmux restart <id>` | Relança uma sessão encerrada ou parada, na mesma pasta e com as mesmas opções |
 | `sandmux daemon status`, `stop`, `restart`, `disable`, `boot` | Estado do daemon; parar (as sessões vivas voltam na próxima subida); reiniciar com o binário instalado; parar e remover a unidade systemd; subir no boot, sem login, com as abas voltando no primeiro login ([docs/sessions.md](docs/sessions.md#início-no-boot)) |
 | `sandmux config show`, `list`, `set`, `unset`, `add`, `remove` | Mostra a política efetiva com a origem de cada valor, lista os perfis e altera o arquivo de configuração (`~/.config/sandmux/config.toml`) |
-| `sandmux import <harness>` | Copia a configuração existente do harness para o HOME sintético, trocando os segredos por valores falsos. Rodado de novo, copia só o que é novo; `--overwrite` substitui |
+| `sandmux import <harness>` | Copia a configuração existente do harness para o HOME sintético, trocando os segredos por valores falsos. Rodado de novo, copia só o que é novo; `--overwrite` substitui. No `shell`, traz o `.bashrc`, o `.zshrc` e afins do shell em uso, com o framework ([docs/sessions.md](docs/sessions.md#configuração-do-shell)) |
 | `sandmux update <harness>` | Roda o atualizador oficial do harness no host, fora do sandbox, e diz quais abas reiniciar ([docs/sessions.md](docs/sessions.md#atualizar-o-harness)) |
 | `sandmux doctor --fix` | Leva para o cofre as chaves reais gravadas dentro do sandbox (o "Connect provider" do opencode, por exemplo), deixando valores falsos no lugar |
 | `sandmux doctor` | Mostra se a máquina tem o suporte necessário e o que falta |

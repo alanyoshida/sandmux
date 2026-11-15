@@ -85,7 +85,7 @@ sandmux setup
 | `sandmux restart <id>` | Relaunches an ended or stopped session, in the same folder and with the same options |
 | `sandmux daemon status`, `stop`, `restart`, `disable`, `boot` | Daemon state; stop (live sessions come back on the next start); restart with the installed binary; stop and remove the systemd unit; start at boot, without a login, with the tabs coming back at the first login ([docs/en/sessions.md](docs/en/sessions.md#start-at-boot)) |
 | `sandmux config show`, `list`, `set`, `unset`, `add`, `remove` | Shows the effective policy with the origin of each value, lists the profiles and changes the configuration file (`~/.config/sandmux/config.toml`) |
-| `sandmux import <harness>` | Copies the harness's existing configuration into the synthetic HOME, replacing the secrets with fake values. Run again, it copies only what is new; `--overwrite` replaces |
+| `sandmux import <harness>` | Copies the harness's existing configuration into the synthetic HOME, replacing the secrets with fake values. Run again, it copies only what is new; `--overwrite` replaces. For `shell`, it brings the `.bashrc`, `.zshrc` and the like of the shell in use, with its framework ([docs/en/sessions.md](docs/en/sessions.md#shell-configuration)) |
 | `sandmux update <harness>` | Runs the harness's official updater on the host, outside the sandbox, and says which tabs to restart ([docs/en/sessions.md](docs/en/sessions.md#updating-the-harness)) |
 | `sandmux doctor --fix` | Moves into the vault the real keys written inside the sandbox (opencode's "Connect provider", for example), leaving fake values in their place |
 | `sandmux doctor` | Shows whether the machine has the required support and what is missing |

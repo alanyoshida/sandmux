@@ -1810,12 +1810,14 @@ impl App {
                     (true, Some(true)) => {
                         let synthetic = layout.home(&harness);
                         home::ensure(&host, &layout, &harness)?;
+                        // No `shell`, a importação substitui o arquivo mínimo
+                        // gerado.
                         sandmux_import::import(
                             &harness,
                             &host.home,
                             &synthetic,
                             &layout.manifest(&harness),
-                            false,
+                            harness == "shell",
                         )?;
                         if harness == "hermes" {
                             sandmux_policy::hermes_config::ensure_update_check_off(&synthetic)?;
