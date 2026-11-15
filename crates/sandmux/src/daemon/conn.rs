@@ -263,6 +263,12 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 let r = r.and_then(|()| super::keyring::after_passwd(shared, &new));
                 reply_unit(&mut stream, r)?;
             }
+            Msg::Focus { focused, active } => {
+                if let Some(pid) = super::peer_pid(&stream) {
+                    shared.notify.set_focus(pid, focused, active);
+                }
+                write_control(&mut stream, &Msg::Ok)?;
+            }
             Msg::KeyringStatus => {
                 write_control(&mut stream, &super::keyring::status(shared))?;
             }

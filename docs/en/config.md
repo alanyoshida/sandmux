@@ -56,6 +56,7 @@ pass-env = ["OPENROUTER_API_KEY"]
 | `ssh-keys` | list of names of SSH keys from the [vault](vault.md#ssh-keys) that the session's SSH agent may use; `"*"` allows all of them | `--ssh-key` |
 | `net-log-days` | number of days, only in `[global]` | (retention of the network log, default 30) |
 | `net-log-max` | size, such as `"500M"`, only in `[global]` | (cap of the network log, default `"500M"`) |
+| `notify` | `true` or `false`, only in `[global]` | (desktop notifications: blocks, real keys, ended tabs; default `true`; [tui.md](tui.md#desktop-notifications)) |
 | `language` | `"pt"` or `"en"`, only in `[global]` | (language of sandmux: TUI, command line and messages; without the key, the system's; [see below](#language)) |
 
 - **Paths:** absolute or starting with `~/`.
@@ -113,7 +114,7 @@ The command:
 
 A new file is created with mode 600 and the folder with 700.
 
-The [TUI settings page](tui.md#settings) (Ctrl+b `e`) writes through the same editor, with the same rules, and also the keys of `[tui]`, `[assistant]` and those that only apply in `[global]` (`net-log-days`, `net-log-max`, `language`).
+The [TUI settings page](tui.md#settings) (Ctrl+b `e`) writes through the same editor, with the same rules, and also the keys of `[tui]`, `[assistant]` and those that only apply in `[global]` (`net-log-days`, `net-log-max`, `language`, `notify`).
 
 ## Language
 

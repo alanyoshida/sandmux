@@ -54,6 +54,7 @@ pass-env = ["OPENROUTER_API_KEY"]
 | `ssh-keys` | lista de nomes de chaves SSH do [cofre](vault.md#chaves-ssh) que o agente SSH da sessão pode usar; `"*"` libera todas | `--ssh-key` |
 | `net-log-days` | número de dias, só em `[global]` | (retenção do registro de rede, padrão 30) |
 | `net-log-max` | tamanho, como `"500M"`, só em `[global]` | (teto do registro de rede, padrão `"500M"`) |
+| `notify` | `true` ou `false`, só em `[global]` | (notificações do desktop: bloqueios, chaves reais, abas encerradas; padrão `true`; [tui.md](tui.md#notificações-do-desktop)) |
 | `language` | `"pt"` ou `"en"`, só em `[global]` | (idioma do sandmux: TUI, linha de comando e mensagens; sem a chave, o do sistema; [veja abaixo](#idioma)) |
 
 - **Caminhos:** absolutos ou começando por `~/`.
@@ -111,7 +112,7 @@ O comando:
 
 Um arquivo novo é criado com modo 600 e a pasta com 700.
 
-A [página de configurações da TUI](tui.md#configurações) (Ctrl+b `e`) grava pelo mesmo editor, com as mesmas regras, e também as chaves de `[tui]`, `[assistant]` e as que só valem em `[global]` (`net-log-days`, `net-log-max`, `language`).
+A [página de configurações da TUI](tui.md#configurações) (Ctrl+b `e`) grava pelo mesmo editor, com as mesmas regras, e também as chaves de `[tui]`, `[assistant]` e as que só valem em `[global]` (`net-log-days`, `net-log-max`, `language`, `notify`).
 
 ## Idioma
 

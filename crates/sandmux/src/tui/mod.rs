@@ -338,6 +338,10 @@ pub struct App {
     host: Host,
     /// Modos ligados no terminal do usuário e como desfazê-los.
     applied: (Vec<u8>, Vec<u8>),
+    /// O terminal está em foco (pelo aviso de foco, `?1004`).
+    focused: bool,
+    /// Último foco informado ao daemon: em foco e a aba mostrada.
+    focus_sent: Option<(bool, Option<u32>)>,
     quit: bool,
     /// Painel lateral ligado (pelo usuário).
     pub panel: bool,
@@ -751,7 +755,35 @@ impl App {
         if want != self.applied.0 {
             out(&self.applied.1);
             out(&want);
+            // O `host_reset` desliga o aviso de foco, que a TUI usa sempre.
+            out(b"\x1b[?1004h");
             self.applied = (want, undo);
+        }
+    }
+
+    /// O foco do terminal: guarda, repassa à aba ativa só se o harness dela
+    /// pediu o aviso de foco.
+    fn on_focus(&mut self, focused: bool) {
+        self.focused = focused;
+        if self.tabs.get(self.active).is_some_and(|t| t.tracker.focus) {
+            self.send_active(if focused { b"\x1b[I" } else { b"\x1b[O" });
+        }
+        self.report_focus();
+    }
+
+    /// Diz ao daemon o foco e a aba mostrada, quando mudaram: ele não
+    /// notifica o desktop sobre a aba que uma TUI em foco mostra.
+    fn report_focus(&mut self) {
+        let now = (self.focused, self.tabs.get(self.active).map(|t| t.id));
+        if self.focus_sent != Some(now)
+            && self
+                .call(&Msg::Focus {
+                    focused: now.0,
+                    active: now.1,
+                })
+                .is_ok()
+        {
+            self.focus_sent = Some(now);
         }
     }
 
@@ -2204,6 +2236,7 @@ impl App {
                     self.set_active(i);
                 }
                 Input::Mouse(m) => self.mouse(m),
+                Input::Focus(f) => self.on_focus(f),
                 Input::Key(k) if self.picker.is_some() => self.picker_key(k),
                 Input::Key(k) => self.modal_key(k),
             }
@@ -2235,7 +2268,7 @@ pub fn run() -> Result<i32> {
     }
     sigs.thread_block()?;
     let raw = client::RawMode::enter()?;
-    out(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h");
+    out(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[?1004h");
     // O ratatui consulta o cursor ao começar: antes da thread que lê a entrada.
     let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
     let mut term = ratatui::Terminal::new(backend)?;
@@ -2309,6 +2342,8 @@ pub fn run() -> Result<i32> {
         cwd: host.cwd.clone(),
         host: host.clone(),
         applied: (Vec::new(), Vec::new()),
+        focused: true,
+        focus_sent: None,
         quit: false,
         panel: panel_on,
         panel_data: None,
@@ -2380,6 +2415,8 @@ pub fn run() -> Result<i32> {
                 dirty = true;
             }
             Ok(Ev::Tick) => {
+                // Um daemon reiniciado esquece o foco: manda de novo.
+                app.focus_sent = None;
                 app.sync();
                 app.refresh_vault();
                 app.refresh_panel();
@@ -2395,6 +2432,7 @@ pub fn run() -> Result<i32> {
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         app.prompt_ended();
+        app.report_focus();
         parser.modal = app.modal.is_some();
         if app.panel && app.panel_data.is_none() && !app.tabs.is_empty() {
             app.refresh_panel();
@@ -2417,7 +2455,7 @@ pub fn run() -> Result<i32> {
         }
     }
     out(&app.applied.1);
-    out(b"\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[0m\x1b[?25h\x1b[?1049l");
+    out(b"\x1b[?1004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[0m\x1b[?25h\x1b[?1049l");
     drop(raw);
     eprintln!(
         "{}",

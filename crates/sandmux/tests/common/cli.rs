@@ -93,6 +93,12 @@ impl Env {
             .env("XDG_STATE_HOME", &self.state)
             .env("XDG_CONFIG_HOME", &self.config)
             .env("SANDMUX_DAEMON_START", "direct")
+            // Notificações do desktop nunca chegam ao desktop de quem roda
+            // os testes; o teste delas aponta para um barramento próprio.
+            .env(
+                "SANDMUX_NOTIFY_BUS",
+                "unix:path=/nonexistent/sandmux-test-bus",
+            )
             // O ambiente é limpo; sem idioma, o sistema seria `C` (inglês).
             .env("LANG", "pt_BR.UTF-8")
             .stdin(Stdio::null());

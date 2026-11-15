@@ -173,7 +173,7 @@ Ctrl+b `e`, ou "configurações" no menu, abre uma página de tela cheia com as 
 
 | Seção | Opções |
 |---|---|
-| Geral | idioma (`auto`, que segue o sistema, `pt` ou `en`; [config.md](config.md#idioma)) |
+| Geral | idioma (`auto`, que segue o sistema, `pt` ou `en`; [config.md](config.md#idioma)); notificações do desktop ([veja abaixo](#notificações-do-desktop)) |
 | Aparência | tema (com amostras de cor), estilo e posição da barra, painel lateral |
 | Atalhos | tecla de prefixo |
 | Sandbox | repo, KVM, GPU, clipboard, memória, processos, pastas extras, `pass-env`, chaves SSH, bancos |
@@ -313,6 +313,26 @@ A entrada vai crua para a aba ativa: o harness recebe as teclas como num termina
 - cursor e teclado de aplicação.
 
 Com um modal aberto, a TUI desliga esses modos para entender as teclas.
+
+Os eventos de foco são a exceção: a TUI os liga sempre, para as [notificações do desktop](#notificações-do-desktop). A aba só os recebe quando o harness dela pediu.
+
+## Notificações do desktop
+
+O daemon avisa no desktop, pelo serviço de notificações do sistema (`org.freedesktop.Notifications`):
+
+- **bloqueio de rede:** a aba, o domínio e o motivo;
+- **chave real** no HOME sintético: movida ao cofre (reinicie a aba), esperando o cofre ou esperando um domínio ([vault.md](vault.md#movimento-automático));
+- **aba encerrada:** o harness terminou sozinho, com o código. Um `sandmux kill` ou o fechamento pedido por você não avisa;
+- **abas esperando o cofre** depois de um reboot, se ele continua trancado alguns segundos depois de as sessões voltarem.
+
+Eventos do mesmo tipo na mesma aba, a menos de 60 segundos um do outro, atualizam a mesma notificação, com a contagem: "3 bloqueios: a.com, b.com, c.com".
+
+Só sem foco: a TUI liga o aviso de foco do terminal e diz ao daemon quando ganha e perde o foco, e qual aba mostra. O daemon não avisa sobre a aba que uma TUI em foco está mostrando, porque o aviso já está na tela. Com a TUI fechada, numa janela de trás ou em outra aba, ele avisa.
+
+- **Terminal sem aviso de foco:** a TUI fica sempre "em foco", e a aba ativa não é notificada. Konsole, GNOME Terminal, kitty, Alacritty e WezTerm mandam o aviso.
+- **Modo anexado:** uma aba anexada fora da TUI (`sandmux run` ou `attach` num terminal) é notificada como se ninguém olhasse.
+
+Vêm ligadas. Para desligar: `notify = false` em `[global]` ([config.md](config.md)), ou o item Notificações do desktop na seção Geral das [configurações](#configurações).
 
 ## Limites
 

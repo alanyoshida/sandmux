@@ -513,6 +513,13 @@ pub enum Msg {
     VaultLock,
     /// Estado do keyring do sistema (protocolo 28).
     KeyringStatus,
+    /// A TUI ganhou ou perdeu o foco do terminal, e a aba que mostra
+    /// (protocolo 29). O daemon não notifica o desktop sobre a aba que uma
+    /// TUI em foco mostra.
+    Focus {
+        focused: bool,
+        active: Option<u32>,
+    },
     /// Guarda a senha do cofre no keyring, depois de conferir com o arquivo.
     KeyringOn {
         password: String,
