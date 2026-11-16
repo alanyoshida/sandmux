@@ -278,6 +278,7 @@ O projeto usa [OpenSpec](https://github.com/Fission-AI/OpenSpec) para planejar c
 |---|---|
 | [docs/install.md](docs/install.md) | Instalação: `install.sh`, `sandmux setup`, pacotes, `cargo install`, a release e o teste nas distros |
 | [docs/launch-spec.md](docs/launch-spec.md) | Formato da especificação de lançamento entre o cliente e o lançador |
+| [vendor/vt100/SANDMUX.md](vendor/vt100/SANDMUX.md) | A cópia do emulador `vt100` com a quebra automática de linha (DECAWM), que a versão publicada não tem |
 | [docs/git.md](docs/git.md) | O que a proteção do `.git` cobre e como o git se comporta dentro do sandbox |
 | [docs/sessions.md](docs/sessions.md) | O daemon de sessões: socket, protocolo, lista de sessões, restauração e limites |
 | [docs/config.md](docs/config.md) | O arquivo de configuração: seções, chaves, camadas, perfis e comandos |
