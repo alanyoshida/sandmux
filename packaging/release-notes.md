@@ -1,16 +1,18 @@
-sandmux 0.1.16, antes da v1: o Antigravity CLI confinado e a tela das abas corrigida.
+sandmux 0.1.17, antes da v1: o login do Google do `agy` fora do sandbox e o diagnóstico na TUI.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Antigravity CLI do Google (preset `agy`):** `sandmux run agy` sobe o `agy` confinado, com o binário em somente leitura e a atualização automática desligada; `sandmux update agy` roda `agy update` fora do sandbox.
-  - Com `GEMINI_API_KEY` no cofre, o `agy` usa o Gemini pela chave, e o gateway troca a chave falsa pela real. Sem a chave, o login do Google é feito dentro do sandbox.
-  - A importação traz as configurações de `~/.gemini` sem o token do login, os segredos de plugins, os projetos, as conversas e os caches.
-  - Roda sem perguntas de permissão, como os outros harnesses. Detalhes em [docs/agy.md](https://github.com/alanyoshida/sandmux/blob/main/docs/agy.md).
-- **Tela das abas corrigida:** o emulador de terminal das abas passou a tratar a quebra automática de linha desligada (DECAWM, `CSI ?7l`) e a tabulação para trás e para a frente (`CSI Z` e `CSI I`). Programas de tela cheia que usam essas sequências, como o `agy`, não embaralham mais o texto na TUI.
+- **Login do `agy` fora do sandbox:** o token real do login do Google não fica mais no HOME do sandbox. O agente só vê valores falsos, e o gateway põe o real só no tráfego ao Google, nas abas do `agy`.
+  - Com o cofre aberto, `sandmux import agy` (ou a primeira execução) leva o login do host ao cofre como `agy:access` e `agy:refresh`, e o `agy` abre já logado. Com o cofre trancado, rode `sandmux import agy --overwrite` depois de abri-lo.
+  - Sem login no host, o login feito dentro do `agy` (colando o código da página) é capturado pelo gateway e vai ao cofre.
+  - Um login real que tenha ficado no sandbox vai sozinho ao cofre quando ele abre, ou pelo `sandmux doctor --fix`.
+  - O modo de rede só inferência passa a liberar os hosts do login e do modelo do `agy`. Detalhes em [docs/agy.md](https://github.com/alanyoshida/sandmux/blob/main/docs/agy.md#login-do-google).
+- **Diagnóstico na TUI:** a página de configurações ganhou a seção Diagnóstico, aberta também por Ctrl+b `D`, com as verificações do `sandmux doctor` e a causa e a correção de cada falha. A tecla `f` leva as chaves reais do sandbox ao cofre, com o domínio de cada uma num campo que dá para editar.
+- **Rodapé das configurações:** mostra só as teclas que valem no momento, conforme a seção e o item escolhido.
 
-Depois de atualizar, rode `sandmux daemon restart` e abra a TUI de novo.
+Esta versão muda o protocolo entre o gateway e o daemon (36). Depois de atualizar, rode `sandmux daemon restart` e abra a TUI de novo.
 
 ## Instalar
 
