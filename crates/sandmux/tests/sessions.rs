@@ -137,7 +137,7 @@ fn recusas_iguais_ao_run_direto_e_sem_sessao() {
     // Preset desconhecido não cria sessão.
     let mut t = Term::spawn(e.cmd(&e.work, &["run", "inexistente"]), 100, 30);
     assert_eq!(t.wait_exit(), 1);
-    t.wait_raw("opencode, hermes, claude, omp, shell");
+    t.wait_raw("opencode, hermes, claude, omp, agy, shell");
     assert!(stdout(&e.run(&e.work, &["ls"])).contains("Não há sessões"));
 }
 

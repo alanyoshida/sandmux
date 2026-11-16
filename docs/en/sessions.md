@@ -115,6 +115,7 @@ The harness code goes into the sandbox read-only, and auto-update is turned off 
 | `hermes` | `~/.local/bin/hermes update` |
 | `claude` | `~/.local/bin/claude update` |
 | `omp` | `~/.local/bin/omp update` |
+| `agy` | `~/.local/bin/agy update` |
 
 - The command exits with the updater's exit code.
 - The arguments after `--` go to the updater: `sandmux update omp -- --check`.

@@ -71,6 +71,7 @@ fn no_asks(harness: &str, plan: &mut presets::PresetPlan) {
         "hermes" => plan.env.push(("HERMES_YOLO_MODE".into(), "1".into())),
         "claude" => after_exe(plan, CLAUDE_NO_ASKS),
         "omp" => after_exe(plan, &["--auto-approve"]),
+        "agy" => after_exe(plan, &["--dangerously-skip-permissions"]),
         _ => {}
     }
 }
@@ -673,9 +674,10 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         ));
     }
     // No opencode, a configuração injetada aponta também para as variáveis
-    // falsas (o `auth.json` importado venceria a variável).
+    // falsas (o `auth.json` importado venceria a variável); no Antigravity
+    // CLI, a chave do Gemini falsa troca o login pela variável.
     let mut plan_names = pass_env.clone();
-    if opts.harness == "opencode" {
+    if opts.harness == "opencode" || opts.harness == "agy" {
         plan_names.extend(fake_names.iter().map(|n| n.to_string()));
     }
     let mut plan = presets::plan(&opts.harness, host, &opts.args, &plan_names)?;
