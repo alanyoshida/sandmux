@@ -1,17 +1,19 @@
-sandmux 0.1.14, antes da v1: a configuração do shell importada.
+sandmux 0.1.15, antes da v1: janelas do desktop, o Chrome com o sandbox dele, harnesses sem perguntas e reinício de aba viva.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Configuração do shell no preset `shell`:** o shell confinado pode trazer os seus aliases, funções e o framework do shell, como já acontecia com os harnesses. A primeira execução pergunta; depois, `sandmux import shell`.
-  - Entram só os arquivos do shell em uso: no `bash`, `.bashrc`, `.bash_aliases`, `.profile` e afins, com o oh-my-bash e o bash-it; no `zsh`, `.zshrc` e afins, `.p10k.zsh` e o oh-my-zsh; no `fish`, `.config/fish` (sem o `fish_variables`) e o oh-my-fish.
-  - Os frameworks vêm sem as pastas `.git`, `cache` e `log`. O `starship.toml` e os arquivos de outros programas ficam de fora.
-  - `export GITHUB_TOKEN=...` (e `set -gx` no fish) vira um valor falso; `sandmux vault import` liga o falso ao valor real.
-  - O arquivo importado ganha `[sandmux]` na frente do seu prompt.
-  - Sem terminal, o `shell` começa sem importar, como antes.
+- **Programas com janela** (`--window`, ou `window = true` na configuração): o agente pode abrir janelas no seu desktop Wayland (um navegador, o app que ele construiu) e usar o áudio.
+  - **Modo restrito (`true`):** o sandmux registra no compositor um socket da aba (`wp_security_context_v1`) e põe na frente um repassador que esconde os protocolos privilegiados: clipboard em segundo plano, captura de tela, teclado e mouse virtuais, camadas por cima do desktop e controle das outras janelas.
+  - **Modo direto (`"direct"`):** o socket comum do compositor, com aviso.
+  - **Nunca X11.** O áudio vem junto, e o aviso do lançamento lembra que inclui o microfone.
+  - **Visível:** a barra marca a aba com `▣`, e o painel e o `stats` mostram a janela. Detalhes em [docs/window.md](https://github.com/alanyoshida/sandmux/blob/main/docs/window.md).
+- **Chrome com o sandbox dele:** o Chrome, o Chromium e os apps Electron sobem dentro do sandmux sem `--no-sandbox`. A correção está no supervisor de arquivos: o mapeamento de uid de namespaces aninhados e o `/proc/self` de pid namespaces aninhados.
+- **Harnesses sem perguntas de permissão por padrão:** o opencode, o Claude Code, o hermes e o oh-my-pi rodam sem pedir confirmação, porque o sandbox é a barreira. `harness-asks = true` devolve as perguntas.
+- **Reiniciar aba viva:** Ctrl+b `r` numa aba viva pede confirmação e reinicia o harness com a configuração de agora. Na linha de comando, `sandmux restart <id> --force`. Ao mudar a configuração, a TUI e o `config set` avisam quantas abas vivas continuam com o valor antigo.
 
-Se o HOME do `shell` já existe, rode `sandmux import shell --overwrite` para trocar o arquivo mínimo pela sua configuração. Detalhes em [docs/sessions.md](https://github.com/alanyoshida/sandmux/blob/main/docs/sessions.md#configuração-do-shell).
+Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 35).
 
 ## Instalar
 

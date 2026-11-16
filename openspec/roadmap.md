@@ -445,6 +445,8 @@ Release `v0.1.13` (2026-11-15), com o change 56. Decisão do usuário (2026-11-1
 
 Release `v0.1.14` (2026-11-15), com o change 57. Decisão do usuário (2026-11-15): publicar logo depois da configuração do shell importada.
 
+Release `v0.1.15` (2026-11-15), com os changes 58, 59, 60 e 61. Decisão do usuário (2026-11-15): publicar depois do build local.
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
