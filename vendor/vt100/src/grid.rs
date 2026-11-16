@@ -841,6 +841,18 @@ impl Grid {
         self.pos.col = self.pos.col.saturating_sub(count);
     }
 
+    // sandmux: CBT. Volta `count` paradas de tabulação (a cada 8 colunas),
+    // a partir da última coluna quando há quebra pendente.
+    pub fn col_backtab(&mut self, count: u16) {
+        self.col_clamp();
+        for _ in 0..count {
+            if self.pos.col == 0 {
+                break;
+            }
+            self.pos.col = (self.pos.col - 1) / 8 * 8;
+        }
+    }
+
     pub fn col_tab(&mut self) {
         self.pos.col -= self.pos.col % 8;
         self.pos.col = self.pos.col.saturating_add(8);
@@ -914,7 +926,7 @@ impl Grid {
         }
     }
 
-    fn col_clamp(&mut self) {
+    pub(crate) fn col_clamp(&mut self) {
         if self.pos.col > self.size.cols() - 1 {
             self.pos.col = self.size.cols() - 1;
         }

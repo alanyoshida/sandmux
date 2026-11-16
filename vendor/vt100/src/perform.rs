@@ -81,6 +81,9 @@ impl<CB: crate::Callbacks> vte::Perform for crate::screen::WrappedScreen<CB> {
                 'B' => self.cud(canonicalize_params_1(params, 1)),
                 'C' => self.cuf(canonicalize_params_1(params, 1)),
                 'D' => self.cub(canonicalize_params_1(params, 1)),
+                // sandmux: CHT e CBT (tabulação para a frente e para trás).
+                'I' => self.cht(canonicalize_params_1(params, 1)),
+                'Z' => self.cbt(canonicalize_params_1(params, 1)),
                 'E' => self.cnl(canonicalize_params_1(params, 1)),
                 'F' => self.cpl(canonicalize_params_1(params, 1)),
                 'G' => self.cha(canonicalize_params_1(params, 1)),

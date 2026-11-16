@@ -1290,6 +1290,19 @@ impl<CB: crate::Callbacks> WrappedScreen<CB> {
         self.screen.grid_mut().col_dec(offset);
     }
 
+    // sandmux: CSI I (CHT), tabulação para a frente.
+    pub fn cht(&mut self, count: u16) {
+        let cols = self.screen.grid().size().cols.get();
+        for _ in 0..count.min(cols) {
+            self.screen.grid_mut().col_tab();
+        }
+    }
+
+    // sandmux: CSI Z (CBT), tabulação para trás.
+    pub fn cbt(&mut self, count: u16) {
+        self.screen.grid_mut().col_backtab(count);
+    }
+
     // CSI E
     pub fn cnl(&mut self, offset: u16) {
         self.screen.grid_mut().col_set(0);
