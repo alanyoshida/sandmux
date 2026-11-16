@@ -1,19 +1,16 @@
-sandmux 0.1.15, antes da v1: janelas do desktop, o Chrome com o sandbox dele, harnesses sem perguntas e reinício de aba viva.
+sandmux 0.1.16, antes da v1: o Antigravity CLI confinado e a tela das abas corrigida.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Programas com janela** (`--window`, ou `window = true` na configuração): o agente pode abrir janelas no seu desktop Wayland (um navegador, o app que ele construiu) e usar o áudio.
-  - **Modo restrito (`true`):** o sandmux registra no compositor um socket da aba (`wp_security_context_v1`) e põe na frente um repassador que esconde os protocolos privilegiados: clipboard em segundo plano, captura de tela, teclado e mouse virtuais, camadas por cima do desktop e controle das outras janelas.
-  - **Modo direto (`"direct"`):** o socket comum do compositor, com aviso.
-  - **Nunca X11.** O áudio vem junto, e o aviso do lançamento lembra que inclui o microfone.
-  - **Visível:** a barra marca a aba com `▣`, e o painel e o `stats` mostram a janela. Detalhes em [docs/window.md](https://github.com/alanyoshida/sandmux/blob/main/docs/window.md).
-- **Chrome com o sandbox dele:** o Chrome, o Chromium e os apps Electron sobem dentro do sandmux sem `--no-sandbox`. A correção está no supervisor de arquivos: o mapeamento de uid de namespaces aninhados e o `/proc/self` de pid namespaces aninhados.
-- **Harnesses sem perguntas de permissão por padrão:** o opencode, o Claude Code, o hermes e o oh-my-pi rodam sem pedir confirmação, porque o sandbox é a barreira. `harness-asks = true` devolve as perguntas.
-- **Reiniciar aba viva:** Ctrl+b `r` numa aba viva pede confirmação e reinicia o harness com a configuração de agora. Na linha de comando, `sandmux restart <id> --force`. Ao mudar a configuração, a TUI e o `config set` avisam quantas abas vivas continuam com o valor antigo.
+- **Antigravity CLI do Google (preset `agy`):** `sandmux run agy` sobe o `agy` confinado, com o binário em somente leitura e a atualização automática desligada; `sandmux update agy` roda `agy update` fora do sandbox.
+  - Com `GEMINI_API_KEY` no cofre, o `agy` usa o Gemini pela chave, e o gateway troca a chave falsa pela real. Sem a chave, o login do Google é feito dentro do sandbox.
+  - A importação traz as configurações de `~/.gemini` sem o token do login, os segredos de plugins, os projetos, as conversas e os caches.
+  - Roda sem perguntas de permissão, como os outros harnesses. Detalhes em [docs/agy.md](https://github.com/alanyoshida/sandmux/blob/main/docs/agy.md).
+- **Tela das abas corrigida:** o emulador de terminal das abas passou a tratar a quebra automática de linha desligada (DECAWM, `CSI ?7l`) e a tabulação para trás e para a frente (`CSI Z` e `CSI I`). Programas de tela cheia que usam essas sequências, como o `agy`, não embaralham mais o texto na TUI.
 
-Depois de atualizar, rode `sandmux daemon restart` (o protocolo passou a 35).
+Depois de atualizar, rode `sandmux daemon restart` e abra a TUI de novo.
 
 ## Instalar
 

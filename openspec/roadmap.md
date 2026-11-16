@@ -450,6 +450,8 @@ Release `v0.1.14` (2026-11-15), com o change 57. Decisão do usuário (2026-11-1
 
 Release `v0.1.15` (2026-11-15), com os changes 58, 59, 60 e 61. Decisão do usuário (2026-11-15): publicar depois do build local.
 
+Release `v0.1.16` (2026-11-16), com os changes 63, 64 e 65. Decisão do usuário (2026-11-16): publicar depois da correção do texto embaralhado do `agy` na TUI.
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
