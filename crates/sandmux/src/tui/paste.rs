@@ -58,8 +58,8 @@ pub fn save_png(
     Ok(path)
 }
 
-/// Data e hora local no formato `AAAAMMDD-HHMMSS`.
-pub fn stamp() -> String {
+/// A data e a hora local de agora.
+fn local_now() -> libc::tm {
     let t = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -67,6 +67,18 @@ pub fn stamp() -> String {
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     // SAFETY: localtime_r com ponteiros válidos.
     unsafe { libc::localtime_r(&t, &mut tm) };
+    tm
+}
+
+/// A hora local no formato `HH:MM:SS`.
+pub fn clock() -> String {
+    let tm = local_now();
+    format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
+}
+
+/// Data e hora local no formato `AAAAMMDD-HHMMSS`.
+pub fn stamp() -> String {
+    let tm = local_now();
     format!(
         "{:04}{:02}{:02}-{:02}{:02}{:02}",
         tm.tm_year + 1900,

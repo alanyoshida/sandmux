@@ -378,6 +378,8 @@ pub struct Report {
     pub groups: Vec<Group>,
     /// O sandbox pode ser lançado nesta máquina.
     pub can_launch: bool,
+    /// Quantas chaves reais há dentro do sandbox (o que `f` pode mover).
+    pub real_keys: usize,
     /// O fim do texto do terminal.
     footer: String,
 }
@@ -450,6 +452,7 @@ pub fn report(quiet: bool) -> Report {
         r.apparmor_restrict_userns = Some(true);
     }
     let host = Host::detect().ok();
+    let mut real_keys = 0;
     let mut groups = vec![sandbox_group(&r, host.as_ref())];
     if let Some(h) = &host {
         groups.push(install_group(h));
@@ -458,7 +461,9 @@ pub fn report(quiet: bool) -> Report {
     groups.push(daemon_group());
     if let Some(h) = &host {
         groups.push(vault_group(h));
-        groups.push(secrets_group(h));
+        let (g, n) = secrets_group(h);
+        real_keys = n;
+        groups.push(g);
     }
     let footer = format!(
         "{}\n{}",
@@ -474,6 +479,7 @@ pub fn report(quiet: bool) -> Report {
     Report {
         groups,
         can_launch: r.can_launch(),
+        real_keys,
         footer,
     }
 }
@@ -912,7 +918,8 @@ fn vault_group(host: &Host) -> Group {
     }
 }
 
-fn secrets_group(host: &Host) -> Group {
+/// O grupo das chaves reais e quantas há.
+fn secrets_group(host: &Host) -> (Group, usize) {
     let name = tr!("Chaves reais", "Real keys").to_string();
     let found = real_secrets(host);
     let agy = agy_login(host);
@@ -928,10 +935,13 @@ fn secrets_group(host: &Host) -> Group {
             "\nChaves reais dentro do sandbox: nenhuma.",
             "\nReal keys inside the sandbox: none."
         ));
-        return Group {
-            name,
-            checks: vec![c],
-        };
+        return (
+            Group {
+                name,
+                checks: vec![c],
+            },
+            0,
+        );
     }
     let help = tr!(
         "O agente pode ler esta chave e enviá-la para fora. A tecla f leva ao cofre: no lugar fica um valor falso, que o gateway troca pelo real só no tráfego ao dono da chave.",
@@ -988,7 +998,7 @@ fn secrets_group(host: &Host) -> Group {
         )
     );
     checks[0].cli = cli;
-    Group { name, checks }
+    (Group { name, checks }, n)
 }
 
 fn daemon_group() -> Group {

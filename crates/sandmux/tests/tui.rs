@@ -466,8 +466,11 @@ fn menu_abre_as_configuracoes_e_a_pagina_grava_o_toml() {
     t.write(DOWN);
     t.write(b"\t");
     t.write(DOWN);
+    t.wait_text("Espaço liga e desliga");
     t.write(b" ");
     t.wait_text("kvm gravado em [global]");
+    // Com o valor gravado no alvo, o rodapé oferece voltar ao padrão.
+    t.wait_text("x volta ao padrão");
     // A sessão criada antes continua com o valor antigo.
     t.wait_text("1 aba(s) viva(s) com o valor antigo");
     let text = std::fs::read_to_string(e.config_file()).unwrap();
@@ -1215,7 +1218,11 @@ fn cofre_gerenciado_pela_pagina() {
         t.write(DOWN);
     }
     t.wait_text("sem cofre");
+    t.wait_text("↑ ↓ seção · Tab ou → entra");
     t.write(b"\t");
+    // Sem cofre, o rodapé só oferece criar.
+    t.wait_text("n cria o cofre · r relê · Esc volta às seções");
+    t.with_screen(|s| assert!(!s.contents().contains("x apaga"), "{}", s.contents()));
     // Cria o cofre.
     t.write(b"n");
     t.wait_text("Criar o cofre");
@@ -1359,11 +1366,20 @@ fn diagnostico_na_pagina_e_chaves_ao_cofre() {
     assert_eq!(std::fs::read_to_string(&cfg).unwrap(), cfg_text);
     // r roda de novo: sem o arquivo, as linhas dele somem.
     std::fs::remove_file(&cfg).unwrap();
+    t.wait_text("r verifica de novo · f leva as chaves ao cofre");
     t.write(b"r");
-    t.wait_text("verificações feitas de novo");
+    t.wait_text("verificado de novo às");
+    t.wait_text("verificado às");
     t.wait_for("opencode.json fora da lista", |s| {
         !s.contains("opencode: .config/opencode/opencode.json")
     });
+    // Sem chaves reais, o rodapé não oferece o f.
+    t.wait_for("rodapé sem o f", |s| {
+        s.contains("r verifica de novo · Esc volta às seções") && !s.contains("f leva as chaves")
+    });
+    // O aviso some ao mudar de linha.
+    t.write(UP);
+    t.wait_for("aviso apagado", |s| !s.contains("verificado de novo às"));
     t.write(b"\x1b");
     t.write(b"q");
     t.write(b"\x02d");

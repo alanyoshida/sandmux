@@ -826,6 +826,8 @@ pub struct Settings {
 #[derive(Default)]
 pub struct DoctorView {
     pub report: Option<crate::doctor::Report>,
+    /// A hora local da última verificação (`HH:MM:SS`).
+    pub at: String,
     /// A linha escolhida, contando as verificações de todos os grupos.
     pub sel: usize,
     pub fix: Option<FixFlow>,
@@ -1690,6 +1692,7 @@ impl App {
     pub(super) fn doctor_refresh(&mut self, s: &mut Settings) {
         let d = &mut s.doctor;
         d.report = Some(crate::doctor::report(true));
+        d.at = super::paste::clock();
         d.sel = d.sel.min(d.count().saturating_sub(1));
     }
 
@@ -1757,14 +1760,33 @@ impl App {
             return true;
         }
         let n = s.doctor.count();
+        // O aviso da ação anterior não fica preso na tela.
+        if matches!(k, Key::Up | Key::Down | Key::Esc | Key::Left) {
+            s.note = None;
+        }
         match k {
             Key::Up => s.doctor.sel = s.doctor.sel.saturating_sub(1),
             Key::Down => s.doctor.sel = (s.doctor.sel + 1).min(n.saturating_sub(1)),
             Key::Esc | Key::Left => s.on_items = false,
             Key::Char('r') => {
                 self.doctor_refresh(s);
+                let fails = s.doctor.report.as_ref().map_or(0, |r| r.failures());
+                let at = &s.doctor.at;
                 s.note = Some((
-                    tr!("verificações feitas de novo", "checks run again").into(),
+                    match fails {
+                        0 => trf!(
+                            "verificado de novo às {at}: nenhuma falha",
+                            "checked again at {at}: no failures"
+                        ),
+                        1 => trf!(
+                            "verificado de novo às {at}: 1 falha",
+                            "checked again at {at}: 1 failure"
+                        ),
+                        n => trf!(
+                            "verificado de novo às {at}: {n} falhas",
+                            "checked again at {at}: {n} failures"
+                        ),
+                    },
                     false,
                 ));
             }
