@@ -716,6 +716,146 @@ pub(super) fn cut(s: &str, n: usize) -> String {
 
 /// A página de configurações, em tela cheia: seções à esquerda, itens à
 /// direita, a ajuda do item e o último aviso embaixo.
+/// O rodapé da página: só as teclas que valem agora, conforme a seção, o
+/// foco, o item escolhido e o que está aberto.
+pub(super) fn settings_footer(s: &super::settings::Settings) -> String {
+    use super::settings::{DOCTOR, Kind, Source, VAULT, current, is_model_item};
+    let t = |pt: &'static str, en: &'static str| tr!(pt, en).to_string();
+    let mut k: Vec<String> = Vec::new();
+    let target = s.project_dir.is_some();
+    if !s.on_items && s.vault.form.is_none() && s.doctor.fix.is_none() && s.doctor.unlock.is_none()
+    {
+        k.push(t("↑ ↓ seção", "↑ ↓ section"));
+        k.push(t("Tab ou → entra", "Tab or → enters"));
+        if target {
+            k.push(t("g alvo", "g target"));
+        }
+        k.push(t("Esc sai", "Esc quits"));
+        return k.join(" · ");
+    }
+    if s.section == DOCTOR {
+        let d = &s.doctor;
+        if d.unlock.is_some() {
+            return t(
+                "Enter desbloqueia · Esc cancela",
+                "Enter unlocks · Esc cancels",
+            );
+        }
+        if let Some(fix) = &d.fix {
+            return if fix.on_agy {
+                t(
+                    "s confirma · outra tecla pula",
+                    "y confirms · any other key skips",
+                )
+            } else {
+                t(
+                    "Enter confirma · Esc pula o arquivo",
+                    "Enter confirms · Esc skips the file",
+                )
+            };
+        }
+        k.push(t("↑ ↓ move", "↑ ↓ move"));
+        k.push(t("r verifica de novo", "r checks again"));
+        if d.report.as_ref().is_some_and(|r| r.real_keys > 0) {
+            k.push(t(
+                "f leva as chaves ao cofre",
+                "f moves the keys to the vault",
+            ));
+        }
+        k.push(t("Esc volta às seções", "Esc back to sections"));
+        return k.join(" · ");
+    }
+    if s.section == VAULT {
+        let v = &s.vault;
+        if let Some(f) = &v.form {
+            return if f.step + 1 < f.fields.len() {
+                t("Enter avança · Esc cancela", "Enter goes on · Esc cancels")
+            } else {
+                t("Enter envia · Esc cancela", "Enter sends · Esc cancels")
+            };
+        }
+        if v.confirm.is_some() {
+            return t(
+                "s confirma · outra tecla cancela",
+                "y confirms · any other key cancels",
+            );
+        }
+        let (exists, unlocked) = v.info.map(|(e, u, _)| (e, u)).unwrap_or((false, false));
+        if unlocked && v.entries.len() > 1 {
+            k.push(t("↑ ↓ move", "↑ ↓ move"));
+        }
+        if !exists {
+            k.push(t("n cria o cofre", "n creates the vault"));
+        } else if !unlocked {
+            k.push(t("u desbloqueia", "u unlocks"));
+        } else {
+            k.push(t("a segredo", "a secret"));
+            k.push(t("s chave SSH", "s SSH key"));
+            if !v.entries.is_empty() {
+                k.push(t("d domínios", "d domains"));
+                k.push(t("x apaga", "x removes"));
+            }
+            k.push(t("l tranca", "l locks"));
+        }
+        if exists {
+            k.push(t("p senha", "p password"));
+            k.push(t("k keyring", "k keyring"));
+        }
+        k.push(t("r relê", "r reloads"));
+        k.push(t("Esc volta às seções", "Esc back to sections"));
+        return k.join(" · ");
+    }
+    let Some(item) = s.selected() else {
+        k.push(t("Tab seções", "Tab sections"));
+        k.push(t("Esc sai", "Esc quits"));
+        return k.join(" · ");
+    };
+    if s.edit.is_some() {
+        return t(
+            "Enter grava · vazio volta ao padrão · Esc cancela",
+            "Enter saves · empty goes back to the default · Esc cancels",
+        );
+    }
+    let cur = current(&s.doc, item, s.project());
+    if let Some(l) = &s.list {
+        if l.input.is_some() {
+            return t("Enter acrescenta · Esc cancela", "Enter adds · Esc cancels");
+        }
+        if cur.list.len() > 1 {
+            k.push(t("↑ ↓ move", "↑ ↓ move"));
+        }
+        k.push(if item.key == "models" {
+            t("a escolhe da lista", "a picks from the list")
+        } else {
+            t("a acrescenta", "a adds")
+        });
+        if !cur.list.is_empty() {
+            k.push(t("x tira", "x removes"));
+        }
+        k.push(t("Esc fecha a lista", "Esc closes the list"));
+        return k.join(" · ");
+    }
+    k.push(t("↑ ↓ move", "↑ ↓ move"));
+    k.push(match item.kind {
+        Kind::Toggle => t("Espaço liga e desliga", "Space toggles"),
+        Kind::Choice(_) => t("← → muda", "← → change"),
+        Kind::Text if is_model_item(item.key) => {
+            t("Enter escolhe · e edita", "Enter picks · e edits")
+        }
+        Kind::Text => t("Enter edita", "Enter edits"),
+        Kind::List => t("Enter abre a lista", "Enter opens the list"),
+    });
+    if !matches!(item.kind, Kind::List) && cur.from == Source::Here {
+        k.push(t("x volta ao padrão", "x back to default"));
+    }
+    k.push(t("Tab seções", "Tab sections"));
+    if target {
+        k.push(t("g alvo", "g target"));
+    }
+    k.push(t("Esc sai", "Esc quits"));
+    k.join(" · ")
+}
+
 fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: &App) {
     use super::Hit;
     use super::settings::{At, Kind, SECTIONS, Source, current, items_of, section_name};
@@ -750,14 +890,9 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
             tr!(" sandmux · configurações ", " sandmux · settings "),
             Style::default().fg(accent).add_modifier(Modifier::BOLD),
         ))
-        .title_top(
-            Line::styled(target, Style::default().fg(muted)).right_aligned(),
-        )
+        .title_top(Line::styled(target, Style::default().fg(muted)).right_aligned())
         .title_bottom(Line::styled(
-            tr!(
-                " ↑ ↓ move · Tab seções/itens · ← → muda · Espaço liga · Enter edita · x padrão · g alvo · Esc sai ",
-                " ↑ ↓ move · Tab sections/items · ← → change · Space toggles · Enter edits · x default · g target · Esc quits "
-            ),
+            format!(" {} ", settings_footer(s)),
             Style::default().fg(muted),
         ));
     let inner = block.inner(full);
@@ -889,6 +1024,12 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
                 ),
             ])
         };
+        // A hora mostra que `r` rodou de novo.
+        let mut status = status;
+        status.spans.push(Span::styled(
+            trf!(" · verificado às {}", " · checked at {}", d.at),
+            base.fg(muted),
+        ));
         put(f, x0, y, w, status, base);
         y += 2;
         // As linhas: o nome de cada grupo e as verificações dele.
@@ -1092,21 +1233,6 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
                     base,
                 );
             }
-        } else {
-            put(
-                f,
-                x0,
-                y,
-                w,
-                Line::styled(
-                    tr!(
-                        "r verifica de novo · f leva as chaves reais ao cofre",
-                        "r checks again · f moves the real keys to the vault"
-                    ),
-                    base.fg(muted),
-                ),
-                base,
-            );
         }
         // A causa e a correção da linha escolhida.
         let hy = bottom.saturating_sub(detail_rows + 1);

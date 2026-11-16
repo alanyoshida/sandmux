@@ -216,6 +216,8 @@ Cada item mostra o valor atual e de onde ele vem ("padrão", "do global"):
 
 Um clique escolhe uma seção ou um item, e alterna um toggle.
 
+O rodapé da página mostra só as teclas que valem no momento, conforme a seção, o foco, o tipo do item e o que está aberto. Por exemplo, `x volta ao padrão` só aparece num item com valor gravado no alvo, e `f` só aparece no Diagnóstico quando há chaves reais para mover.
+
 **Gravação:** cada mudança é gravada na hora no `config.toml` pelo mesmo editor do `sandmux config set/add/remove`. Ele preserva os comentários e o resto do arquivo, e valida o arquivo inteiro antes de gravar. Uma mudança recusada mostra o motivo embaixo, e o arquivo não muda.
 
 **Quando vale:**
@@ -230,7 +232,7 @@ As opções de `[tui]`, `[assistant]` e do registro valem só no global; com o a
 
 A seção Diagnóstico, no fim da página, mostra as verificações do `sandmux doctor` ([install.md](install.md)). Ctrl+b `D`, ou "diagnóstico" no menu, abre a página direto nela.
 
-- **Na lateral:** o nome da seção mostra quantas verificações falharam, como `Diagnóstico ✗1`. As verificações rodam ao abrir a página e ao entrar na seção, e `r` roda de novo.
+- **Na lateral:** o nome da seção mostra quantas verificações falharam, como `Diagnóstico ✗1`. As verificações rodam ao abrir a página e ao entrar na seção, e `r` roda de novo. A linha de estado mostra a hora da última verificação.
 - **Na lista:** uma linha por verificação, agrupada em Sandbox, Instalação, Configuração, Daemon, Cofre e Chaves reais. A marca é `✓` (certo), `✗` (falha), `!` (aviso) ou `·` (informação).
 - **Embaixo:** a linha escolhida mostra o rótulo e o resumo inteiros, com a causa e a correção. O comando que grava o perfil do AppArmor é longo e fica só no `sandmux doctor` do terminal.
 

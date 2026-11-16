@@ -218,6 +218,8 @@ Each item shows the current value and where it comes from ("default", "from glob
 
 A click selects a section or an item, and toggles a toggle.
 
+The page footer shows only the keys that work at that moment, depending on the section, the focus, the item type and what is open. For example, `x back to default` only shows up on an item with a value saved in the target, and `f` only shows up in Diagnosis when there are real keys to move.
+
 **Saving:** each change is saved right away to `config.toml` by the same editor as `sandmux config set/add/remove`. It preserves the comments and the rest of the file, and validates the whole file before saving. A refused change shows the reason at the bottom, and the file does not change.
 
 **When it applies:**
@@ -232,7 +234,7 @@ The options of `[tui]`, `[assistant]` and of the log apply only in the global on
 
 The Diagnosis section, at the end of the page, shows the `sandmux doctor` checks ([install.md](install.md)). Ctrl+b `D`, or "diagnosis" in the menu, opens the page right on it.
 
-- **In the sidebar:** the section name shows how many checks failed, such as `Diagnosis ✗1`. The checks run when the page opens and when you enter the section, and `r` runs them again.
+- **In the sidebar:** the section name shows how many checks failed, such as `Diagnosis ✗1`. The checks run when the page opens and when you enter the section, and `r` runs them again. The status line shows the time of the last check.
 - **In the list:** one line per check, grouped into Sandbox, Installation, Configuration, Daemon, Vault and Real keys. The mark is `✓` (fine), `✗` (failure), `!` (warning) or `·` (information).
 - **Below:** the chosen line shows the full label and summary, with the cause and the fix. The command that writes the AppArmor profile is long and stays only in `sandmux doctor` in the terminal.
 

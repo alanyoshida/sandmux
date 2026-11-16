@@ -445,7 +445,7 @@ A página de configurações MUST ter a seção "Diagnóstico", depois do Cofre,
 
 #### Scenario: Rodar de novo
 - **WHEN** o arquivo com uma chave real é apagado fora da TUI e o usuário aperta `r` na seção
-- **THEN** a linha da chave some
+- **THEN** a linha da chave some, e a linha de estado mostra a hora da nova verificação
 
 #### Scenario: Saída do terminal igual
 - **WHEN** o usuário roda `sandmux doctor` no terminal
