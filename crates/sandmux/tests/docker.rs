@@ -112,15 +112,23 @@ fn term(e: &Env, cwd: &Path, args: &[&str]) -> Term {
 
 /// Roda `script` na sessão (em `cwd`) e devolve a saída, esperando até 3 min.
 fn run_in(t: &mut Term, cwd: &Path, script: &str) -> String {
+    // Um nome por chamada: um contador do processo. (O nome vinha de
+    // `Instant::now().elapsed()`, que quase sempre dá poucas dezenas de
+    // nanossegundos; duas chamadas com o mesmo nome achavam o `.feito` da
+    // anterior e devolviam a saída antiga.)
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = format!(
-        "{:x}",
-        Instant::now().elapsed().as_nanos() ^ std::process::id() as u128
+        "{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
     let (sh, out, done) = (
         cwd.join(format!(".t-{n}.sh")),
         cwd.join(format!(".t-{n}.out")),
         cwd.join(format!(".t-{n}.feito")),
     );
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_file(&done);
     std::fs::write(&sh, script).unwrap();
     t.write(
         format!(
