@@ -13,6 +13,10 @@ fn exe(p: &Path, body: &str) {
     std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// Harness falso que pula as opções que o sandmux põe para ele rodar sem
+/// perguntas e executa o resto.
+const SKIP_NO_ASKS: &str = "case \"$1\" in --dangerously-skip-permissions) shift 3;; --auto-approve) shift;; esac\nexec \"$@\"";
+
 fn fake_opencode(e: &Env) {
     exe(&e.home.join(".opencode/bin/opencode"), "exec \"$@\"");
 }
@@ -313,7 +317,7 @@ fn docker_do_host_nao_e_alcancado() {
 
 fn fake_claude(e: &Env) {
     let real = e.home.join(".local/share/claude/versions/9.9.9");
-    exe(&real, "exec \"$@\"");
+    exe(&real, SKIP_NO_ASKS);
     std::fs::create_dir_all(e.home.join(".local/bin")).unwrap();
     std::os::unix::fs::symlink(&real, e.home.join(".local/bin/claude")).unwrap();
     std::fs::create_dir_all(e.home.join(".claude/projects/x")).unwrap();
@@ -365,7 +369,7 @@ fn omp_sem_os_bancos_e_com_a_chave_falsa() {
     let out = run(&e, &["run", "omp"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(stderr(&out).contains("oh-my-pi"), "{}", stderr(&out));
-    exe(&e.home.join(".local/bin/omp"), "exec \"$@\"");
+    exe(&e.home.join(".local/bin/omp"), SKIP_NO_ASKS);
     std::fs::create_dir_all(e.home.join(".omp/agent/extensions")).unwrap();
     std::fs::write(e.home.join(".omp/agent/config.yml"), "theme:\n  dark: x\n").unwrap();
     std::fs::write(e.home.join(".omp/agent/extensions/e.ts"), "//").unwrap();
@@ -439,4 +443,62 @@ fn update_recusa_sem_atualizador_e_sem_instalacao() {
     let out = run(&e, &["update", "inexistente"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(!e.home.join("atualizou").exists());
+}
+
+/// Harness falso que mostra os argumentos e as variáveis de permissão.
+fn show(e: &Env, path: &Path) {
+    exe(
+        &e.home.join(path),
+        "echo \"args=$*\"; echo \"oc=${OPENCODE_PERMISSION:-}\"; echo \"yolo=${HERMES_YOLO_MODE:-}\"",
+    );
+}
+
+#[test]
+fn harnesses_sem_perguntas_por_padrao_e_harness_asks_devolve() {
+    let e = Env::new();
+    show(&e, Path::new(".opencode/bin/opencode"));
+    fake_hermes(&e);
+    show(&e, Path::new(".local/bin/hermes"));
+    show(&e, Path::new(".local/bin/omp"));
+    let real = e.home.join(".local/share/claude/versions/9.9.9");
+    show(&e, Path::new(".local/share/claude/versions/9.9.9"));
+    std::os::unix::fs::symlink(&real, e.home.join(".local/bin/claude")).unwrap();
+    let go = |h: &str| {
+        let out = run(&e, &["run", h, "--no-import", "--", "x"]);
+        assert!(out.status.success(), "{h}: {}", stderr(&out));
+        stdout(&out)
+    };
+    let oc = go("opencode");
+    assert!(oc.contains("args=x\n"), "{oc}");
+    assert!(
+        oc.contains(r#"oc={"*":"allow""#) && oc.contains(r#""external_directory":"allow""#),
+        "{oc}"
+    );
+    let cl = go("claude");
+    assert!(
+        cl.contains(r#"args=--dangerously-skip-permissions --settings {"skipDangerousModePermissionPrompt":true} x"#),
+        "{cl}"
+    );
+    assert!(go("hermes").contains("yolo=1\n"));
+    assert!(go("omp").contains("args=--auto-approve x\n"));
+    let sh = stdout(&run(
+        &e,
+        &[
+            "run",
+            "shell",
+            "--",
+            "-c",
+            "echo \"oc=${OPENCODE_PERMISSION:-} yolo=${HERMES_YOLO_MODE:-}\"",
+        ],
+    ));
+    assert_eq!(sh, "oc= yolo=\n");
+
+    // Com `harness-asks = true`, o harness fica como é.
+    let out = run(&e, &["config", "set", "--global", "harness-asks", "true"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let oc = go("opencode");
+    assert!(oc.contains("args=x\noc=\n"), "{oc}");
+    assert!(go("claude").contains("args=x\n"));
+    assert!(go("hermes").contains("yolo=\n"));
+    assert!(go("omp").contains("args=x\n"));
 }

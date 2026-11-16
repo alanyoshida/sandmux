@@ -33,6 +33,7 @@ pass-env = ["OPENROUTER_API_KEY"]
 | `kvm` | true ou false | `--kvm` / `--no-kvm` |
 | `gpu` | true ou false | `--gpu` / `--no-gpu` |
 | `clipboard` | true ou false | `--allow-clipboard` / `--no-allow-clipboard` |
+| `harness-asks` | true ou false | (só na configuração; veja abaixo) |
 | `window` | true, false ou `"direct"` | `--window` / `--window-direct` / `--no-window` (veja [window.md](window.md)) |
 | `memory` | texto: `"50%"`, `"16G"` ou `"max"` | `--memory` (veja [limits.md](limits.md)) |
 | `processes` | número ou `"max"` | `--processes` |
@@ -65,6 +66,20 @@ pass-env = ["OPENROUTER_API_KEY"]
 - **Pastas de projeto:** caminhos absolutos.
 
 Um arquivo inválido faz o `run` recusar o lançamento, com o arquivo, a linha e o motivo: TOML malformado, seção ou chave desconhecida, tipo errado, caminho relativo, valor em `pass-env`, ou o mesmo caminho em `ro` e `rw` da mesma seção. Nada do arquivo é ignorado em silêncio.
+
+
+### Perguntas do harness
+
+Por padrão, o sandmux lança os harnesses no modo em que eles não pedem confirmação para editar, rodar comandos, sair da pasta do projeto ou ler arquivos como o `.env`, porque quem bloqueia é o sandbox (Landlock, a [política de arquivos](files.md) e a [rede](network.md)):
+
+| Harness | Como |
+|---|---|
+| opencode | `OPENCODE_PERMISSION` com tudo em `allow` |
+| Claude Code | `--dangerously-skip-permissions` e `--settings '{"skipDangerousModePermissionPrompt":true}'` |
+| hermes | `HERMES_YOLO_MODE=1` (os bloqueios fixos do hermes continuam) |
+| oh-my-pi | `--auto-approve` |
+
+`harness-asks = true` (global, perfil ou projeto, ou o item "Perguntas do harness" na tela de configurações da TUI) lança o harness como ele é, com as perguntas. O ajuste vai pelo ambiente e pelos argumentos de cada lançamento: os arquivos de configuração do harness no HOME sintético não mudam. O `shell` e a aba de chat não são afetados.
 
 ## Camadas
 

@@ -37,6 +37,10 @@ Each token goes to the vault as a secret with the channel's tool. The agent sees
 - **Log:** the path of a request to Telegram goes to the log with the fake, never with the real one. The Discord WebSocket becomes an `https` line with status `101`, written when the connection ends.
 - **Telegram webhook:** hermes's default is polling, which needs no inbound port. With a webhook, use the [port allowlist](network.md#port-allowlist) (`--port 8443@0.0.0.0`). The webhook secret (`TELEGRAM_WEBHOOK_SECRET`) stays out of the swap: hermes checks it on incoming requests, and the fake works as the secret itself.
 
+## Without prompts
+
+hermes runs with `HERMES_YOLO_MODE=1`, without asking for approval of dangerous commands; its fixed blocks still apply, and the sandbox is the barrier. `harness-asks = true` in the configuration brings the approvals back ([config.md](config.md#harness-prompts)).
+
 ## Limits
 
 - **WhatsApp:** not supported in this version.

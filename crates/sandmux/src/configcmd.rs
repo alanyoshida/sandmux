@@ -221,6 +221,11 @@ fn rows(eff: &Effective) -> Vec<[String; 3]> {
         rows.push([k.to_string(), s.value.to_string(), s.origin.to_string()]);
     }
     rows.push([
+        "window".into(),
+        eff.window.value.to_string(),
+        eff.window.origin.to_string(),
+    ]);
+    rows.push([
         "memory".into(),
         eff.memory.value.to_string(),
         eff.memory.origin.to_string(),

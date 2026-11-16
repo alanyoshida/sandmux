@@ -27,7 +27,7 @@ pub const FILE: &str = "config.toml";
 /// Chaves de lista, na ordem em que aparecem nas mensagens.
 pub const LIST_KEYS: &[&str] = &["ro", "rw", "pass-env"];
 /// Chaves de liga e desliga.
-pub const BOOL_KEYS: &[&str] = &["repo", "kvm", "gpu", "clipboard"];
+pub const BOOL_KEYS: &[&str] = &["repo", "kvm", "gpu", "clipboard", "harness-asks"];
 /// Chaves de teto.
 pub const LIMIT_KEYS: &[&str] = &["memory", "processes"];
 /// Chaves da rede: o modo, em qualquer seção; a retenção do registro, só em
@@ -192,6 +192,8 @@ pub struct Layer {
     pub kvm: Option<bool>,
     pub gpu: Option<bool>,
     pub clipboard: Option<bool>,
+    /// As perguntas de permissão do harness (`harness-asks`).
+    pub harness_asks: Option<bool>,
     pub memory: Option<MemoryLimit>,
     pub processes: Option<ProcessLimit>,
     pub network: Option<NetworkMode>,
@@ -257,6 +259,7 @@ impl Layer {
             "kvm" => self.kvm,
             "gpu" => self.gpu,
             "clipboard" => self.clipboard,
+            "harness-asks" => self.harness_asks,
             _ => None,
         }
     }
@@ -267,6 +270,7 @@ impl Layer {
             "kvm" => Some(&mut self.kvm),
             "gpu" => Some(&mut self.gpu),
             "clipboard" => Some(&mut self.clipboard),
+            "harness-asks" => Some(&mut self.harness_asks),
             _ => None,
         }
     }
@@ -1105,7 +1109,7 @@ fn layer_in(
                     l.pass_env.push(s);
                 }
             }
-            "repo" | "kvm" | "gpu" | "clipboard" => {
+            "repo" | "kvm" | "gpu" | "clipboard" | "harness-asks" => {
                 let v = item.as_bool().ok_or_else(|| {
                     err(
                         vspan.clone(),
@@ -1873,6 +1877,7 @@ pub struct Effective {
     pub kvm: Setting,
     pub gpu: Setting,
     pub clipboard: Setting,
+    pub harness_asks: Setting,
     pub memory: LimitSetting<MemoryLimit>,
     pub processes: LimitSetting<ProcessLimit>,
     pub network: LimitSetting<NetworkMode>,
@@ -2016,6 +2021,7 @@ impl Effective {
             repo: self.repo.value,
             kvm: self.kvm.value,
             no_gpu: !self.gpu.value,
+            harness_asks: self.harness_asks.value,
             args: args.to_vec(),
             layer,
             docker_socket: None,
@@ -2077,6 +2083,7 @@ impl Effective {
             "kvm" => Some(&self.kvm),
             "gpu" => Some(&self.gpu),
             "clipboard" => Some(&self.clipboard),
+            "harness-asks" => Some(&self.harness_asks),
             _ => None,
         }
     }
@@ -2322,6 +2329,7 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
         kvm: default(false),
         gpu: default(true),
         clipboard: default(false),
+        harness_asks: default(false),
         memory: LimitSetting {
             value: limits::DEFAULT_MEMORY,
             origin: Origin::Default,
@@ -2413,6 +2421,7 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
                     "repo" => &mut eff.repo,
                     "kvm" => &mut eff.kvm,
                     "gpu" => &mut eff.gpu,
+                    "harness-asks" => &mut eff.harness_asks,
                     _ => &mut eff.clipboard,
                 };
                 *s = Setting {
