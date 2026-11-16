@@ -174,6 +174,8 @@ pub struct Ctx {
     pub vault: Option<sandmux_spec::VaultAccess>,
     /// Etiqueta do lançamento.
     pub tag: String,
+    /// Harness da aba: só os endpoints de login dele são capturados.
+    pub harness: String,
 }
 
 /// Os tokens reais de uma resposta de login: (papel, valor) dos campos de
@@ -214,12 +216,55 @@ pub fn body_with_reals(
     let mut out = text.to_string();
     let mut used = None;
     for i in list {
-        if !i.fake.is_empty() && out.contains(&i.fake) {
+        if i.fake.is_empty() {
+            continue;
+        }
+        if out.contains(&i.fake) {
             out = out.replace(&i.fake, &i.value);
             used.get_or_insert_with(|| i.name.clone());
         }
+        // Num formulário (`a=b&c=d`), o falso chega codificado: o refresh do
+        // Google (`1//…`) vai como `1%2F%2F…`.
+        let enc = percent(&i.fake);
+        if enc != i.fake {
+            let real = percent(&i.value);
+            for form in [lower_escapes(&enc), enc] {
+                if out.contains(&form) {
+                    out = out.replace(&form, &real);
+                    used.get_or_insert_with(|| i.name.clone());
+                }
+            }
+        }
     }
     (out.into_bytes(), used)
+}
+
+/// A forma percentual de um valor num formulário: cada byte fora de
+/// `[A-Za-z0-9._~-]` como `%XX` maiúsculo (como o `url.Values.Encode` do Go).
+pub fn percent(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    for b in v.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'-') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// `%2F` vira `%2f`; o resto fica.
+fn lower_escapes(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    let mut rest = v;
+    while let Some(i) = rest.find('%') {
+        out.push_str(&rest[..i]);
+        let esc = rest.get(i..i + 3).unwrap_or(&rest[i..]);
+        out.push_str(&esc.to_ascii_lowercase());
+        rest = &rest[i + esc.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn full(b: impl Into<Bytes>) -> Boxed {
@@ -341,12 +386,13 @@ async fn capture_exchange(
                     ),
                 ));
             };
-            let tag = ctx.tag.clone();
+            let (tag, harness) = (ctx.tag.clone(), ctx.harness.clone());
             let items = found.clone();
-            let fakes =
-                tokio::task::spawn_blocking(move || crate::inject::capture(&access, &tag, items))
-                    .await
-                    .unwrap_or_else(|e| Err(e.to_string()));
+            let fakes = tokio::task::spawn_blocking(move || {
+                crate::inject::capture(&access, &tag, &harness, items)
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
             match fakes.ok().and_then(|f| with_fakes(&rbytes, &found, &f)) {
                 Some(b) => b,
                 None => {
@@ -427,7 +473,7 @@ where
         let ctx = ctx.clone();
         async move {
             if req.method() == hyper::Method::POST
-                && sandmux_spec::net::is_capture(&ctx.domain, &path_of(req.uri()))
+                && sandmux_spec::net::is_capture(&ctx.harness, &ctx.domain, &path_of(req.uri()))
             {
                 return capture_exchange(req, sender, ctx).await;
             }
@@ -664,6 +710,32 @@ mod tests {
     /// com tokens é recusada e o real não chega ao sandbox; com o "daemon",
     /// chegam os falsos, e o destino recebe o real do corpo.
     async fn exchange(vault: Option<sandmux_spec::VaultAccess>) -> (String, String) {
+        exchange_with(
+            Login {
+                harness: "claude",
+                domain: "platform.claude.com",
+                path: "/v1/oauth/token",
+                ctype: "application/json",
+                req_body: r#"{"grant_type":"refresh_token","refresh_token":"FR"}"#,
+                resp_body: r#"{"access_token":"sk-ant-oat01-NEWA","refresh_token":"sk-ant-ort01-NEWR"}"#,
+                injection: inj("claude:refresh", "FR", "sk-ant-ort01-REALR"),
+            },
+            vault,
+        )
+        .await
+    }
+
+    struct Login {
+        harness: &'static str,
+        domain: &'static str,
+        path: &'static str,
+        ctype: &'static str,
+        req_body: &'static str,
+        resp_body: &'static str,
+        injection: sandmux_proto::msg::Injection,
+    }
+
+    async fn exchange_with(l: Login, vault: Option<sandmux_spec::VaultAccess>) -> (String, String) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let (mut guest, guest_side) = tokio::io::duplex(1 << 16);
         let (up_side, mut upstream) = tokio::io::duplex(1 << 16);
@@ -671,12 +743,13 @@ mod tests {
         let ctx = Arc::new(Ctx {
             log: Arc::new(crate::log::Log::new(dir.path(), "t", dir.path())),
             proto: "https",
-            domain: "platform.claude.com".into(),
+            domain: l.domain.into(),
             ip: "1.2.3.4".into(),
             port: 443,
-            injections: vec![inj("claude:refresh", "FR", "sk-ant-ort01-REALR")],
+            injections: vec![l.injection],
             vault,
             tag: "t".into(),
+            harness: l.harness.into(),
         });
         tokio::spawn(serve_http(guest_side, up_side, ctx));
         // O "destino": lê o pedido e responde com tokens novos.
@@ -701,8 +774,7 @@ mod tests {
                     }
                 }
             }
-            let body =
-                r#"{"access_token":"sk-ant-oat01-NEWA","refresh_token":"sk-ant-ort01-NEWR"}"#;
+            let body = l.resp_body;
             let resp = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
                 body.len()
@@ -710,9 +782,12 @@ mod tests {
             upstream.write_all(resp.as_bytes()).await.unwrap();
             String::from_utf8_lossy(&got).to_string()
         });
-        let req_body = r#"{"grant_type":"refresh_token","refresh_token":"FR"}"#;
+        let req_body = l.req_body;
         let req = format!(
-            "POST /v1/oauth/token HTTP/1.1\r\nhost: platform.claude.com\r\ncontent-type: application/json\r\naccept-encoding: gzip\r\ncontent-length: {}\r\n\r\n{req_body}",
+            "POST {} HTTP/1.1\r\nhost: {}\r\ncontent-type: {}\r\naccept-encoding: gzip\r\ncontent-length: {}\r\n\r\n{req_body}",
+            l.path,
+            l.domain,
+            l.ctype,
             req_body.len()
         );
         guest.write_all(req.as_bytes()).await.unwrap();
@@ -800,5 +875,96 @@ mod tests {
             items[0],
             ("access".to_string(), "sk-ant-oat01-NEWA".to_string())
         );
+    }
+
+    fn agy_refresh() -> Login {
+        Login {
+            harness: "agy",
+            domain: "oauth2.googleapis.com",
+            path: "/token",
+            ctype: "application/x-www-form-urlencoded",
+            req_body: "client_id=c&grant_type=refresh_token&refresh_token=1%2F%2FsandmuxFR",
+            resp_body: r#"{"access_token":"ya29.NEW-A_1","expires_in":3599,"token_type":"Bearer"}"#,
+            injection: inj("agy:refresh", "1//sandmuxFR", "1//0gREAL-r_x"),
+        }
+    }
+
+    #[test]
+    fn falso_codificado_no_formulario() {
+        assert_eq!(percent("1//abc"), "1%2F%2Fabc");
+        assert_eq!(percent("ya29.a-b_c~d"), "ya29.a-b_c~d");
+        let list = [inj("agy:refresh", "1//sandmuxFR", "1//0gREAL+r")];
+        for body in [
+            "refresh_token=1%2F%2FsandmuxFR&x=1",
+            "refresh_token=1%2f%2fsandmuxFR&x=1",
+        ] {
+            let (b, used) = body_with_reals(body.as_bytes(), &list);
+            assert_eq!(
+                String::from_utf8(b).unwrap(),
+                "refresh_token=1%2F%2F0gREAL%2Br&x=1"
+            );
+            assert_eq!(used.as_deref(), Some("agy:refresh"));
+        }
+    }
+
+    #[tokio::test]
+    async fn renovacao_do_google_na_aba_do_agy() {
+        use sandmux_proto::{Frame, Msg, read_frame, write_control};
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("d.sock");
+        let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let daemon = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let _ = read_frame(&mut s).unwrap();
+            write_control(
+                &mut s,
+                &Msg::Welcome {
+                    protocol: sandmux_proto::PROTOCOL,
+                    version: "t".into(),
+                    pid: 1,
+                    start_mode: "t".into(),
+                },
+            )
+            .unwrap();
+            let Some(Frame::Control(Msg::VaultCapture { harness, items, .. })) =
+                read_frame(&mut s).unwrap()
+            else {
+                panic!("sem pedido de captura");
+            };
+            write_control(
+                &mut s,
+                &Msg::Captured {
+                    fakes: vec!["ya29.sandmuxFA".into()],
+                },
+            )
+            .unwrap();
+            (harness, items)
+        });
+        let access = sandmux_spec::VaultAccess {
+            socket: sock,
+            data_dir: dir.path().into(),
+            config_dir: dir.path().into(),
+        };
+        let (resp, seen) = exchange_with(agy_refresh(), Some(access)).await;
+        assert!(seen.contains("refresh_token=1%2F%2F0gREAL-r_x"), "{seen}");
+        assert!(!seen.contains("sandmuxFR"), "{seen}");
+        assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+        assert!(resp.contains("ya29.sandmuxFA"), "{resp}");
+        assert!(!resp.contains("NEW-A"), "{resp}");
+        let (harness, items) = daemon.join().unwrap();
+        assert_eq!(harness, "agy");
+        assert_eq!(items, [("access".to_string(), "ya29.NEW-A_1".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn endpoint_do_google_fora_da_aba_do_agy_passa() {
+        // Num shell, o `gcloud` renova o login dele: nada é capturado, e o
+        // corpo segue como veio.
+        let mut l = agy_refresh();
+        l.harness = "shell";
+        let (resp, seen) = exchange_with(l, None).await;
+        assert!(seen.contains("refresh_token=1%2F%2FsandmuxFR"), "{seen}");
+        assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+        assert!(resp.contains("ya29.NEW-A_1"), "{resp}");
     }
 }

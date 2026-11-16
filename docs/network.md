@@ -144,7 +144,7 @@ sandmux config add allow api.minha-empresa.com --project ~/projetos/api
 
 ### Catálogo de provedores de inferência
 
-O modo `inferencia` libera só: `openrouter.ai`, `api.anthropic.com`, `platform.claude.com` (a renovação do login do Claude Code, [claude.md](claude.md)), `api.openai.com`, `generativelanguage.googleapis.com`, `api.deepseek.com`, `api.mistral.ai`, `api.groq.com`, `api.x.ai`. Cada provedor pode ser desligado com `catalog-off`. Quando o cofre de segredos existir, a lista passa a vir dos provedores cadastrados nele.
+O modo `inferencia` libera só: `openrouter.ai`, `api.anthropic.com`, `platform.claude.com` (a renovação do login do Claude Code, [claude.md](claude.md)), `api.openai.com`, `generativelanguage.googleapis.com`, `oauth2.googleapis.com`, `aicode.googleapis.com`, `cloudcode-pa.googleapis.com` e `daily-cloudcode-pa.googleapis.com` (o login do Google do Antigravity CLI, [agy.md](agy.md#login-do-google)), `api.deepseek.com`, `api.mistral.ai`, `api.groq.com`, `api.x.ai`. Cada provedor pode ser desligado com `catalog-off`. Quando o cofre de segredos existir, a lista passa a vir dos provedores cadastrados nele.
 
 ### Como o gateway decide
 

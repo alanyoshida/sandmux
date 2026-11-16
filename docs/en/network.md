@@ -146,7 +146,7 @@ sandmux config add allow api.minha-empresa.com --project ~/projetos/api
 
 ### Inference provider catalog
 
-The `inferencia` mode allows only: `openrouter.ai`, `api.anthropic.com`, `platform.claude.com` (Claude Code login renewal, [claude.md](claude.md)), `api.openai.com`, `generativelanguage.googleapis.com`, `api.deepseek.com`, `api.mistral.ai`, `api.groq.com`, `api.x.ai`. Each provider can be turned off with `catalog-off`. When the secrets vault exists, the list comes from the providers registered in it.
+The `inferencia` mode allows only: `openrouter.ai`, `api.anthropic.com`, `platform.claude.com` (Claude Code login renewal, [claude.md](claude.md)), `api.openai.com`, `generativelanguage.googleapis.com`, `oauth2.googleapis.com`, `aicode.googleapis.com`, `cloudcode-pa.googleapis.com` and `daily-cloudcode-pa.googleapis.com` (the Antigravity CLI Google login, [agy.md](agy.md#google-login)), `api.deepseek.com`, `api.mistral.ai`, `api.groq.com`, `api.x.ai`. Each provider can be turned off with `catalog-off`. When the secrets vault exists, the list comes from the providers registered in it.
 
 ### How the gateway decides
 

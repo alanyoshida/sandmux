@@ -28,6 +28,11 @@ fn err(e: VaultError) -> String {
 pub fn capture_fake(real: &str) -> String {
     let head: String = real.chars().take(15).collect();
     let prefix = head.rfind('-').map(|i| &head[..=i]).unwrap_or("");
+    fake_with_prefix(prefix)
+}
+
+/// Um falso novo com `prefix`, seguido de `sandmux` e letras e números.
+pub fn fake_with_prefix(prefix: &str) -> String {
     let rand = sandmux_vault::new_fake();
     let tail: String = rand.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
     format!("{prefix}sandmux{tail}")
@@ -432,23 +437,18 @@ impl VaultState {
         self.save()
     }
 
-    /// Guarda um token capturado numa resposta de login (`role`: `access`,
-    /// `refresh` ou `api-key`) como `claude:<role>`, e devolve o falso dele:
-    /// o mesmo de antes quando o segredo já existe, senão um novo com o
-    /// prefixo do real.
-    pub fn capture(&mut self, role: &str, real: &str) -> Result<String, String> {
-        let domains: &[&str] = match role {
-            "access" => &["api.anthropic.com", "claude.ai", "platform.claude.com"],
-            "refresh" => &["platform.claude.com"],
-            "api-key" => &["api.anthropic.com"],
-            other => {
-                return Err(trf!(
-                    "papel de token desconhecido: {other}",
-                    "unknown token role: {other}"
-                ));
-            }
+    /// Guarda um token capturado numa resposta de login de `harness`
+    /// (`role`: `access`, `refresh` ou `api-key`) como `<harness>:<role>`, e
+    /// devolve o falso dele: o mesmo de antes quando o segredo já existe,
+    /// senão um novo com o prefixo do formato do provedor (ou do real).
+    pub fn capture(&mut self, harness: &str, role: &str, real: &str) -> Result<String, String> {
+        let Some(domains) = sandmux_spec::net::login_domains(harness, role) else {
+            return Err(trf!(
+                "papel de token desconhecido: {harness}:{role}",
+                "unknown token role: {harness}:{role}"
+            ));
         };
-        let name = format!("claude:{role}");
+        let name = format!("{harness}:{role}");
         let o = self.opened()?;
         let fake = match o.contents.secrets.iter_mut().find(|s| s.name == name) {
             Some(s) => {
@@ -458,7 +458,10 @@ impl VaultState {
             None => String::new(),
         };
         let fake = if fake.is_empty() {
-            let fake = capture_fake(real);
+            let fake = match sandmux_spec::net::login_fake_prefix(harness, role) {
+                Some(p) => fake_with_prefix(p),
+                None => capture_fake(real),
+            };
             o.put(Secret {
                 name,
                 value: real.to_string(),
@@ -583,13 +586,23 @@ impl VaultState {
 
     /// Domínios donos dos segredos, com o cofre desbloqueado.
     pub fn domains(&self) -> Vec<String> {
+        self.domains_where(|_| true)
+    }
+
+    /// Os domínios donos dos segredos que valem na aba de `harness`: os de
+    /// login de outro harness ficam de fora.
+    pub fn domains_for(&self, harness: &str) -> Vec<String> {
+        self.domains_where(|name| sandmux_spec::net::secret_for_harness(name, harness))
+    }
+
+    fn domains_where(&self, keep: impl Fn(&str) -> bool) -> Vec<String> {
         self.open
             .as_ref()
             .map(|o| {
                 o.contents
                     .secrets
                     .iter()
-                    .filter(|s| s.is_token())
+                    .filter(|s| s.is_token() && keep(&s.name))
                     .flat_map(|s| s.domains.iter().cloned())
                     .collect()
             })
@@ -715,21 +728,46 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let mut v = VaultState::new(d.path());
         // Trancado: recusa.
-        assert!(v.capture("access", "sk-ant-oat01-REAL1").is_err());
+        assert!(v.capture("claude", "access", "sk-ant-oat01-REAL1").is_err());
         v.init("s").unwrap();
-        let f1 = v.capture("access", "sk-ant-oat01-REAL1").unwrap();
+        let f1 = v.capture("claude", "access", "sk-ant-oat01-REAL1").unwrap();
         assert!(f1.starts_with("sk-ant-oat01-sandmux"), "{f1}");
         assert!(!f1.contains("REAL"));
         // A renovação troca o valor e mantém o falso.
-        let f2 = v.capture("access", "sk-ant-oat01-REAL2").unwrap();
+        let f2 = v.capture("claude", "access", "sk-ant-oat01-REAL2").unwrap();
         assert_eq!(f1, f2);
         let inj = v.injections();
         let a = inj.iter().find(|i| i.name == "claude:access").unwrap();
         assert_eq!(a.value, "sk-ant-oat01-REAL2");
         assert!(a.domains.iter().any(|d| d == "api.anthropic.com"));
-        let r = v.capture("refresh", "sk-ant-ort01-R").unwrap();
+        let r = v.capture("claude", "refresh", "sk-ant-ort01-R").unwrap();
         assert!(r.starts_with("sk-ant-ort01-sandmux"));
-        assert!(v.capture("outro", "x").is_err());
+        assert!(v.capture("claude", "outro", "x").is_err());
         assert!(capture_fake("semhifen").starts_with("sandmux"));
+        assert!(v.capture("shell", "access", "x").is_err());
+    }
+
+    #[test]
+    fn login_do_agy_com_prefixos_do_google() {
+        let d = tempfile::tempdir().unwrap();
+        let mut v = VaultState::new(d.path());
+        v.init("s").unwrap();
+        let a = v.capture("agy", "access", "ya29.a0-REAL_1").unwrap();
+        assert!(a.starts_with("ya29.sandmux"), "{a}");
+        assert!(a[5..].chars().all(|c| c.is_ascii_alphanumeric()), "{a}");
+        let r = v.capture("agy", "refresh", "1//0g-REAL").unwrap();
+        assert!(r.starts_with("1//sandmux"), "{r}");
+        assert_eq!(v.capture("agy", "access", "ya29.a0-REAL_2").unwrap(), a);
+        let inj = v.injections();
+        let x = inj.iter().find(|i| i.name == "agy:access").unwrap();
+        assert_eq!(x.value, "ya29.a0-REAL_2");
+        assert_eq!(x.domains, ["*.googleapis.com"]);
+        let y = inj.iter().find(|i| i.name == "agy:refresh").unwrap();
+        assert_eq!(y.domains, ["oauth2.googleapis.com"]);
+        // Na aba de outro harness, os domínios do login ficam de fora.
+        assert!(v.domains().iter().any(|d| d == "*.googleapis.com"));
+        assert!(v.domains_for("agy").iter().any(|d| d == "*.googleapis.com"));
+        assert!(v.domains_for("shell").is_empty());
+        assert!(v.domains_for("claude").is_empty());
     }
 }

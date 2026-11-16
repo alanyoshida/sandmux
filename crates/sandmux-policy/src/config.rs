@@ -2362,15 +2362,14 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
         project: project.map(|(p, _)| p.clone()),
     };
     eff.net_rules = net_rules(&layers);
-    // A aba do Claude Code decifra os hosts da Anthropic: o login e a
+    // As abas dos harnesses com login capturado decifram os hosts do login
+    // (o Claude Code os da Anthropic, o `agy` os do Google): o login e a
     // renovação passam pela captura dos tokens.
-    if req.harness == "claude" {
-        for h in sandmux_spec::net::CLAUDE_HOSTS {
-            if let Ok(p) = h.parse::<Pattern>()
-                && !eff.decrypt.contains(&p)
-            {
-                eff.decrypt.push(p);
-            }
+    for h in sandmux_spec::net::capture_hosts(req.harness) {
+        if let Ok(p) = h.parse::<Pattern>()
+            && !eff.decrypt.contains(&p)
+        {
+            eff.decrypt.push(p);
         }
     }
     for (l, _) in &layers {
@@ -2628,6 +2627,26 @@ repo = true
             profile,
             run,
         }
+    }
+
+    #[test]
+    fn abas_com_login_decifram_os_hosts_do_login() {
+        let h = host(Path::new("/home/ana"));
+        let c = parse("[global]\n").unwrap();
+        let run = Layer::default();
+        let decrypt = |harness: &'static str| {
+            let mut r = req(Path::new("/w"), None, &run);
+            r.harness = harness;
+            resolve(&c, &h, &r)
+                .unwrap()
+                .decrypt
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert!(decrypt("agy").contains(&"*.googleapis.com".to_string()));
+        assert!(decrypt("claude").contains(&"platform.claude.com".to_string()));
+        assert!(!decrypt("shell").iter().any(|d| d.contains("googleapis")));
     }
 
     #[test]

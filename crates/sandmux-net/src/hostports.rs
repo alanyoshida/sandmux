@@ -38,6 +38,7 @@ pub fn looks_http(head: &[u8]) -> bool {
 pub struct Vault {
     pub access: sandmux_spec::VaultAccess,
     pub tag: String,
+    pub harness: String,
 }
 
 fn serve(
@@ -81,7 +82,10 @@ fn serve(
                 // troca o falso pelo real e registra cada pedido.
                 let injections = match vault {
                     Some(v) => tokio::task::spawn_blocking(move || {
-                        crate::inject::for_host(crate::inject::fetch(&v.access, &v.tag), NAME)
+                        crate::inject::for_host(
+                            crate::inject::fetch(&v.access, &v.tag, &v.harness),
+                            NAME,
+                        )
                     })
                     .await
                     .unwrap_or_default(),
@@ -105,6 +109,7 @@ fn serve(
                             injections,
                             vault: None,
                             tag: String::new(),
+                            harness: String::new(),
                         });
                         crate::mitm::serve_http(c, up, ctx).await;
                         let ms = t0.elapsed().as_millis() as u64;

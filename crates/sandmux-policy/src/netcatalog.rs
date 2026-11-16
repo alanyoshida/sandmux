@@ -125,6 +125,11 @@ pub const INFERENCE: &[&str] = &[
     "platform.claude.com",
     "api.openai.com",
     "generativelanguage.googleapis.com",
+    // Login do Google do Antigravity CLI: a renovação e o modelo.
+    "oauth2.googleapis.com",
+    "aicode.googleapis.com",
+    "cloudcode-pa.googleapis.com",
+    "daily-cloudcode-pa.googleapis.com",
     "api.deepseek.com",
     "api.mistral.ai",
     "api.groq.com",

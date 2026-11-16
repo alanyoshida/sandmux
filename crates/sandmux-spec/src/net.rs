@@ -346,7 +346,17 @@ impl NetPolicy {
         if self.mode != PolicyMode::Inference {
             return;
         }
-        let has = |r: &Rule| owned.iter().any(|d| r.pattern.matches_name(d));
+        // O domínio dono pode ser um padrão (`*.googleapis.com`), que casa
+        // com o provedor do catálogo.
+        let has = |r: &Rule| {
+            owned.iter().any(|d| {
+                r.pattern.matches_name(d)
+                    || match (&r.pattern, d.parse::<Pattern>()) {
+                        (Pattern::Exact(name), Ok(p)) => p.matches_name(name),
+                        _ => false,
+                    }
+            })
+        };
         let any = self
             .rules
             .iter()
@@ -501,14 +511,21 @@ pub fn strictest(list: &[Option<NetPolicy>]) -> NetPolicy {
 }
 
 /// Endpoints de login cujas respostas trazem tokens reais: o gateway os
-/// guarda no cofre e entrega falsos ao sandbox (host e caminho exatos, POST).
-pub const CAPTURE_ENDPOINTS: &[(&str, &str)] = &[
-    ("platform.claude.com", "/v1/oauth/token"),
-    ("api.anthropic.com", "/api/oauth/claude_cli/create_api_key"),
+/// guarda no cofre e entrega falsos ao sandbox (harness dono, host e caminho
+/// exatos, POST). Cada endpoint só é capturado nas abas do harness dono: o de
+/// token do Google também serve ao `gcloud` e a outros clientes.
+pub const CAPTURE_ENDPOINTS: &[(&str, &str, &str)] = &[
+    ("claude", "platform.claude.com", "/v1/oauth/token"),
+    (
+        "claude",
+        "api.anthropic.com",
+        "/api/oauth/claude_cli/create_api_key",
+    ),
+    ("agy", "oauth2.googleapis.com", "/token"),
 ];
 
 /// Campos de primeiro nível da resposta que levam token, e o papel de cada
-/// um no cofre (`claude:<papel>`).
+/// um no cofre (`<harness>:<papel>`).
 pub const CAPTURE_FIELDS: &[(&str, &str)] = &[
     ("access_token", "access"),
     ("refresh_token", "refresh"),
@@ -518,11 +535,60 @@ pub const CAPTURE_FIELDS: &[(&str, &str)] = &[
 /// Hosts que a aba do Claude Code sempre decifra, para a captura.
 pub const CLAUDE_HOSTS: &[&str] = &["platform.claude.com", "api.anthropic.com"];
 
-/// O endpoint de captura de `host` e `path`, se for um.
-pub fn is_capture(host: &str, path: &str) -> bool {
+/// Hosts que a aba do Antigravity CLI sempre decifra: o endpoint de token e
+/// as APIs do Google que recebem o token de acesso.
+pub const AGY_HOSTS: &[&str] = &["*.googleapis.com"];
+
+/// Os harnesses com login capturado.
+pub const LOGIN_HARNESSES: &[&str] = &["claude", "agy"];
+
+/// Os hosts que a aba de `harness` sempre decifra, para a captura.
+pub fn capture_hosts(harness: &str) -> &'static [&'static str] {
+    match harness {
+        "claude" => CLAUDE_HOSTS,
+        "agy" => AGY_HOSTS,
+        _ => &[],
+    }
+}
+
+/// O endpoint de captura de `host` e `path` na aba de `harness`, se for um.
+pub fn is_capture(harness: &str, host: &str, path: &str) -> bool {
     CAPTURE_ENDPOINTS
         .iter()
-        .any(|(h, p)| host.eq_ignore_ascii_case(h) && path == *p)
+        .any(|(h, d, p)| *h == harness && host.eq_ignore_ascii_case(d) && path == *p)
+}
+
+/// Os domínios donos de um token capturado (`role`) do login de `harness`.
+pub fn login_domains(harness: &str, role: &str) -> Option<&'static [&'static str]> {
+    Some(match (harness, role) {
+        ("claude", "access") => &["api.anthropic.com", "claude.ai", "platform.claude.com"],
+        ("claude", "refresh") => &["platform.claude.com"],
+        ("claude", "api-key") => &["api.anthropic.com"],
+        ("agy", "access") => &["*.googleapis.com"],
+        ("agy", "refresh") => &["oauth2.googleapis.com"],
+        _ => return None,
+    })
+}
+
+/// O prefixo do falso de um token capturado: o do formato do provedor, que
+/// o harness pode conferir. `None` deixa o prefixo ser tirado do real.
+pub fn login_fake_prefix(harness: &str, role: &str) -> Option<&'static str> {
+    match (harness, role) {
+        ("agy", "access") => Some("ya29."),
+        ("agy", "refresh") => Some("1//"),
+        _ => None,
+    }
+}
+
+/// O harness dono de um segredo de login (`claude:access` é do `claude`).
+pub fn login_owner(secret: &str) -> Option<&'static str> {
+    let (h, _) = secret.split_once(':')?;
+    LOGIN_HARNESSES.iter().copied().find(|x| *x == h)
+}
+
+/// O segredo vale na aba de `harness`? Os de login só na aba do dono.
+pub fn secret_for_harness(secret: &str, harness: &str) -> bool {
+    login_owner(secret).is_none_or(|h| h == harness)
 }
 
 #[cfg(test)]
@@ -540,6 +606,37 @@ mod tests {
             origin: "global".into(),
             enabled: true,
         }
+    }
+
+    #[test]
+    fn captura_so_na_aba_do_dono() {
+        assert!(is_capture("agy", "oauth2.googleapis.com", "/token"));
+        assert!(!is_capture("shell", "oauth2.googleapis.com", "/token"));
+        assert!(!is_capture("claude", "oauth2.googleapis.com", "/token"));
+        assert!(is_capture(
+            "claude",
+            "Platform.Claude.com",
+            "/v1/oauth/token"
+        ));
+        assert!(!is_capture("agy", "platform.claude.com", "/v1/oauth/token"));
+        assert!(!is_capture("agy", "oauth2.googleapis.com", "/tokeninfo"));
+    }
+
+    #[test]
+    fn segredos_de_login_so_no_dono() {
+        assert!(secret_for_harness("agy:access", "agy"));
+        assert!(!secret_for_harness("agy:access", "shell"));
+        assert!(!secret_for_harness("claude:refresh", "agy"));
+        assert!(!secret_for_harness("claude:refresh", ""));
+        assert!(secret_for_harness("openrouter", "shell"));
+        assert!(secret_for_harness("empresa:token", "shell"));
+        assert_eq!(
+            login_domains("agy", "access"),
+            Some(&["*.googleapis.com"][..])
+        );
+        assert_eq!(login_domains("agy", "api-key"), None);
+        assert_eq!(capture_hosts("agy"), AGY_HOSTS);
+        assert!(capture_hosts("shell").is_empty());
     }
 
     #[test]
@@ -616,6 +713,27 @@ mod tests {
         };
         c.restrict_inference(&["openrouter.ai".into()]);
         assert_eq!(c.decide_name("a.test"), Verdict::Pass);
+    }
+
+    #[test]
+    fn so_inferencia_com_o_login_do_agy() {
+        let mut p = NetPolicy {
+            mode: PolicyMode::Inference,
+            rules: vec![
+                rule("openrouter.ai", RuleKind::Allow),
+                rule("oauth2.googleapis.com", RuleKind::Allow),
+                rule("cloudcode-pa.googleapis.com", RuleKind::Allow),
+            ],
+            decrypt: Vec::new(),
+            ssh: Vec::new(),
+            ports: Vec::new(),
+            host_ports: Vec::new(),
+        };
+        // O domínio dono é um padrão: casa com os provedores do Google.
+        p.restrict_inference(&["*.googleapis.com".into(), "oauth2.googleapis.com".into()]);
+        assert_eq!(p.decide_name("cloudcode-pa.googleapis.com"), Verdict::Pass);
+        assert_eq!(p.decide_name("oauth2.googleapis.com"), Verdict::Pass);
+        assert!(matches!(p.decide_name("openrouter.ai"), Verdict::Block(_)));
     }
 
     #[test]

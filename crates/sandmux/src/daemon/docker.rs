@@ -399,6 +399,7 @@ fn start(
                         data_dir: shared.base.data_dir.clone(),
                         config_dir: shared.base.config_dir.clone(),
                     }),
+                    harness: String::new(),
                 };
                 gateway = sandmux_net::spawn(tun, cfg).ok();
             }

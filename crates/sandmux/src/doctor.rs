@@ -75,9 +75,30 @@ fn real_secrets(host: &Host) -> Vec<(&'static str, sandmux_import::RealSecrets)>
     out
 }
 
+/// O login real do Google gravado pelo `agy` no HOME sintético (um login
+/// feito dentro do sandbox antes da captura).
+fn agy_login(host: &Host) -> Option<(std::path::PathBuf, sandmux_import::agy_login::Login)> {
+    let path = Layout::new(&host.data_dir)
+        .home("agy")
+        .join(sandmux_import::agy_login::TOKEN_FILE);
+    let l = sandmux_import::agy_login::Login::read(&path)?;
+    (!l.reals().is_empty()).then_some((path, l))
+}
+
+fn agy_login_line(l: &sandmux_import::agy_login::Login) -> String {
+    trf!(
+        "agy: {}, login do Google ({} token(s))",
+        "agy: {}, Google login ({} token(s))",
+        sandmux_import::agy_login::TOKEN_FILE,
+        l.reals().len()
+    )
+}
+
 fn secrets_section(host: &Host) -> usize {
     let found = real_secrets(host);
-    let n: usize = found.iter().map(|(_, r)| r.found.len()).sum();
+    let agy = agy_login(host);
+    let n: usize = found.iter().map(|(_, r)| r.found.len()).sum::<usize>()
+        + agy.as_ref().map_or(0, |(_, l)| l.reals().len());
     if n == 0 {
         println!(
             "{}",
@@ -100,6 +121,9 @@ fn secrets_section(host: &Host) -> usize {
             println!("  {l}");
         }
     }
+    if let Some((_, l)) = &agy {
+        println!("  {}", agy_login_line(l));
+    }
     println!(
         "{}",
         tr!(
@@ -118,7 +142,8 @@ fn fix_secrets(host: &Host) -> Result<i32> {
     use sandmux_proto::Msg;
     use std::io::IsTerminal;
     let found = real_secrets(host);
-    if found.is_empty() {
+    let agy = agy_login(host);
+    if found.is_empty() && agy.is_none() {
         println!(
             "{}",
             tr!(
@@ -229,6 +254,41 @@ fn fix_secrets(host: &Host) -> Result<i32> {
             moved += r.found.len();
             if !harnesses.contains(h) {
                 harnesses.push(*h);
+            }
+        }
+    }
+    if let Some((path, l)) = &agy {
+        println!("\n  {}", agy_login_line(l));
+        let yes = !tty || {
+            eprint!(
+                "{}",
+                tr!(
+                    "Mover o login do Google do agy para o cofre? [S/n] ",
+                    "Move the agy Google login to the vault? [Y/n] "
+                )
+            );
+            let mut a = String::new();
+            std::io::stdin().read_line(&mut a)?;
+            let t = a.trim().to_lowercase();
+            t.is_empty() || t == "s" || t == "sim" || t == "y"
+        };
+        if yes {
+            match crate::vaultcmd::store_agy_login(l, path) {
+                Ok(()) => {
+                    println!(
+                        "  agy:access, agy:refresh: {}",
+                        tr!("no cofre", "in the vault")
+                    );
+                    moved += l.reals().len();
+                    harnesses.push("agy");
+                }
+                Err(e) => println!(
+                    "{}",
+                    trf!(
+                        "  agy: o cofre recusou ({e:#}); o arquivo fica como estava",
+                        "  agy: the vault refused ({e:#}); the file stays as it was"
+                    )
+                ),
             }
         }
     }

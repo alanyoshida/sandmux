@@ -1181,6 +1181,7 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
             tun_socket: None,
             tls: n.tls.clone().filter(|_| gateway),
             vault: n.vault.clone().filter(|_| gateway),
+            harness: opts.harness.clone(),
         }),
         files: files_spec,
     };
@@ -1428,6 +1429,7 @@ pub fn compose_docker_view(
             tun_socket: Some(t.to_path_buf()),
             tls: None,
             vault: None,
+            harness: String::new(),
         }),
     };
     spec.validate()

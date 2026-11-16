@@ -636,7 +636,7 @@ pub fn spawn(
     let net_policy = prepared
         .net_policy
         .clone()
-        .map(|p| super::net::with_vault(shared, p))
+        .map(|p| super::net::with_vault(shared, p, &opts.harness))
         .map(|p| super::net::with_ssh(shared, p, &ssh_names));
     if let Some(p) = &net_policy {
         super::net::write_policy(&policy_file, p)
@@ -925,7 +925,7 @@ fn ask_in(
     if let Some(p) = prepared
         .net_policy
         .clone()
-        .map(|p| super::net::with_vault(shared, p))
+        .map(|p| super::net::with_vault(shared, p, &opts.harness))
     {
         super::net::write_policy(&policy_file, &p)
             .context(tr!("gravar a política de rede", "write the network policy"))?;

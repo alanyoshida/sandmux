@@ -184,6 +184,10 @@ pub struct NetworkSpec {
     /// valores reais dos segredos (só nas sessões do daemon).
     #[serde(default)]
     pub vault: Option<VaultAccess>,
+    /// Harness da aba: só os endpoints de login dele são capturados, e só os
+    /// segredos de login dele são trocados.
+    #[serde(default)]
+    pub harness: String,
 }
 
 /// Como o gateway fala com o daemon para pedir os segredos.

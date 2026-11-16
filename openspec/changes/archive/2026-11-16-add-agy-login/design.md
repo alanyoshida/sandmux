@@ -14,7 +14,7 @@ Do `agy` 1.5.3, observado no binário e no arquivo do host (só os nomes dos cam
 - O token fica em `~/.gemini/antigravity-cli/antigravity-oauth-token`, em JSON: `token.{access_token, token_type, refresh_token, expiry, expires_in}`, `auth_method` e `id_token_email`.
 - A renovação é a do pacote `oauth2` do Go: `POST oauth2.googleapis.com/token` em formulário, com `refresh_token=1%2F%2F…`.
 - O modelo é servido por `cloudcode-pa.googleapis.com` ou `daily-cloudcode-pa.googleapis.com`. O binário também usa `www.googleapis.com` (`userinfo`, `tokeninfo`), `play.googleapis.com` (telemetria) e o Cloud Resource Manager.
-- O binário tem o modo de colar o código (`SwitchLoginToAuthCode`, "Then paste the authorization code from the page").
+- O login usa `redirect_uri=https://antigravity.google/oauth-callback`, e a tela do `agy` aceita o código colado ("paste the authorization code below"), sem retorno em `localhost`.
 
 ## Goals / Non-Goals
 
@@ -36,9 +36,9 @@ Do `agy` 1.5.3, observado no binário e no arquivo do host (só os nomes dos cam
 - `claude`: `platform.claude.com /v1/oauth/token` e `api.anthropic.com /api/oauth/claude_cli/create_api_key`;
 - `agy`: `oauth2.googleapis.com /token`.
 
-O gateway sabe o harness da aba por um campo novo em `VaultAccess` (o spec do lançamento já leva o `VaultAccess` ao supervisor) e só captura os endpoints desse harness. `Msg::VaultCapture` ganha `harness`, e o daemon nomeia `<harness>:<papel>`, com os domínios da tabela.
+O gateway sabe o harness da aba por um campo novo na especificação de rede do lançamento (`NetworkSpec.harness`) e só captura os endpoints desse harness. O campo fica fora do `VaultAccess` porque o `run` sem daemon não tem cofre, mas ainda decifra os hosts do login e precisa recusar a resposta com tokens. `Msg::VaultCapture` ganha `harness`, e o daemon nomeia `<harness>:<papel>`, com os domínios da tabela.
 
-- **Alternativa descartada:** descobrir o harness no daemon pela etiqueta do lançamento. Essa saída não cobre o `run` direto sem daemon de sessão e não resolve o filtro no gateway.
+- **Alternativa descartada:** descobrir o harness no daemon pela etiqueta do lançamento. Essa saída não cobre o `run` sem daemon e não resolve o filtro no gateway.
 - **Protocolo:** passa a 36.
 
 ### Domínios e falsos do Google
@@ -54,9 +54,9 @@ O gateway sabe o harness da aba por um campo novo em `VaultAccess` (o spec do la
 `body_with_reals` passa a trocar também a forma percentual do falso (cada byte fora de `[A-Za-z0-9._~-]` como `%XX` maiúsculo, como o `url.Values.Encode` do Go) pela forma percentual do real. Corpos JSON continuam com a troca direta. A forma minúscula (`%2f`) também é aceita, porque o custo é baixo.
 
 ### Segredos de login só na aba do harness
-Um segredo cujo nome tem o prefixo de um harness da tabela de captura (`claude:`, `agy:`) é um segredo de login. O daemon filtra a lista de troca de cada aba (`Msg::VaultInject`, que já leva a etiqueta) e a lista de decifração compilada por aba. Os segredos de login de outro harness ficam fora das duas.
+Um segredo cujo nome tem o prefixo de um harness da tabela de captura (`claude:`, `agy:`) é um segredo de login. O gateway filtra a lista de troca que pede ao daemon (`Msg::VaultInject`), pelo harness da especificação de rede, e o daemon filtra a lista de decifração compilada para cada aba (`with_vault` com o harness da sessão). Os segredos de login de outro harness ficam fora das duas.
 
-Para o `run` direto, o filtro também é feito no gateway: ele conhece o harness pelo `VaultAccess` e descarta os segredos de login de outro harness. Os dois filtros juntos evitam decifrar todo `*.googleapis.com` num shell.
+Os dois filtros juntos evitam decifrar todo `*.googleapis.com` num shell. O gateway do Docker privado não tem harness, e por isso nenhum segredo de login chega a ele.
 
 **Hosts decifrados:** a aba do `agy` decifra `*.googleapis.com` sempre, como a do Claude Code decifra `CLAUDE_HOSTS`. Assim o primeiro login, ainda sem segredo no cofre, já passa pela captura.
 
@@ -77,13 +77,13 @@ O arquivo gravado mantém o `expiry` do host. Se o access já expirou, o `agy` r
 O vigia de chaves reais (`secretwatch.rs`) ganha uma regra para `.gemini/antigravity-cli/antigravity-oauth-token` do HOME do `agy`. Um valor em `token.access_token` ou `token.refresh_token` sem o prefixo `…sandmux` é movido pelo mesmo `capture` do daemon (`agy:*`, com os domínios da tabela), e o arquivo é regravado com os falsos. A regravação segue a regra existente: só se o arquivo não mudou desde a leitura. O `doctor` mostra o arquivo como chave real, e o `--fix` usa a mesma regra.
 
 ### Catálogo de inferência
-O catálogo ganha `oauth2.googleapis.com`, `cloudcode-pa.googleapis.com` e `daily-cloudcode-pa.googleapis.com`, e `platform.claude.com` passa a constar no spec (o código já o tem). A regra "só os provedores com segredo" passa a casar o domínio dono como padrão: `*.googleapis.com` libera os hosts do Google do catálogo.
+O catálogo ganha `oauth2.googleapis.com`, `aicode.googleapis.com`, `cloudcode-pa.googleapis.com` e `daily-cloudcode-pa.googleapis.com`, e `platform.claude.com` passa a constar no spec (o código já o tem). A regra "só os provedores com segredo" passa a casar o domínio dono como padrão: `*.googleapis.com` libera os hosts do Google do catálogo.
 
-Antes de fechar a lista, o registro de rede da aba mostra os hosts que o `agy` real usa. Se aparecer outro host necessário ao modelo, ele entra no catálogo, e o spec é atualizado.
+Conferido com o `agy` 1.5.3 real num HOME temporário, sem login (2026-11-16): antes do login, ele só fala com `play.googleapis.com` (telemetria, `POST /log`, decifrado sem erro); o código colado vai a `POST oauth2.googleapis.com/token`. O login pede os escopos `cloud-platform`, `userinfo.email`, `userinfo.profile`, `cclog`, `experimentsandconfigs`, `aicode` e `openid`, e o binário cita `aicode.googleapis.com`, `cloudcode-pa.googleapis.com` e `daily-cloudcode-pa.googleapis.com`. O host do modelo depois do login só aparece com uma conta real: fica para a verificação à mão do usuário.
 
 ## Risks / Trade-offs
 
-- **[Escopos amplos]** O token do `agy` pede `cloud-platform` e Drive, e o access real vai a todo `*.googleapis.com`. O agente pode usar o falso para agir no Google Cloud e no Drive do usuário pelo gateway. → Decisão do usuário, registrada no roadmap como risco aceito. O token não sai do gateway, e cada uso fica no registro com o nome `agy:access`.
+- **[Escopos amplos]** O token do `agy` tem o escopo `cloud-platform`, e o access real vai a todo `*.googleapis.com`. O agente pode usar o falso para agir no Google Cloud do usuário pelo gateway. → Decisão do usuário, registrada no roadmap como risco aceito. O token não sai do gateway, e cada uso fica no registro com o nome `agy:access`.
 - **[`id_token` real]** O `id_token`, quando vem na resposta, chega ao sandbox. É um JWT de cerca de uma hora, com o público do cliente do `agy`. → Risco aceito: trocá-lo por um falso quebraria a leitura do e-mail pelo `agy`, e ele não é aceito como `Bearer` pelas APIs `googleapis.com` comuns.
 - **[Refresh compartilhado com o host]** Se o Google passar a girar o refresh, ou se o usuário sair da conta no host (revogação), o login do sandbox para de renovar. → A captura guarda um refresh novo quando ele vem na resposta. Para uma revogação, a saída é `sandmux import agy --overwrite` ou o login dentro do sandmux.
 - **[Formato do arquivo]** Uma versão nova do `agy` pode mudar o JSON do token. → A importação só troca os dois campos conhecidos. Sem eles, segue sem o login e avisa, e a captura continua cobrindo o login feito no sandbox.
@@ -98,5 +98,4 @@ Antes de fechar a lista, o registro de rede da aba mostra os hosts que o `agy` r
 
 ## Open Questions
 
-- A lista exata de hosts que o `agy` precisa no modo `inferencia`. É conferida na implementação pelo registro de rede, e o resultado ajusta o catálogo e o cenário do spec.
-- Como o `agy` 1.5.3 oferece o modo de colar o código no Linux sem navegador. É conferido com o usuário no login real dentro do sandmux.
+- O host do modelo que o `agy` usa depois do login (entre os três do catálogo). Só uma conta real mostra; fica na verificação à mão do usuário, e um host a mais entra no catálogo.

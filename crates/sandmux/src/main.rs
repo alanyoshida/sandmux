@@ -1219,7 +1219,51 @@ fn do_import(host: &Host, layout: &Layout, harness: &str, overwrite: bool) -> Re
         sandmux_policy::hermes_config::ensure_update_check_off(&synthetic)?;
     }
     print_import_report(harness, &report);
+    if harness == "agy"
+        && let Some(note) = import_agy_login(host, &synthetic, overwrite)
+    {
+        eprintln!("  {note}");
+    }
     Ok(())
+}
+
+/// O login do Google do `agy` no host: os tokens reais vão ao cofre pelo
+/// daemon (`agy:access` e `agy:refresh`), e o HOME sintético recebe o mesmo
+/// arquivo com os falsos. Sem cofre que aceite, nada é gravado. Devolve a
+/// linha do relatório, sem nenhum token.
+fn import_agy_login(host: &Host, synthetic: &std::path::Path, overwrite: bool) -> Option<String> {
+    use sandmux_import::agy_login::{Login, TOKEN_FILE};
+    let login = Login::read(&host.home.join(TOKEN_FILE))?;
+    let target = synthetic.join(TOKEN_FILE);
+    if target.exists() && !overwrite {
+        return Some(
+            tr!(
+                "login do Google: o HOME sintético já tem um; use --overwrite para trazer o do host",
+                "Google login: the synthetic HOME already has one; use --overwrite to bring the host's"
+            )
+            .into(),
+        );
+    }
+    if login.reals().is_empty() {
+        return None;
+    }
+    match vaultcmd::store_agy_login(&login, &target) {
+        Ok(()) => Some(
+            tr!(
+                "login do Google levado ao cofre (agy:access e agy:refresh); o HOME sintético tem os valores falsos",
+                "Google login moved to the vault (agy:access and agy:refresh); the synthetic HOME has the fake values"
+            )
+            .into(),
+        ),
+        Err(e) => Some(login_not_imported(&format!("{e:#}"))),
+    }
+}
+
+fn login_not_imported(why: &str) -> String {
+    trf!(
+        "login do Google do host não importado: {why}. Abra o cofre (sandmux vault unlock, ou sandmux vault init) e rode sandmux import agy --overwrite",
+        "host Google login not imported: {why}. Open the vault (sandmux vault unlock, or sandmux vault init) and run sandmux import agy --overwrite"
+    )
 }
 
 fn cmd_import(a: ImportArgs) -> Result<()> {

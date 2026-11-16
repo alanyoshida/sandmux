@@ -84,12 +84,17 @@ pub fn start(shared: Arc<Shared>) {
 /// criação de uma pasta nova também chega ao vigia.
 fn targets(layout: &Layout) -> Vec<(PathBuf, &'static str)> {
     let mut out = BTreeMap::new();
-    for &h in sandmux_import::SCANNED {
+    for &h in WATCHED {
         let home = layout.home(h);
         let Some(top) = home.parent().map(Path::to_path_buf) else {
             continue;
         };
         let mut dirs = sandmux_import::watch_dirs(h, &home);
+        if h == "agy"
+            && let Some(parent) = Path::new(sandmux_import::agy_login::TOKEN_FILE).parent()
+        {
+            dirs.push(home.join(parent));
+        }
         dirs.push(home.clone());
         for d in dirs {
             let mut cur = Some(d.as_path());
@@ -139,7 +144,7 @@ fn run(shared: &Arc<Shared>, rx: &mpsc::Receiver<()>) {
         let now = Instant::now();
         if now >= next_full {
             refresh(&mut wds);
-            for &h in sandmux_import::SCANNED {
+            for &h in WATCHED {
                 scan(shared, &layout, h);
             }
             dirty.clear();
@@ -177,16 +182,27 @@ fn run(shared: &Arc<Shared>, rx: &mpsc::Receiver<()>) {
     }
 }
 
+/// Os harnesses que o vigia observa: os da varredura geral e o `agy`, só
+/// pelo arquivo do login do Google.
+const WATCHED: &[&str] = &["opencode", "hermes", "agy"];
+
 /// Varre o HOME sintético de um harness e move o que der.
 fn scan(shared: &Arc<Shared>, layout: &Layout, h: &str) {
     let home = layout.home(h);
-    let found = if home.is_dir() {
+    let found = if home.is_dir() && sandmux_import::SCANNED.contains(&h) {
         sandmux_import::find_real_secrets(h, &home)
     } else {
         Vec::new()
     };
     let mut waiting = Waiting::default();
     let mut moved: u32 = 0;
+    if h == "agy" {
+        match agy_login(shared, &home) {
+            Login::Moved(n) => moved += n,
+            Login::Waiting(n) => waiting.vault += n,
+            Login::Nothing => {}
+        }
+    }
     for r in &found {
         let n = r.found.len() as u32;
         let keys = r
@@ -309,5 +325,76 @@ fn scan(shared: &Arc<Shared>, layout: &Layout, h: &str) {
                 waiting.domain
             )
         );
+    }
+}
+
+enum Login {
+    Nothing,
+    Moved(u32),
+    Waiting(u32),
+}
+
+/// Um login real do Google gravado pelo `agy` no HOME sintético (feito
+/// dentro do sandbox antes da captura): os tokens vão ao cofre como
+/// `agy:access` e `agy:refresh`, e o arquivo fica com os falsos. Com o cofre
+/// trancado, espera.
+fn agy_login(shared: &Arc<Shared>, home: &Path) -> Login {
+    use sandmux_import::agy_login::{Login as File, TOKEN_FILE, write};
+    let path = home.join(TOKEN_FILE);
+    let Some(file) = File::read(&path) else {
+        return Login::Nothing;
+    };
+    let reals = file.reals();
+    if reals.is_empty() {
+        return Login::Nothing;
+    }
+    let n = reals.len() as u32;
+    let mut vault = shared.vault.lock().unwrap_or_else(|e| e.into_inner());
+    if !vault.unlocked() {
+        return Login::Waiting(n);
+    }
+    // O `agy` pode ter regravado o arquivo depois da leitura: a próxima
+    // varredura pega a versão nova.
+    if std::fs::read(&path).ok().as_deref() != Some(&file.original[..]) {
+        return Login::Nothing;
+    }
+    let mut fakes = Vec::new();
+    for (role, real) in &reals {
+        match vault.capture("agy", role, real) {
+            Ok(f) => fakes.push((role.clone(), f)),
+            Err(e) => {
+                eprintln!(
+                    "{}",
+                    trf!(
+                        "sandmuxd: chaves reais: agy {TOKEN_FILE}: o cofre recusou o login ({e}); o arquivo fica como estava",
+                        "sandmuxd: real keys: agy {TOKEN_FILE}: the vault refused the login ({e}); the file stays as it was"
+                    )
+                );
+                return Login::Nothing;
+            }
+        }
+    }
+    drop(vault);
+    match write(&path, &file.with_fakes(&fakes)) {
+        Ok(()) => {
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmuxd: chaves reais: agy {TOKEN_FILE}: login do Google levado ao cofre; o arquivo tem os falsos",
+                    "sandmuxd: real keys: agy {TOKEN_FILE}: Google login moved to the vault; the file has the fakes"
+                )
+            );
+            Login::Moved(n)
+        }
+        Err(e) => {
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmuxd: chaves reais: agy {TOKEN_FILE}: gravar os falsos: {e}",
+                    "sandmuxd: real keys: agy {TOKEN_FILE}: writing the fakes: {e}"
+                )
+            );
+            Login::Nothing
+        }
     }
 }
