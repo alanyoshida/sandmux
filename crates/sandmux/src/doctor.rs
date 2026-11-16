@@ -23,16 +23,17 @@ pub fn apparmor_profile() -> String {
     PROFILE_TEMPLATE.replace("@SANDMUX_RUN@", &runner_path().to_string_lossy())
 }
 
-fn line(ok: bool, label: &str, detail: &str) {
+/// A linha `[ok  ]` ou `[FALHA]` do terminal.
+fn line(ok: bool, label: &str, detail: &str) -> String {
     let mark = if ok { "ok  " } else { tr!("FALHA", "FAIL") };
-    println!(
+    format!(
         "[{mark}] {label}{}",
         if detail.is_empty() {
             String::new()
         } else {
             format!(": {detail}")
         }
-    );
+    )
 }
 
 pub fn run() -> Result<i32> {
@@ -59,7 +60,7 @@ fn describe(harness: &str, r: &sandmux_import::RealSecrets) -> Vec<String> {
 }
 
 /// As chaves reais nos HOMEs sintéticos dos harnesses.
-fn real_secrets(host: &Host) -> Vec<(&'static str, sandmux_import::RealSecrets)> {
+pub(crate) fn real_secrets(host: &Host) -> Vec<(&'static str, sandmux_import::RealSecrets)> {
     let layout = Layout::new(&host.data_dir);
     let mut out = Vec::new();
     for &h in sandmux_import::SCANNED {
@@ -77,7 +78,9 @@ fn real_secrets(host: &Host) -> Vec<(&'static str, sandmux_import::RealSecrets)>
 
 /// O login real do Google gravado pelo `agy` no HOME sintético (um login
 /// feito dentro do sandbox antes da captura).
-fn agy_login(host: &Host) -> Option<(std::path::PathBuf, sandmux_import::agy_login::Login)> {
+pub(crate) fn agy_login(
+    host: &Host,
+) -> Option<(std::path::PathBuf, sandmux_import::agy_login::Login)> {
     let path = Layout::new(&host.data_dir)
         .home("agy")
         .join(sandmux_import::agy_login::TOKEN_FILE);
@@ -94,44 +97,35 @@ fn agy_login_line(l: &sandmux_import::agy_login::Login) -> String {
     )
 }
 
-fn secrets_section(host: &Host) -> usize {
-    let found = real_secrets(host);
-    let agy = agy_login(host);
-    let n: usize = found.iter().map(|(_, r)| r.found.len()).sum::<usize>()
-        + agy.as_ref().map_or(0, |(_, l)| l.reals().len());
-    if n == 0 {
-        println!(
-            "{}",
-            tr!(
-                "\nChaves reais dentro do sandbox: nenhuma.",
-                "\nReal keys inside the sandbox: none."
-            )
-        );
-        return 0;
+/// O nome no cofre de uma chave real achada num HOME sintético.
+pub(crate) fn key_name(
+    h: &str,
+    r: &sandmux_import::RealSecrets,
+    x: &sandmux_import::secrets::Replacement,
+) -> String {
+    match crate::vaultcmd::provider_of(&r.original, x.line) {
+        Some(p) => format!("{h}:{}:{p}.{}", r.file.display(), x.key),
+        None => format!("{h}:{}:{}", r.file.display(), x.key),
     }
-    println!(
-        "{}",
-        trf!(
-            "\nChaves reais dentro do sandbox ({n}): o agente pode lê-las e enviá-las para fora.",
-            "\nReal keys inside the sandbox ({n}): the agent can read them and send them out."
-        )
-    );
-    for (h, r) in &found {
-        for l in describe(h, r) {
-            println!("  {l}");
-        }
+}
+
+/// Os domínios sugeridos para uma chave real na TUI: a inferência do
+/// `doctor --fix`, ou, sem ela, o host da URL mais próxima no arquivo.
+pub(crate) fn suggest_domains(
+    host: &Host,
+    h: &str,
+    r: &sandmux_import::RealSecrets,
+    x: &sandmux_import::secrets::Replacement,
+) -> Vec<String> {
+    let provider = crate::vaultcmd::provider_of(&r.original, x.line);
+    let d =
+        crate::vaultcmd::infer_domains_for(host, h, &x.key, provider.as_deref(), Some(&r.original));
+    if !d.is_empty() {
+        return d;
     }
-    if let Some((_, l)) = &agy {
-        println!("  {}", agy_login_line(l));
-    }
-    println!(
-        "{}",
-        tr!(
-            "  Rode `sandmux doctor --fix` para levá-las ao cofre: no lugar fica um valor falso,\n  que o gateway troca pelo real só no tráfego ao dono da chave. Com o cofre aberto,\n  o daemon faz isso sozinho quando o domínio da chave é conhecido.",
-            "  Run `sandmux doctor --fix` to move them to the vault: a fake value takes their place,\n  which the gateway swaps for the real one only in traffic to the key's owner. With the\n  vault open, the daemon does this by itself when the key's domain is known."
-        )
-    );
-    n
+    sandmux::secretdomains::nearby_url_domain(&r.original, x.line)
+        .into_iter()
+        .collect()
 }
 
 /// `sandmux doctor --fix`: leva ao cofre as chaves reais dos HOMEs
@@ -200,10 +194,7 @@ fn fix_secrets(host: &Host) -> Result<i32> {
         let mut ok = true;
         for x in &r.found {
             let provider = provider_of(&r.original, x.line);
-            let name = match &provider {
-                Some(p) => format!("{h}:{}:{p}.{}", r.file.display(), x.key),
-                None => format!("{h}:{}:{}", r.file.display(), x.key),
-            };
+            let name = key_name(h, r, x);
             let mut domains =
                 infer_domains_for(host, h, &x.key, provider.as_deref(), Some(&r.original));
             if domains.is_empty() {
@@ -312,14 +303,140 @@ fn fix_secrets(host: &Host) -> Result<i32> {
     Ok(0)
 }
 
-/// O diagnóstico; com `fix`, leva as chaves reais dos HOMEs sintéticos ao
-/// cofre.
-pub fn run_with(fix: bool) -> Result<i32> {
-    if fix {
-        let host = Host::detect()?;
-        return fix_secrets(&host);
+// ---- o relatório ----
+
+/// O resultado de uma verificação.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    Ok,
+    /// Um aviso que não impede nada.
+    Warn,
+    Fail,
+    /// Só informação.
+    Info,
+}
+
+/// Uma verificação: a linha da TUI, a causa e a correção, e o texto que o
+/// terminal imprime.
+#[derive(Debug, Clone)]
+pub struct Check {
+    pub state: State,
+    pub label: String,
+    pub summary: String,
+    /// Causa e correção, mostradas embaixo na TUI.
+    pub help: String,
+    /// O texto do `sandmux doctor` no terminal; vazio quando sai junto com
+    /// outra verificação.
+    pub cli: String,
+}
+
+impl Check {
+    fn new(state: State, label: impl Into<String>, summary: impl Into<String>) -> Check {
+        Check {
+            state,
+            label: label.into(),
+            summary: summary.into(),
+            help: String::new(),
+            cli: String::new(),
+        }
     }
-    let mut r = support::check_via(&sandmux::launch::runner_path());
+
+    /// Uma linha de seção do terminal: `  rótulo: resumo`.
+    fn item(state: State, label: &str, summary: impl Into<String>) -> Check {
+        let mut c = Check::new(state, label, summary);
+        c.cli = format!("  {label}: {}", c.summary);
+        c
+    }
+
+    fn help(mut self, h: impl Into<String>) -> Check {
+        self.help = h.into();
+        self
+    }
+
+    fn cli(mut self, c: impl Into<String>) -> Check {
+        self.cli = c.into();
+        self
+    }
+
+    /// Põe um texto antes do `cli` (o título da seção no terminal).
+    fn after(mut self, head: &str) -> Check {
+        self.cli = format!("{head}\n{}", self.cli);
+        self
+    }
+}
+
+/// Um grupo de verificações.
+#[derive(Debug, Clone)]
+pub struct Group {
+    pub name: String,
+    pub checks: Vec<Check>,
+}
+
+/// O diagnóstico inteiro.
+#[derive(Debug, Clone)]
+pub struct Report {
+    pub groups: Vec<Group>,
+    /// O sandbox pode ser lançado nesta máquina.
+    pub can_launch: bool,
+    /// O fim do texto do terminal.
+    footer: String,
+}
+
+impl Report {
+    /// Quantas verificações falharam.
+    pub fn failures(&self) -> usize {
+        self.groups
+            .iter()
+            .flat_map(|g| &g.checks)
+            .filter(|c| c.state == State::Fail)
+            .count()
+    }
+
+    /// O texto do `sandmux doctor` no terminal.
+    pub fn print(&self) {
+        println!("sandmux doctor\n");
+        for c in self.groups.iter().flat_map(|g| &g.checks) {
+            if !c.cli.is_empty() {
+                println!("{}", c.cli);
+            }
+        }
+        println!("{}", self.footer);
+    }
+}
+
+/// Um texto de várias linhas recuadas numa linha só, para a TUI.
+fn flat(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Uma verificação de suporte: a linha `[ok  ]` ou `[FALHA]` e, na falha, a
+/// dica.
+fn support_check(ok: bool, label: &str, detail: &str, hint: Option<String>) -> Check {
+    let mut cli = line(ok, label, detail);
+    let mut help = String::new();
+    if let Some(h) = hint {
+        cli.push('\n');
+        cli.push_str(&h);
+        help = flat(&h);
+    }
+    Check {
+        state: if ok { State::Ok } else { State::Fail },
+        label: label.to_string(),
+        summary: detail.to_string(),
+        help,
+        cli,
+    }
+}
+
+/// O diagnóstico, sem imprimir nada. `quiet` não deixa o lançador escrever
+/// no terminal (a TUI).
+pub fn report(quiet: bool) -> Report {
+    let runner = sandmux::launch::runner_path();
+    let mut r = if quiet {
+        support::check_quiet(&runner)
+    } else {
+        support::check_via(&runner)
+    };
     // Mesma variável do `run`: só desliga a camada, para conferir o modo de recuo.
     if std::env::var_os("SANDMUX_DISABLE_OVERLAY").is_some() && r.overlay.is_ok() {
         r.overlay = Err(tr!(
@@ -332,8 +449,49 @@ pub fn run_with(fix: bool) -> Result<i32> {
     if std::env::var_os("SANDMUX_ASSUME_APPARMOR_RESTRICT").is_some() {
         r.apparmor_restrict_userns = Some(true);
     }
-    println!("sandmux doctor\n");
+    let host = Host::detect().ok();
+    let mut groups = vec![sandbox_group(&r, host.as_ref())];
+    if let Some(h) = &host {
+        groups.push(install_group(h));
+    }
+    groups.push(config_group());
+    groups.push(daemon_group());
+    if let Some(h) = &host {
+        groups.push(vault_group(h));
+        groups.push(secrets_group(h));
+    }
+    let footer = format!(
+        "{}\n{}",
+        tr!(
+            "\nRede: o sandbox sai pelo gateway do sandmux, com o modo de rede, a denylist e o\n  registro de cada conexão (`sandmux net`).",
+            "\nNetwork: the sandbox goes out through the sandmux gateway, with the network mode, the denylist and\n  a log of each connection (`sandmux net`)."
+        ),
+        tr!(
+            "Arquivos com cara de segredo na pasta de trabalho ficam escondidos do agente\n  (`sandmux files` e a política de arquivos).",
+            "Files that look like secrets in the work folder are hidden from the agent\n  (`sandmux files` and the file policy)."
+        )
+    );
+    Report {
+        groups,
+        can_launch: r.can_launch(),
+        footer,
+    }
+}
 
+/// O diagnóstico; com `fix`, leva as chaves reais dos HOMEs sintéticos ao
+/// cofre.
+pub fn run_with(fix: bool) -> Result<i32> {
+    if fix {
+        let host = Host::detect()?;
+        return fix_secrets(&host);
+    }
+    let r = report(false);
+    r.print();
+    Ok(if r.can_launch { 0 } else { 1 })
+}
+
+fn sandbox_group(r: &support::SupportReport, host: Option<&Host>) -> Group {
+    let mut checks = Vec::new();
     let abi_detail = if r.landlock_abi < 0 {
         tr!("ausente no kernel", "missing from the kernel").to_string()
     } else {
@@ -343,314 +501,317 @@ pub fn run_with(fix: bool) -> Result<i32> {
             r.landlock_abi
         )
     };
-    line(
+    let mut c = support_check(
         r.landlock_ok(),
         tr!(
             "Landlock com escopo de sockets abstratos e de sinais",
             "Landlock with abstract socket and signal scoping"
         ),
         &abi_detail,
+        None,
     );
-
-    match &r.userns {
-        Ok(()) => line(
-            true,
-            tr!(
-                "user namespace sem privilégio, com montagem",
-                "unprivileged user namespace, with mounts"
-            ),
-            "",
-        ),
-        Err(e) => {
-            line(
-                false,
-                tr!(
-                    "user namespace sem privilégio, com montagem",
-                    "unprivileged user namespace, with mounts"
-                ),
-                e,
-            );
-            if r.apparmor_restrict_userns == Some(true) {
-                // Sem recuo nas linhas do comando: o heredoc só termina com
-                // `EOF` no começo da linha.
-                println!(
-                    "{}",
-                    trf!(
-                        "\n  A distro restringe user namespaces sem privilégio por AppArmor\n  (kernel.apparmor_restrict_unprivileged_userns=1). O lançador precisa de um\n  perfil próprio. Para gravar o perfil em /etc/apparmor.d/sandmux-run e\n  carregá-lo, cole no terminal:\n\nsudo tee /etc/apparmor.d/sandmux-run >/dev/null <<'EOF'\n{}EOF\nsudo apparmor_parser -r /etc/apparmor.d/sandmux-run\n",
-                        "\n  The distro restricts unprivileged user namespaces through AppArmor\n  (kernel.apparmor_restrict_unprivileged_userns=1). The launcher needs its own\n  profile. To write the profile to /etc/apparmor.d/sandmux-run and\n  load it, paste into the terminal:\n\nsudo tee /etc/apparmor.d/sandmux-run >/dev/null <<'EOF'\n{}EOF\nsudo apparmor_parser -r /etc/apparmor.d/sandmux-run\n",
-                        apparmor_profile()
-                    )
-                );
-            } else {
-                println!(
-                    "{}",
-                    tr!(
-                        "\n  Confira se user namespaces sem privilégio estão habilitados no kernel\n  (user.max_user_namespaces maior que zero).\n",
-                        "\n  Check that unprivileged user namespaces are enabled in the kernel\n  (user.max_user_namespaces greater than zero).\n"
-                    )
-                );
-            }
-        }
+    if !r.landlock_ok() {
+        c.help = tr!(
+            "Sem ele o sandbox não sobe. O kernel precisa ser o 6.12 ou mais novo, com o Landlock ligado (lsm=landlock).",
+            "Without it the sandbox does not start. The kernel must be 6.12 or newer, with Landlock enabled (lsm=landlock)."
+        )
+        .into();
     }
+    checks.push(c);
 
-    match &r.overlay {
-        Ok(()) => line(
-            true,
-            tr!(
-                "camada de escrita (overlay em user namespace)",
-                "write layer (overlay in a user namespace)"
-            ),
-            "",
-        ),
-        Err(e) => {
-            line(
-                false,
-                tr!(
-                    "camada de escrita (overlay em user namespace)",
-                    "write layer (overlay in a user namespace)"
-                ),
-                e,
+    let userns = tr!(
+        "user namespace sem privilégio, com montagem",
+        "unprivileged user namespace, with mounts"
+    );
+    checks.push(match &r.userns {
+        Ok(()) => support_check(true, userns, "", None),
+        Err(e) if r.apparmor_restrict_userns == Some(true) => {
+            // Sem recuo nas linhas do comando: o heredoc só termina com
+            // `EOF` no começo da linha.
+            let hint = trf!(
+                "\n  A distro restringe user namespaces sem privilégio por AppArmor\n  (kernel.apparmor_restrict_unprivileged_userns=1). O lançador precisa de um\n  perfil próprio. Para gravar o perfil em /etc/apparmor.d/sandmux-run e\n  carregá-lo, cole no terminal:\n\nsudo tee /etc/apparmor.d/sandmux-run >/dev/null <<'EOF'\n{}EOF\nsudo apparmor_parser -r /etc/apparmor.d/sandmux-run\n",
+                "\n  The distro restricts unprivileged user namespaces through AppArmor\n  (kernel.apparmor_restrict_unprivileged_userns=1). The launcher needs its own\n  profile. To write the profile to /etc/apparmor.d/sandmux-run and\n  load it, paste into the terminal:\n\nsudo tee /etc/apparmor.d/sandmux-run >/dev/null <<'EOF'\n{}EOF\nsudo apparmor_parser -r /etc/apparmor.d/sandmux-run\n",
+                apparmor_profile()
             );
-            println!(
-                "{}",
+            support_check(false, userns, e, Some(hint)).help(tr!(
+                "A distro restringe user namespaces sem privilégio por AppArmor (kernel.apparmor_restrict_unprivileged_userns=1), e o lançador precisa de um perfil próprio. Rode `sandmux doctor` no terminal: ele mostra o comando para colar, que grava o perfil em /etc/apparmor.d/sandmux-run e o carrega (com sudo).",
+                "The distro restricts unprivileged user namespaces through AppArmor (kernel.apparmor_restrict_unprivileged_userns=1), and the launcher needs its own profile. Run `sandmux doctor` in the terminal: it shows the command to paste, which writes the profile to /etc/apparmor.d/sandmux-run and loads it (with sudo)."
+            ))
+        }
+        Err(e) => support_check(
+            false,
+            userns,
+            e,
+            Some(
+                tr!(
+                    "\n  Confira se user namespaces sem privilégio estão habilitados no kernel\n  (user.max_user_namespaces maior que zero).\n",
+                    "\n  Check that unprivileged user namespaces are enabled in the kernel\n  (user.max_user_namespaces greater than zero).\n"
+                )
+                .into(),
+            ),
+        ),
+    });
+
+    let overlay = tr!(
+        "camada de escrita (overlay em user namespace)",
+        "write layer (overlay in a user namespace)"
+    );
+    checks.push(match &r.overlay {
+        Ok(()) => support_check(true, overlay, "", None),
+        Err(e) => support_check(
+            false,
+            overlay,
+            e,
+            Some(
                 tr!(
                     "  Sem ela, os caches começam vazios e as toolchains ficam em somente leitura.\n  O sandbox funciona mesmo assim.",
                     "  Without it, caches start empty and toolchains are read-only.\n  The sandbox works anyway."
                 )
-            );
-        }
-    }
+                .into(),
+            ),
+        ),
+    });
 
-    match sandmux_policy::limits::support() {
+    let limits = tr!(
+        "tetos de memória e de processos (escopo do systemd de usuário)",
+        "memory and process caps (user systemd scope)"
+    );
+    checks.push(match sandmux_policy::limits::support() {
         Ok(()) => {
             let total = sandmux_policy::limits::mem_total().unwrap_or(0);
-            line(
+            support_check(
                 true,
-                tr!(
-                    "tetos de memória e de processos (escopo do systemd de usuário)",
-                    "memory and process caps (user systemd scope)"
-                ),
+                limits,
                 &trf!(
                     "padrão: {} de memória (75% da RAM) e 8192 processos",
                     "default: {} of memory (75% of RAM) and 8192 processes",
                     sandmux_policy::limits::human(total / 100 * 75)
                 ),
+                None,
             )
         }
-        Err(e) => {
-            line(
-                false,
-                tr!(
-                    "tetos de memória e de processos (escopo do systemd de usuário)",
-                    "memory and process caps (user systemd scope)"
-                ),
-                &e,
-            );
-            println!(
-                "{}",
+        Err(e) => support_check(
+            false,
+            limits,
+            &e,
+            Some(
                 tr!(
                     "  Sem eles, as sessões rodam sem teto de memória e de processos. O sandbox\n  funciona mesmo assim. Os tetos precisam do systemd de usuário (systemd-run\n  --user) com os controladores memory e pids delegados ao user@<uid>.service.",
                     "  Without them, sessions run with no memory or process cap. The sandbox\n  works anyway. The caps need user systemd (systemd-run\n  --user) with the memory and pids controllers delegated to user@<uid>.service."
                 )
-            );
-        }
-    }
+                .into(),
+            ),
+        ),
+    });
 
-    if let Ok(h) = Host::detect() {
-        match sandmux::docker::support(&h.user, h.uid) {
-            Ok(_) => {
-                line(
-                    true,
-                    tr!(
-                        "Docker privado por pasta (Docker sem root)",
-                        "private Docker per folder (rootless Docker)"
-                    ),
-                    tr!(
-                        "rede pelo gateway do sandmux",
-                        "network through the sandmux gateway"
-                    ),
-                );
-            }
-            Err(e) => {
-                line(
-                    false,
-                    tr!(
-                        "Docker privado por pasta (Docker sem root)",
-                        "private Docker per folder (rootless Docker)"
-                    ),
-                    &e,
-                );
-                println!(
-                    "{}",
+    if let Some(h) = host {
+        let docker = tr!(
+            "Docker privado por pasta (Docker sem root)",
+            "private Docker per folder (rootless Docker)"
+        );
+        checks.push(match sandmux::docker::support(&h.user, h.uid) {
+            Ok(_) => support_check(
+                true,
+                docker,
+                tr!(
+                    "rede pelo gateway do sandmux",
+                    "network through the sandmux gateway"
+                ),
+                None,
+            ),
+            Err(e) => support_check(
+                false,
+                docker,
+                &e,
+                Some(
                     tr!(
                         "  Sem ele, as sessões rodam sem Docker privado: o `docker` lá dentro mostra\n  este motivo. O sandbox funciona mesmo assim. O Docker sem root precisa do\n  rootlesskit, do dockerd, do containerd, do newuidmap e do newgidmap, e de uma\n  faixa de 65536 IDs do usuário em /etc/subuid e /etc/subgid.",
                         "  Without it, sessions run with no private Docker: `docker` inside shows\n  this reason. The sandbox works anyway. Rootless Docker needs\n  rootlesskit, dockerd, containerd, newuidmap and newgidmap, and a\n  range of 65536 IDs for the user in /etc/subuid and /etc/subgid."
                     )
-                );
-            }
-        }
-        match sandmux::docker::registry_binary() {
-            Some(b) => line(
-                true,
-                tr!(
-                    "cache de imagens do Docker entre pastas",
-                    "Docker image cache across folders"
+                    .into(),
                 ),
+            ),
+        });
+        let cache = tr!(
+            "cache de imagens do Docker entre pastas",
+            "Docker image cache across folders"
+        );
+        checks.push(match sandmux::docker::registry_binary() {
+            Some(b) => support_check(
+                true,
+                cache,
                 &trf!(
                     "espelho do Docker Hub com {}",
                     "Docker Hub mirror with {}",
                     b.display()
                 ),
+                None,
             ),
-            None => {
-                line(
-                    false,
-                    tr!(
-                        "cache de imagens do Docker entre pastas",
-                        "Docker image cache across folders"
-                    ),
-                    tr!(
-                        "desligado: falta o binário registry",
-                        "off: the registry binary is missing"
-                    ),
-                );
-                println!(
-                    "{}",
+            None => support_check(
+                false,
+                cache,
+                tr!(
+                    "desligado: falta o binário registry",
+                    "off: the registry binary is missing"
+                ),
+                Some(
                     tr!(
                         "  Sem ele, cada pasta baixa as próprias imagens. Para ligar o cache, instale o\n  pacote docker-registry (Debian e Ubuntu) ou o binário registry do projeto\n  distribution.",
                         "  Without it, each folder pulls its own images. To turn the cache on, install the\n  docker-registry package (Debian and Ubuntu) or the registry binary from the\n  distribution project."
                     )
-                );
-            }
-        }
+                    .into(),
+                ),
+            ),
+        });
     }
 
     let tun = std::fs::metadata("/dev/net/tun")
         .map(|m| std::os::unix::fs::FileTypeExt::is_char_device(&m.file_type()))
         .unwrap_or(false);
     let log = sandmux::paths::state_dir().join("net");
-    if tun {
-        line(
+    let net = tr!(
+        "rede pelo gateway (namespace de rede próprio e TUN)",
+        "network through the gateway (own network namespace and TUN)"
+    );
+    checks.push(if tun {
+        support_check(
             true,
-            tr!(
-                "rede pelo gateway (namespace de rede próprio e TUN)",
-                "network through the gateway (own network namespace and TUN)"
-            ),
+            net,
             &trf!("registro em {}", "log in {}", log.display()),
-        );
+            None,
+        )
     } else {
-        line(
+        support_check(
             false,
-            tr!(
-                "rede pelo gateway (namespace de rede próprio e TUN)",
-                "network through the gateway (own network namespace and TUN)"
-            ),
+            net,
             tr!("/dev/net/tun não existe", "/dev/net/tun does not exist"),
-        );
-        println!(
-            "{}",
-            tr!(
-                "  Sem o TUN, só o modo sem rede funciona (`--network sem-rede` ou\n  `network = \"sem-rede\"`). O módulo do kernel é o `tun`.",
-                "  Without TUN, only the no-network mode works (`--network sem-rede` or\n  `network = \"sem-rede\"`). The kernel module is `tun`."
-            )
-        );
-    }
+            Some(
+                tr!(
+                    "  Sem o TUN, só o modo sem rede funciona (`--network sem-rede` ou\n  `network = \"sem-rede\"`). O módulo do kernel é o `tun`.",
+                    "  Without TUN, only the no-network mode works (`--network sem-rede` or\n  `network = \"sem-rede\"`). The kernel module is `tun`."
+                )
+                .into(),
+            ),
+        )
+    });
 
     if r.apparmor_restrict_userns == Some(true) && r.userns.is_ok() {
-        println!(
-            "{}",
-            tr!(
-                "\n  Nota: a distro restringe user namespaces por AppArmor, e o lançador passou na\n  verificação (o perfil do sandmux-run está carregado, ou o processo que chamou\n  o sandmux tem um perfil que libera user namespaces).",
-                "\n  Note: the distro restricts user namespaces through AppArmor, and the launcher passed\n  the check (the sandmux-run profile is loaded, or the process that called\n  sandmux has a profile that allows user namespaces)."
+        let note = tr!(
+            "\n  Nota: a distro restringe user namespaces por AppArmor, e o lançador passou na\n  verificação (o perfil do sandmux-run está carregado, ou o processo que chamou\n  o sandmux tem um perfil que libera user namespaces).",
+            "\n  Note: the distro restricts user namespaces through AppArmor, and the launcher passed\n  the check (the sandmux-run profile is loaded, or the process that called\n  sandmux has a profile that allows user namespaces)."
+        );
+        checks.push(
+            Check::new(
+                State::Info,
+                "AppArmor",
+                tr!(
+                    "restringe user namespaces; o lançador passou",
+                    "restricts user namespaces; the launcher passed"
+                ),
             )
+            .help(flat(note))
+            .cli(note),
         );
     }
+    Group {
+        name: tr!("Sandbox", "Sandbox").into(),
+        checks,
+    }
+}
 
-    if let Ok(host) = Host::detect() {
-        let layout = Layout::new(&host.data_dir);
-        println!(
-            "{}",
-            trf!(
-                "\nDiretório de dados: {}",
-                "\nData directory: {}",
-                host.data_dir.display()
-            )
-        );
-        println!(
-            "{}",
-            trf!(
-                "Pasta de entrada (visível em ~/inbox, somente leitura): {}",
-                "Inbox folder (visible at ~/inbox, read-only): {}",
-                layout.inbox().display()
-            )
-        );
-        // Dois gateways do hermes no mesmo bot disputam as mensagens.
-        if let Some(w) = sandmux_policy::hermes_config::host_gateway_alive(&host.home) {
-            println!("Hermes: {w}");
-        }
-    }
-    config_section();
-    daemon_section();
-    vault_section();
-    if let Ok(host) = Host::detect() {
-        secrets_section(&host);
-    }
-    println!(
-        "{}",
-        tr!(
-            "\nRede: o sandbox sai pelo gateway do sandmux, com o modo de rede, a denylist e o\n  registro de cada conexão (`sandmux net`).",
-            "\nNetwork: the sandbox goes out through the sandmux gateway, with the network mode, the denylist and\n  a log of each connection (`sandmux net`)."
+fn install_group(host: &Host) -> Group {
+    let layout = Layout::new(&host.data_dir);
+    let data = host.data_dir.display().to_string();
+    let inbox = layout.inbox().display().to_string();
+    let mut checks = vec![
+        Check::new(
+            State::Info,
+            tr!("Diretório de dados", "Data directory"),
+            data.clone(),
         )
-    );
-    println!(
-        "{}",
-        tr!(
-            "Arquivos com cara de segredo na pasta de trabalho ficam escondidos do agente\n  (`sandmux files` e a política de arquivos).",
-            "Files that look like secrets in the work folder are hidden from the agent\n  (`sandmux files` and the file policy)."
+        .cli(trf!(
+            "\nDiretório de dados: {data}",
+            "\nData directory: {data}"
+        )),
+        Check::new(
+            State::Info,
+            tr!("Pasta de entrada", "Inbox folder"),
+            inbox.clone(),
         )
-    );
-
-    Ok(if r.can_launch() { 0 } else { 1 })
+        .help(tr!(
+            "Visível no sandbox em ~/inbox, somente leitura.",
+            "Visible in the sandbox at ~/inbox, read-only."
+        ))
+        .cli(trf!(
+            "Pasta de entrada (visível em ~/inbox, somente leitura): {inbox}",
+            "Inbox folder (visible at ~/inbox, read-only): {inbox}"
+        )),
+    ];
+    // Dois gateways do hermes no mesmo bot disputam as mensagens.
+    if let Some(w) = sandmux_policy::hermes_config::host_gateway_alive(&host.home) {
+        checks.push(
+            Check::new(State::Warn, "Hermes", w.clone())
+                .help(w.clone())
+                .cli(format!("Hermes: {w}")),
+        );
+    }
+    Group {
+        name: tr!("Instalação", "Installation").into(),
+        checks,
+    }
 }
 
 /// Arquivo de configuração: caminho e validade, sem alterar nada.
-fn config_section() {
+fn config_group() -> Group {
     use sandmux_policy::config::{self, Config};
-    println!("{}", tr!("\nConfiguração:", "\nConfiguration:"));
-    let path = match sandmux_policy::Host::detect() {
+    let head = tr!("\nConfiguração:", "\nConfiguration:");
+    let name = tr!("Configuração", "Configuration").to_string();
+    let status = tr!("estado", "status");
+    let path = match Host::detect() {
         Ok(h) => config::path(&h),
         Err(e) => {
-            println!(
-                "{}",
-                trf!(
-                    "  não foi possível ler o ambiente: {e}",
-                    "  could not read the environment: {e}"
-                )
+            let msg = trf!(
+                "não foi possível ler o ambiente: {e}",
+                "could not read the environment: {e}"
             );
-            return;
+            let c = Check::new(State::Fail, tr!("ambiente", "environment"), msg.clone())
+                .cli(format!("{head}\n  {msg}"));
+            return Group {
+                name,
+                checks: vec![c],
+            };
         }
     };
-    println!("{}", trf!("  arquivo: {}", "  file: {}", path.display()));
+    let mut checks = vec![
+        Check::item(
+            State::Info,
+            tr!("arquivo", "file"),
+            path.display().to_string(),
+        )
+        .after(head),
+    ];
     if !path.exists() {
-        println!(
-            "{}",
+        checks.push(Check::item(
+            State::Info,
+            status,
             tr!(
-                "  estado: não existe (só a baseline e os presets valem)",
-                "  status: does not exist (only the baseline and presets apply)"
-            )
-        );
-        return;
+                "não existe (só a baseline e os presets valem)",
+                "does not exist (only the baseline and presets apply)"
+            ),
+        ));
+        return Group { name, checks };
     }
-    match Config::load(&path) {
+    checks.push(match Config::load(&path) {
         Ok(c) => {
             let n = |k: usize, um: &str, varios: &str| {
                 format!("{k} {}", if k == 1 { um } else { varios })
             };
-            println!(
-                "{}",
+            Check::item(
+                State::Ok,
+                status,
                 trf!(
-                    "  estado: válido ({}, {})",
-                    "  status: valid ({}, {})",
+                    "válido ({}, {})",
+                    "valid ({}, {})",
                     n(
                         c.profiles.len(),
                         tr!("perfil", "profile"),
@@ -661,7 +822,7 @@ fn config_section() {
                         tr!("projeto", "project"),
                         tr!("projetos", "projects")
                     )
-                )
+                ),
             )
         }
         Err(e) => {
@@ -669,19 +830,21 @@ fn config_section() {
                 .line
                 .map(|l| trf!("linha {l}: ", "line {l}: "))
                 .unwrap_or_default();
-            println!(
-                "{}",
-                trf!(
-                    "  estado: inválido, {at}{}",
-                    "  status: invalid, {at}{}",
-                    e.message
-                )
-            );
+            Check::item(
+                State::Fail,
+                status,
+                trf!("inválido, {at}{}", "invalid, {at}{}", e.message),
+            )
+            .help(trf!(
+                "Corrija o arquivo {} no ponto indicado.",
+                "Fix the file {} at the point shown.",
+                path.display()
+            ))
         }
-    }
+    });
+    Group { name, checks }
 }
 
-/// Estado do daemon e da unidade systemd, sem iniciar nada.
 /// Quantas chaves a importação trocou por valores falsos (todos os
 /// manifestos).
 pub fn imported_fakes(data_dir: &std::path::Path) -> usize {
@@ -695,60 +858,157 @@ pub fn imported_fakes(data_dir: &std::path::Path) -> usize {
         .sum()
 }
 
-fn vault_section() {
-    let Ok(host) = Host::detect() else { return };
+fn vault_group(host: &Host) -> Group {
     let exists = sandmux::daemon::vault::path(&host.data_dir).exists();
     let fakes = imported_fakes(&host.data_dir);
-    println!(
-        "{}",
-        trf!(
-            "\nCofre: {}",
-            "\nVault: {}",
-            if exists {
-                tr!("existe", "exists")
-            } else {
-                tr!("não existe", "does not exist")
-            }
+    let state = if exists {
+        tr!("existe", "exists")
+    } else {
+        tr!("não existe", "does not exist")
+    };
+    let mut checks = vec![
+        Check::new(
+            if exists { State::Ok } else { State::Info },
+            tr!("cofre", "vault"),
+            state,
         )
-    );
+        .cli(trf!("\nCofre: {state}", "\nVault: {state}")),
+    ];
     if exists {
-        println!(
-            "  {}",
+        checks.push(Check::item(
+            State::Info,
+            "Keyring",
             if sandmux::keyring::enabled(&host.data_dir) {
                 tr!(
-                    "Keyring: ligado (o daemon abre o cofre com a senha guardada nele)",
-                    "Keyring: on (the daemon opens the vault with the password stored in it)"
+                    "ligado (o daemon abre o cofre com a senha guardada nele)",
+                    "on (the daemon opens the vault with the password stored in it)"
                 )
             } else {
-                tr!("Keyring: desligado", "Keyring: off")
-            }
-        );
+                tr!("desligado", "off")
+            },
+        ));
     }
     if !exists && fakes > 0 {
-        println!(
-            "{}",
-            trf!(
-                "  A importação trocou {fakes} chave(s) por valores falsos, e sem cofre nada troca o\n  falso pelo real: os harnesses recebem \"chave inválida\". Crie o cofre e guarde\n  as chaves com `sandmux vault init` e `sandmux vault import`.",
-                "  The import replaced {fakes} key(s) with fake values, and without a vault nothing swaps the\n  fake for the real one: the harnesses get \"invalid key\". Create the vault and store\n  the keys with `sandmux vault init` and `sandmux vault import`."
-            )
+        let text = trf!(
+            "  A importação trocou {fakes} chave(s) por valores falsos, e sem cofre nada troca o\n  falso pelo real: os harnesses recebem \"chave inválida\". Crie o cofre e guarde\n  as chaves com `sandmux vault init` e `sandmux vault import`.",
+            "  The import replaced {fakes} key(s) with fake values, and without a vault nothing swaps the\n  fake for the real one: the harnesses get \"invalid key\". Create the vault and store\n  the keys with `sandmux vault init` and `sandmux vault import`."
         );
+        checks.push(
+            Check::new(
+                State::Fail,
+                tr!("chaves importadas", "imported keys"),
+                trf!(
+                    "{fakes} com valor falso e sem cofre",
+                    "{fakes} with a fake value and no vault"
+                ),
+            )
+            .help(flat(&text))
+            .cli(text),
+        );
+    }
+    Group {
+        name: tr!("Cofre", "Vault").into(),
+        checks,
     }
 }
 
-fn daemon_section() {
-    use sandmux::client::{Conn, systemd};
-    use sandmux_proto::Msg;
-    println!("{}", tr!("\nDaemon de sessões:", "\nSession daemon:"));
-    println!("  socket: {}", sandmux::paths::socket_path().display());
-    println!(
-        "{}",
+fn secrets_group(host: &Host) -> Group {
+    let name = tr!("Chaves reais", "Real keys").to_string();
+    let found = real_secrets(host);
+    let agy = agy_login(host);
+    let n: usize = found.iter().map(|(_, r)| r.found.len()).sum::<usize>()
+        + agy.as_ref().map_or(0, |(_, l)| l.reals().len());
+    if n == 0 {
+        let c = Check::new(
+            State::Ok,
+            tr!("dentro do sandbox", "inside the sandbox"),
+            tr!("nenhuma", "none"),
+        )
+        .cli(tr!(
+            "\nChaves reais dentro do sandbox: nenhuma.",
+            "\nReal keys inside the sandbox: none."
+        ));
+        return Group {
+            name,
+            checks: vec![c],
+        };
+    }
+    let help = tr!(
+        "O agente pode ler esta chave e enviá-la para fora. A tecla f leva ao cofre: no lugar fica um valor falso, que o gateway troca pelo real só no tráfego ao dono da chave.",
+        "The agent can read this key and send it out. The f key moves it to the vault: a fake value takes its place, which the gateway swaps for the real one only in traffic to the key's owner."
+    );
+    let mut lines = Vec::new();
+    let mut checks = Vec::new();
+    for (h, r) in &found {
+        for (x, l) in r.found.iter().zip(describe(h, r)) {
+            let prov = crate::vaultcmd::provider_of(&r.original, x.line)
+                .map(|p| trf!("provedor `{p}`, ", "provider `{p}`, "))
+                .unwrap_or_default();
+            checks.push(
+                Check::new(
+                    State::Fail,
+                    format!("{h}: {}", r.file.display()),
+                    trf!(
+                        "{prov}chave `{}` (linha {})",
+                        "{prov}key `{}` (line {})",
+                        x.key,
+                        x.line
+                    ),
+                )
+                .help(help),
+            );
+            lines.push(format!("  {l}"));
+        }
+    }
+    if let Some((_, l)) = &agy {
+        checks.push(
+            Check::new(
+                State::Fail,
+                format!("agy: {}", sandmux_import::agy_login::TOKEN_FILE),
+                trf!(
+                    "login do Google ({} token(s))",
+                    "Google login ({} token(s))",
+                    l.reals().len()
+                ),
+            )
+            .help(help),
+        );
+        lines.push(format!("  {}", agy_login_line(l)));
+    }
+    let cli = format!(
+        "{}\n{}\n{}",
         trf!(
-            "  início no boot: {}",
-            "  start at boot: {}",
-            crate::sessions::boot_text()
+            "\nChaves reais dentro do sandbox ({n}): o agente pode lê-las e enviá-las para fora.",
+            "\nReal keys inside the sandbox ({n}): the agent can read them and send them out."
+        ),
+        lines.join("\n"),
+        tr!(
+            "  Rode `sandmux doctor --fix` para levá-las ao cofre: no lugar fica um valor falso,\n  que o gateway troca pelo real só no tráfego ao dono da chave. Com o cofre aberto,\n  o daemon faz isso sozinho quando o domínio da chave é conhecido.",
+            "  Run `sandmux doctor --fix` to move them to the vault: a fake value takes their place,\n  which the gateway swaps for the real one only in traffic to the key's owner. With the\n  vault open, the daemon does this by itself when the key's domain is known."
         )
     );
-    match Conn::connect() {
+    checks[0].cli = cli;
+    Group { name, checks }
+}
+
+fn daemon_group() -> Group {
+    use sandmux::client::{Conn, systemd};
+    use sandmux_proto::Msg;
+    let status = tr!("estado", "status");
+    let mut checks = vec![
+        Check::item(
+            State::Info,
+            "socket",
+            sandmux::paths::socket_path().display().to_string(),
+        )
+        .after(tr!("\nDaemon de sessões:", "\nSession daemon:")),
+        Check::item(
+            State::Info,
+            tr!("início no boot", "start at boot"),
+            crate::sessions::boot_text(),
+        ),
+    ];
+    checks.push(match Conn::connect() {
         Ok(Some(mut c)) => match c.call(&Msg::Status) {
             Ok(Msg::StatusInfo {
                 pid,
@@ -756,44 +1016,48 @@ fn daemon_section() {
                 start_mode,
                 sessions,
                 ..
-            }) => println!(
-                "{}",
+            }) => Check::item(
+                State::Ok,
+                status,
                 trf!(
-                    "  estado: rodando (PID {pid}, versão {version}, iniciado por {start_mode}, {sessions} sessões)",
-                    "  status: running (PID {pid}, version {version}, started by {start_mode}, {sessions} sessions)"
-                )
+                    "rodando (PID {pid}, versão {version}, iniciado por {start_mode}, {sessions} sessões)",
+                    "running (PID {pid}, version {version}, started by {start_mode}, {sessions} sessions)"
+                ),
             ),
-            Ok(_) | Err(_) => println!(
-                "{}",
+            Ok(_) | Err(_) => Check::item(
+                State::Fail,
+                status,
                 tr!(
-                    "  estado: rodando, mas não respondeu ao pedido de estado",
-                    "  status: running, but did not answer the status request"
-                )
-            ),
+                    "rodando, mas não respondeu ao pedido de estado",
+                    "running, but did not answer the status request"
+                ),
+            )
+            .help(tr!(
+                "Reinicie o daemon com `sandmux daemon restart`.",
+                "Restart the daemon with `sandmux daemon restart`."
+            )),
         },
-        Ok(None) => println!("{}", tr!("  estado: parado", "  status: stopped")),
-        Err(e) => println!("{}", trf!("  estado: {e:#}", "  status: {e:#}")),
-    }
+        Ok(None) => Check::item(State::Info, status, tr!("parado", "stopped")).help(tr!(
+            "O daemon sobe sozinho quando uma sessão precisa dele.",
+            "The daemon starts by itself when a session needs it."
+        )),
+        Err(e) => Check::item(State::Fail, status, format!("{e:#}")),
+    });
     let unit = systemd::unit_path();
+    let label = tr!("unidade systemd de usuário", "user systemd unit");
     let direct = std::env::var("SANDMUX_DAEMON_START").as_deref() == Ok("direct");
-    if !unit.exists() {
-        println!(
-            "{}",
-            trf!(
-                "  unidade systemd de usuário: não instalada ({})",
-                "  user systemd unit: not installed ({})",
-                unit.display()
-            )
-        );
+    checks.push(if !unit.exists() {
+        Check::item(
+            State::Info,
+            label,
+            trf!("não instalada ({})", "not installed ({})", unit.display()),
+        )
     } else if direct || !systemd::available() {
-        println!(
-            "{}",
-            trf!(
-                "  unidade systemd de usuário: instalada ({})",
-                "  user systemd unit: installed ({})",
-                unit.display()
-            )
-        );
+        Check::item(
+            State::Info,
+            label,
+            trf!("instalada ({})", "installed ({})", unit.display()),
+        )
     } else {
         let state = match systemd::enabled() {
             Some(true) => tr!(
@@ -803,13 +1067,10 @@ fn daemon_section() {
             Some(false) => tr!("instalada, mas desabilitada", "installed, but disabled"),
             None => tr!("instalada", "installed"),
         };
-        println!(
-            "{}",
-            trf!(
-                "  unidade systemd de usuário: {state} ({})",
-                "  user systemd unit: {state} ({})",
-                unit.display()
-            )
-        );
+        Check::item(State::Info, label, format!("{state} ({})", unit.display()))
+    });
+    Group {
+        name: tr!("Daemon", "Daemon").into(),
+        checks,
     }
 }

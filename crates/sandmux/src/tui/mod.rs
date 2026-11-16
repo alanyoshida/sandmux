@@ -114,6 +114,11 @@ pub const HELP: &[(&str, &str, &str)] = &[
     ),
     ("settings", "configurações", "settings"),
     (
+        "doctor",
+        "diagnóstico: verificações do sandmux doctor",
+        "diagnosis: the sandmux doctor checks",
+    ),
+    (
         "enter",
         "shell dentro do sandbox da aba (o que o agente vê)",
         "shell inside the tab's sandbox (what the agent sees)",
@@ -1234,6 +1239,7 @@ impl App {
             "menu" => self.modal = Some(Modal::Menu(0)),
             "enter" => self.enter_active(),
             "settings" => self.open_settings(),
+            "doctor" => self.open_doctor(),
             "network" => self.open_net(),
             "chat" => self.open_chat(),
             "command" => self.open_command(),

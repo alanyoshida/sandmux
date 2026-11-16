@@ -85,10 +85,20 @@ impl SupportReport {
 /// verificação vale com o perfil AppArmor do lançador, que é o processo que
 /// cria o sandbox.
 pub fn check_via(runner: &std::path::Path) -> SupportReport {
+    check_with(runner, std::process::Stdio::inherit())
+}
+
+/// Como [`check_via`], sem deixar o lançador escrever no terminal (para a
+/// TUI, que desenha a tela inteira).
+pub fn check_quiet(runner: &std::path::Path) -> SupportReport {
+    check_with(runner, std::process::Stdio::null())
+}
+
+fn check_with(runner: &std::path::Path, stderr: std::process::Stdio) -> SupportReport {
     match std::process::Command::new(runner)
         .arg("--check")
         .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::inherit())
+        .stderr(stderr)
         .output()
     {
         Ok(out) => SupportReport::from_wire(&String::from_utf8_lossy(&out.stdout)),

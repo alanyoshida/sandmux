@@ -74,6 +74,7 @@ All of them start with the prefix key, Ctrl+b by default:
 | `i` | Chat modal: a question to a model, which opens a chat tab ([chat.md](chat.md)) |
 | `g` | Command modal: the model generates a command, written into the tab without running it ([chat.md](chat.md#command-modal)) |
 | `e` | [Settings](#settings) |
+| `D` | [Diagnosis](#diagnosis) in the settings |
 | `t` | Shell inside the tab's sandbox ([sessions.md](sessions.md#shell-inside-a-tabs-sandbox)) |
 | `:` | [Menu](#menu) with all actions |
 | the prefix again | Sends the prefix to the harness |
@@ -93,7 +94,7 @@ new = "t"
 close = "q"
 ```
 
-- **Actions:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings`, `enter`, `group-prev`, `group-next`, `groups`, `split-side`, `split-stack`, `zoom`, `pane-grow` and `pane-shrink`. The arrows after the prefix, which move the focus between panes, are fixed.
+- **Actions:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings`, `doctor`, `enter`, `group-prev`, `group-next`, `groups`, `split-side`, `split-stack`, `zoom`, `pane-grow` and `pane-shrink`. The arrows after the prefix, which move the focus between panes, are fixed.
 - **Keys:** a visible character that is not a digit, because digits lead to the tabs.
 - **Two actions on the same key** chosen in `[tui.keys]` make the file invalid. A chosen key that is another action's default wins, and the other action is left without a key (it shows as `—` in the help and stays in the menu). This way a new action in a new version never makes the file invalid.
 - **`[tui]` is not a policy layer:** it changes nothing in the sandboxes.
@@ -192,6 +193,7 @@ Ctrl+b `e`, or "settings" in the menu, opens a full-screen page with the options
 | Assistant | chat and command models, suggested models (Enter, or `a` in the list, opens the [providers' list](chat.md#model-list); `e` edits the text) |
 | Logging | days and cap of the network log |
 | Vault | the vault state and secrets, without the values; create, unlock, lock, change the password, add a secret and an SSH key, edit domains and remove ([vault.md](vault.md#from-the-tui)) |
+| Diagnosis | the `sandmux doctor` checks, and the real keys moved to the vault ([see below](#diagnosis)) |
 
 Each item shows the current value and where it comes from ("default", "from global"):
 
@@ -225,6 +227,27 @@ A click selects a section or an item, and toggles a toggle.
 - session policy: at the tab's next launch (Ctrl+b `r`).
 
 The options of `[tui]`, `[assistant]` and of the log apply only in the global one; with the target on a project, they show up as "global only". The keys of each action (`[tui.keys]`), the colors of each element (`[tui.colors]`), the profiles and the assistant's custom providers stay in the file.
+
+### Diagnosis
+
+The Diagnosis section, at the end of the page, shows the `sandmux doctor` checks ([install.md](install.md)). Ctrl+b `D`, or "diagnosis" in the menu, opens the page right on it.
+
+- **In the sidebar:** the section name shows how many checks failed, such as `Diagnosis ✗1`. The checks run when the page opens and when you enter the section, and `r` runs them again.
+- **In the list:** one line per check, grouped into Sandbox, Installation, Configuration, Daemon, Vault and Real keys. The mark is `✓` (fine), `✗` (failure), `!` (warning) or `·` (information).
+- **Below:** the chosen line shows the full label and summary, with the cause and the fix. The command that writes the AppArmor profile is long and stays only in `sandmux doctor` in the terminal.
+
+**Moving the real keys (`f`):** does the same as `sandmux doctor --fix` ([vault.md](vault.md#keys-written-inside-the-sandbox)).
+
+1. With the vault locked, `f` asks for the password. Without a vault, it points to the Vault section.
+2. For each key, the "Domains" field comes filled in and can be edited.
+   - The field comes from the key name, the provider or the `baseURL`, as in `doctor --fix`.
+   - With none of those, it comes with the host of the URL closest to the key in the file (up to 10 lines). This suggestion exists only here: the daemon never moves a key based on it.
+3. Enter confirms the key. An empty field stores the key with no domain, and then there is no swap in traffic. Esc skips the whole file.
+4. A file's keys go to the vault only after all of them are confirmed. Only then is the file rewritten with the fake values; if the vault refuses one, the file stays as it was.
+5. The `agy` Google login asks for `y` to confirm.
+6. At the end, a notice says how many keys were moved and which tabs to restart (Ctrl+b `r`).
+
+The real values never show up on screen.
 
 ## Color theme
 

@@ -63,10 +63,14 @@ pub const SECTIONS: &[[&str; 2]] = &[
     ["Assistente", "Assistant"],
     ["Registro", "Logging"],
     ["Cofre", "Vault"],
+    ["Diagnóstico", "Diagnosis"],
 ];
 
 /// A seção do cofre: não tem itens do arquivo, e sim a tela do cofre.
 pub const VAULT: usize = 9;
+
+/// A seção do diagnóstico: as verificações do `sandmux doctor`.
+pub const DOCTOR: usize = 10;
 
 /// O nome de uma seção no idioma atual.
 pub fn section_name(i: usize) -> &'static str {
@@ -813,6 +817,77 @@ pub struct Settings {
     pub path: PathBuf,
     /// A tela do cofre.
     pub vault: VaultView,
+    /// A tela do diagnóstico.
+    pub doctor: DoctorView,
+}
+
+/// A tela do diagnóstico: o relatório, a linha escolhida e o `f` em
+/// andamento.
+#[derive(Default)]
+pub struct DoctorView {
+    pub report: Option<crate::doctor::Report>,
+    /// A linha escolhida, contando as verificações de todos os grupos.
+    pub sel: usize,
+    pub fix: Option<FixFlow>,
+    /// A senha do cofre, pedida antes de mover as chaves.
+    pub unlock: Option<VaultForm>,
+}
+
+impl DoctorView {
+    /// A verificação escolhida.
+    pub fn selected(&self) -> Option<&crate::doctor::Check> {
+        self.report
+            .as_ref()?
+            .groups
+            .iter()
+            .flat_map(|g| &g.checks)
+            .nth(self.sel)
+    }
+
+    fn count(&self) -> usize {
+        self.report
+            .as_ref()
+            .map_or(0, |r| r.groups.iter().map(|g| g.checks.len()).sum())
+    }
+}
+
+/// O `doctor --fix` pela TUI: os arquivos com chaves reais, a chave atual e
+/// os domínios já confirmados das chaves do arquivo. Os valores reais nunca
+/// aparecem na tela.
+pub struct FixFlow {
+    files: Vec<(&'static str, sandmux_import::RealSecrets)>,
+    file: usize,
+    key: usize,
+    answers: Vec<Vec<String>>,
+    /// O campo de domínios da chave atual.
+    pub input: String,
+    agy: Option<(PathBuf, sandmux_import::agy_login::Login)>,
+    /// Esperando a confirmação do login do `agy`.
+    pub on_agy: bool,
+    moved: usize,
+    harnesses: Vec<&'static str>,
+    refused: Vec<String>,
+}
+
+impl FixFlow {
+    /// O nome no cofre da chave atual.
+    pub fn name(&self) -> String {
+        let (h, r) = &self.files[self.file];
+        crate::doctor::key_name(h, r, &r.found[self.key])
+    }
+
+    /// Onde está a chave atual e quantas faltam no arquivo.
+    pub fn context(&self) -> String {
+        let (h, r) = &self.files[self.file];
+        trf!(
+            "{h}: {}, linha {}, chave {} de {} do arquivo",
+            "{h}: {}, line {}, key {} of {} in the file",
+            r.file.display(),
+            r.found[self.key].line,
+            self.key + 1,
+            r.found.len()
+        )
+    }
 }
 
 /// A tela do cofre na página: o estado, a lista e o formulário aberto.
@@ -936,6 +1011,7 @@ impl Settings {
             doc,
             path,
             vault: VaultView::default(),
+            doctor: DoctorView::default(),
         }
     }
 
@@ -971,7 +1047,19 @@ impl App {
                 .canonicalize()
                 .unwrap_or_else(|_| t.workdir.clone())
         });
-        self.modal = Some(Modal::Settings(Box::new(Settings::new(path, project))));
+        let mut s = Box::new(Settings::new(path, project));
+        // A contagem de falhas aparece no nome da seção já na abertura.
+        self.doctor_refresh(&mut s);
+        self.modal = Some(Modal::Settings(s));
+    }
+
+    /// A página aberta na seção do diagnóstico.
+    pub(super) fn open_doctor(&mut self) {
+        self.open_settings();
+        if let Some(Modal::Settings(s)) = self.modal.as_mut() {
+            s.section = DOCTOR;
+            s.on_items = true;
+        }
     }
 
     /// Grava a mudança no item escolhido, relê o arquivo e aplica na hora o
@@ -1143,10 +1231,19 @@ impl App {
         {
             return Some(s);
         }
+        if s.section == DOCTOR
+            && (s.on_items || s.doctor.fix.is_some() || s.doctor.unlock.is_some())
+            && self.doctor_key(&mut s, &k)
+        {
+            return Some(s);
+        }
         let before = s.section;
         let r = self.settings_nav(&mut s, k);
         if s.section == VAULT && before != VAULT {
             self.vault_refresh(&mut s);
+        }
+        if s.section == DOCTOR && before != DOCTOR {
+            self.doctor_refresh(&mut s);
         }
         if r { Some(s) } else { None }
     }
@@ -1227,10 +1324,19 @@ impl App {
                 if i == VAULT {
                     self.vault_refresh(&mut s);
                 }
+                if i == DOCTOR {
+                    self.doctor_refresh(&mut s);
+                }
             }
             Some(Hit::Item(i)) if s.section == VAULT => {
                 s.on_items = true;
                 s.vault.sel = i;
+            }
+            Some(Hit::Item(i)) if s.section == DOCTOR => {
+                if s.doctor.fix.is_none() && s.doctor.unlock.is_none() {
+                    s.on_items = true;
+                    s.doctor.sel = i;
+                }
             }
             Some(Hit::Item(i)) => {
                 let again = s.on_items && s.item == i && s.list.is_none() && s.edit.is_none();
@@ -1577,6 +1683,277 @@ impl App {
     }
 }
 
+// ---- diagnóstico ----
+
+impl App {
+    /// Roda as verificações do `sandmux doctor` de novo.
+    pub(super) fn doctor_refresh(&mut self, s: &mut Settings) {
+        let d = &mut s.doctor;
+        d.report = Some(crate::doctor::report(true));
+        d.sel = d.sel.min(d.count().saturating_sub(1));
+    }
+
+    /// As teclas da tela do diagnóstico; `true` quando a tecla foi usada.
+    fn doctor_key(&mut self, s: &mut Settings, k: &Key) -> bool {
+        if let Some(f) = s.doctor.unlock.as_mut() {
+            match k {
+                Key::Esc => s.doctor.unlock = None,
+                Key::Backspace => {
+                    f.fields[0].pop();
+                }
+                Key::Char(c) => f.fields[0].push(*c),
+                Key::Enter => {
+                    if let Some(f) = s.doctor.unlock.take() {
+                        match self.vault_submit(&f) {
+                            Ok(_) => self.doctor_fix_start(s),
+                            Err(e) => s.note = Some((e, true)),
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return true;
+        }
+        if let Some(fix) = s.doctor.fix.as_mut() {
+            if fix.on_agy {
+                fix.on_agy = false;
+                if matches!(k, Key::Char('s' | 'S' | 'y' | 'Y')) {
+                    self.doctor_move_agy(s);
+                } else if let Some(fix) = s.doctor.fix.as_mut() {
+                    fix.agy = None;
+                }
+                self.doctor_fix_next(s);
+                return true;
+            }
+            match k {
+                Key::Esc => {
+                    // Pula o arquivo inteiro: nada dele vai ao cofre.
+                    fix.file += 1;
+                    fix.key = 0;
+                    fix.answers.clear();
+                    self.doctor_fix_next(s);
+                }
+                Key::Backspace => {
+                    fix.input.pop();
+                }
+                Key::Char(c) => fix.input.push(*c),
+                Key::Enter => {
+                    let domains = fix
+                        .input
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|d| !d.is_empty())
+                        .map(crate::vaultcmd::normalize_domain)
+                        .collect();
+                    fix.answers.push(domains);
+                    fix.key += 1;
+                    if fix.key >= fix.files[fix.file].1.found.len() {
+                        self.doctor_commit_file(s);
+                    }
+                    self.doctor_fix_next(s);
+                }
+                _ => {}
+            }
+            return true;
+        }
+        let n = s.doctor.count();
+        match k {
+            Key::Up => s.doctor.sel = s.doctor.sel.saturating_sub(1),
+            Key::Down => s.doctor.sel = (s.doctor.sel + 1).min(n.saturating_sub(1)),
+            Key::Esc | Key::Left => s.on_items = false,
+            Key::Char('r') => {
+                self.doctor_refresh(s);
+                s.note = Some((
+                    tr!("verificações feitas de novo", "checks run again").into(),
+                    false,
+                ));
+            }
+            Key::Char('f') => self.doctor_fix_start(s),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Começa o `f`: lê as chaves reais e o login do `agy`, confere o cofre
+    /// e pede a senha quando ele está trancado.
+    fn doctor_fix_start(&mut self, s: &mut Settings) {
+        let files = crate::doctor::real_secrets(&self.host);
+        let agy = crate::doctor::agy_login(&self.host);
+        if files.is_empty() && agy.is_none() {
+            s.note = Some((
+                tr!(
+                    "nenhuma chave real dentro do sandbox: nada a mover",
+                    "no real keys inside the sandbox: nothing to move"
+                )
+                .into(),
+                false,
+            ));
+            return;
+        }
+        match self.call(&Msg::VaultStatus) {
+            Ok(Msg::VaultInfo { exists: false, .. }) => {
+                s.note = Some((
+                    tr!(
+                        "não há cofre: crie um na seção Cofre (n) e aperte f de novo",
+                        "there is no vault: create one in the Vault section (n) and press f again"
+                    )
+                    .into(),
+                    true,
+                ));
+                return;
+            }
+            Ok(Msg::VaultInfo {
+                unlocked: false, ..
+            }) => {
+                s.doctor.unlock = Some(VaultForm::new(FormKind::Unlock, String::new()));
+                return;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                s.note = Some((format!("{e:#}"), true));
+                return;
+            }
+        }
+        s.note = None;
+        s.doctor.fix = Some(FixFlow {
+            files,
+            file: 0,
+            key: 0,
+            answers: Vec::new(),
+            input: String::new(),
+            agy,
+            on_agy: false,
+            moved: 0,
+            harnesses: Vec::new(),
+            refused: Vec::new(),
+        });
+        self.doctor_fix_next(s);
+    }
+
+    /// Prepara o próximo passo: o campo da próxima chave, a confirmação do
+    /// login do `agy` ou o fim.
+    fn doctor_fix_next(&mut self, s: &mut Settings) {
+        let Some(fix) = s.doctor.fix.as_mut() else {
+            return;
+        };
+        while fix
+            .files
+            .get(fix.file)
+            .is_some_and(|(_, r)| fix.key >= r.found.len())
+        {
+            fix.file += 1;
+            fix.key = 0;
+        }
+        if let Some((h, r)) = fix.files.get(fix.file) {
+            let x = &r.found[fix.key];
+            fix.input = crate::doctor::suggest_domains(&self.host, h, r, x).join(", ");
+            return;
+        }
+        if fix.agy.is_some() {
+            fix.on_agy = true;
+            return;
+        }
+        let Some(fix) = s.doctor.fix.take() else {
+            return;
+        };
+        s.note = Some(if let Some(e) = fix.refused.first() {
+            (e.clone(), true)
+        } else if fix.moved == 0 {
+            (
+                tr!(
+                    "nenhuma chave levada ao cofre",
+                    "no keys moved to the vault"
+                )
+                .into(),
+                false,
+            )
+        } else {
+            (
+                trf!(
+                    "{} chave(s) levadas ao cofre; reinicie as abas de {} (Ctrl+b r)",
+                    "{} key(s) moved to the vault; restart the {} tabs (Ctrl+b r)",
+                    fix.moved,
+                    fix.harnesses.join(", ")
+                ),
+                false,
+            )
+        });
+        self.doctor_refresh(s);
+        self.refresh_vault();
+    }
+
+    /// Manda ao cofre as chaves do arquivo atual, com os domínios
+    /// confirmados, e só depois grava os falsos no arquivo.
+    fn doctor_commit_file(&mut self, s: &mut Settings) {
+        let Some(fix) = s.doctor.fix.as_mut() else {
+            return;
+        };
+        let answers = std::mem::take(&mut fix.answers);
+        let (h, r) = &fix.files[fix.file];
+        let h = *h;
+        let mut ok = true;
+        for (x, domains) in r.found.iter().zip(answers) {
+            let name = crate::doctor::key_name(h, r, x);
+            let mut msg = Msg::VaultAdd {
+                name: name.clone(),
+                value: x.real.clone(),
+                domains,
+                fake: Some(x.fake.clone()),
+                tools: Vec::new(),
+            };
+            let res = self.call(&msg);
+            if let Msg::VaultAdd { value, .. } = &mut msg {
+                zeroize::Zeroize::zeroize(value);
+            }
+            if let Err(e) = res {
+                fix.refused.push(trf!(
+                    "{name}: o cofre recusou ({e:#}); {} fica como estava",
+                    "{name}: the vault refused ({e:#}); {} stays as it was",
+                    r.file.display()
+                ));
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            let layout = sandmux_policy::Layout::new(&self.host.data_dir);
+            match sandmux_import::apply_fakes(h, &layout.home(h), &layout.manifest(h), r) {
+                Ok(()) => {
+                    fix.moved += r.found.len();
+                    if !fix.harnesses.contains(&h) {
+                        fix.harnesses.push(h);
+                    }
+                }
+                Err(e) => fix.refused.push(format!("{}: {e}", r.file.display())),
+            }
+        }
+        fix.file += 1;
+        fix.key = 0;
+    }
+
+    /// Leva o login do Google do `agy` ao cofre.
+    fn doctor_move_agy(&mut self, s: &mut Settings) {
+        let Some(fix) = s.doctor.fix.as_mut() else {
+            return;
+        };
+        let Some((path, l)) = fix.agy.take() else {
+            return;
+        };
+        match crate::vaultcmd::store_agy_login(&l, &path) {
+            Ok(()) => {
+                fix.moved += l.reals().len();
+                if !fix.harnesses.contains(&"agy") {
+                    fix.harnesses.push("agy");
+                }
+            }
+            Err(e) => fix.refused.push(trf!(
+                "agy: o cofre recusou ({e:#}); o arquivo fica como estava",
+                "agy: the vault refused ({e:#}); the file stays as it was"
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1604,7 +1981,7 @@ mod tests {
     #[test]
     fn todas_as_secoes_tem_itens() {
         for (s, name) in SECTIONS.iter().enumerate() {
-            if s == VAULT {
+            if s == VAULT || s == DOCTOR {
                 continue;
             }
             assert!(!items_of(s).is_empty(), "{}", name[0]);

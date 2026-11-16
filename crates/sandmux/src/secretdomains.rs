@@ -137,9 +137,51 @@ pub fn known_domains(key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// O host da URL `http(s)://` mais próxima da linha `line` (a partir de 1),
+/// até 10 linhas antes ou depois, normalizado. É só uma sugestão para uma
+/// chave sem domínio conhecido, que o usuário confirma na TUI; o vigia do
+/// daemon não a usa, porque uma URL próxima pode ser de outro serviço.
+pub fn nearby_url_domain(text: &str, line: usize) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let at = line.checked_sub(1)?;
+    (0..=10).find_map(|d| {
+        [at.checked_sub(d), Some(at + d)]
+            .into_iter()
+            .flatten()
+            .filter_map(|i| lines.get(i))
+            .find_map(|l| url_in(l))
+    })
+}
+
+/// O host da primeira URL `http(s)://` da linha.
+fn url_in(l: &str) -> Option<String> {
+    let i = l.find("https://").or_else(|| l.find("http://"))?;
+    let rest = &l[i..];
+    let end = rest
+        .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ',' | '`' | '>' | ')'))
+        .unwrap_or(rest.len());
+    sandmux_policy::assistant::url_host(&rest[..end]).map(|h| normalize_domain(&h))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sugestao_pela_url_proxima() {
+        let t = "llm:\n  api_key: sk-REAL\n  base_url: https://api.exemplo.com/v1\n";
+        assert_eq!(nearby_url_domain(t, 2).as_deref(), Some("api.exemplo.com"));
+        // A mais próxima ganha.
+        let t = "a: https://longe.com\nb\nc\nkey: x\nd: \"http://perto.com:8080/v1\"\n";
+        assert_eq!(nearby_url_domain(t, 4).as_deref(), Some("perto.com"));
+        // Endereço local vira o nome da máquina.
+        let t = "key: x\nurl: http://localhost:1234/v1\n";
+        assert_eq!(nearby_url_domain(t, 1).as_deref(), Some(HOST_DOMAIN));
+        // Nada além de 10 linhas.
+        let t = format!("key: x\n{}url: https://api.longe.com\n", "\n".repeat(11));
+        assert_eq!(nearby_url_domain(&t, 1), None);
+        assert_eq!(nearby_url_domain("key: x\n", 1), None);
+    }
 
     #[test]
     fn dominio_pelo_provedor_e_pela_url() {
