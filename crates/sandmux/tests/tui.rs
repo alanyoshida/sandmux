@@ -466,6 +466,8 @@ fn menu_abre_as_configuracoes_e_a_pagina_grava_o_toml() {
     t.write(DOWN);
     t.write(b" ");
     t.wait_text("kvm gravado em [global]");
+    // A sessão criada antes continua com o valor antigo.
+    t.wait_text("1 aba(s) viva(s) com o valor antigo");
     let text = std::fs::read_to_string(e.config_file()).unwrap();
     assert!(text.starts_with("# do usuário"), "{text}");
     assert!(text.contains("kvm = true"), "{text}");

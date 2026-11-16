@@ -152,3 +152,21 @@ fn chave_window_na_configuracao() {
         stderr(&out)
     );
 }
+
+#[test]
+fn painel_mostra_a_janela() {
+    let e = Env::new();
+    let fake = Fake::start(&e.runtime, GLOBALS);
+    let mut t = term(&e, &fake, &["run", "shell", "--window"]);
+    t.wait_raw("o agente pode abrir janelas");
+    t.write(b"echo pronto-$((1+1))\r");
+    t.wait_text("pronto-2");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+    let mut t = tui(&e, &fake);
+    t.wait_text("janela");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+    let out = e.run(&e.work, &["stats", "1"]);
+    assert!(stdout(&out).contains("janela: ligada"), "{}", stdout(&out));
+}

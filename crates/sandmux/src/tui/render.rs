@@ -1439,6 +1439,16 @@ fn draw_panel(f: &mut Frame, r: Rect, app: &App) {
                         .unwrap_or_default();
                     items.push((p.gpu, "GPU".into(), ok));
                     items.push((p.kvm, "KVM".into(), ok));
+                    items.push((
+                        p.window.is_on(),
+                        match p.window {
+                            sandmux_spec::window::WindowMode::Direct => {
+                                tr!("janela direta", "direct window").into()
+                            }
+                            _ => tr!("janela", "window").into(),
+                        },
+                        warn,
+                    ));
                     items.push((p.clipboard, "clipboard".into(), warn));
                     items.push((!p.pass_env.is_empty(), "pass-env".into(), warn));
                     for l in dots(&items) {
@@ -2187,6 +2197,14 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
                 "Rename tab (Enter saves, Esc cancels)"
             ),
             vec![Line::raw(format!("{text} "))],
+            3,
+        ),
+        Modal::Restart(id) => (
+            tr!("Reiniciar aba", "Restart tab"),
+            vec![Line::raw(trf!(
+                "Reiniciar a aba {id}? O harness é encerrado e volta com a configuração de agora. s/n",
+                "Restart tab {id}? The harness is ended and comes back with the current configuration. y/n"
+            ))],
             3,
         ),
         Modal::Close => (

@@ -625,7 +625,8 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 vars,
                 size,
                 attach,
-            } => match session::relaunch(shared, id, &vars, Some(size)) {
+                force,
+            } => match session::relaunch(shared, id, &vars, Some(size), force) {
                 Err(e) => error(&mut stream, format!("{e:#}"))?,
                 Ok(warnings) => {
                     for w in warnings {

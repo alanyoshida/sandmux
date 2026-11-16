@@ -56,6 +56,9 @@ pub struct Session {
     pub size: Size,
     pub live: Option<Live>,
     pub killing: bool,
+    /// Encerrada para um reinício forçado: o fim não notifica nem relança
+    /// o gateway.
+    pub restarting: bool,
     /// Escrita no clipboard liberada no último lançamento.
     pub clipboard: bool,
     /// Nomes de `pass-env` do último lançamento.
@@ -136,6 +139,7 @@ impl Session {
             size,
             live: None,
             killing: false,
+            restarting: false,
             clipboard,
             pass_env,
             limits: None,
@@ -1103,7 +1107,16 @@ pub fn relaunch(
     id: u32,
     vars: &BTreeMap<String, String>,
     size: Option<Size>,
+    force: bool,
 ) -> Result<Vec<String>> {
+    let live = shared
+        .lock()
+        .sessions
+        .get(&id)
+        .is_some_and(|s| s.live.is_some());
+    if live && force {
+        stop_for_restart(shared, id)?;
+    }
     let (opts, cur, launch) = {
         let st = shared.lock();
         let s = st.sessions.get(&id).ok_or_else(|| {
@@ -1114,8 +1127,8 @@ pub fn relaunch(
         })?;
         if s.live.is_some() {
             return Err(anyhow!(trf!(
-                "a sessão {id} está viva; para relançá-la, encerre-a antes com `sandmux kill {id}`",
-                "session {id} is alive; to relaunch it, end it first with `sandmux kill {id}`"
+                "a sessão {id} está viva; `sandmux restart {id} --force` a encerra e relança",
+                "session {id} is alive; `sandmux restart {id} --force` ends and relaunches it"
             )));
         }
         (s.opts.clone(), s.size, s.launches + 1)
@@ -1125,6 +1138,35 @@ pub fn relaunch(
     let warnings = spawned.warnings.clone();
     attach_process(shared, id, spawned, size);
     Ok(warnings)
+}
+
+/// Encerra o processo da sessão para um reinício: TERM, até 5 s, KILL e
+/// mais 5 s. A sessão fica na lista, marcada como reiniciando.
+fn stop_for_restart(shared: &Arc<Shared>, id: u32) -> Result<()> {
+    let pid = {
+        let mut st = shared.lock();
+        let Some(s) = st.sessions.get_mut(&id) else {
+            return Ok(());
+        };
+        let Some(pid) = s.pid() else { return Ok(()) };
+        s.restarting = true;
+        pid
+    };
+    let ended = |st: &super::State| st.sessions.get(&id).is_none_or(|s| s.pid() != Some(pid));
+    terminate(pid);
+    if !shared.wait_until(std::time::Duration::from_secs(5), ended) {
+        signal(pid, libc::SIGKILL);
+        if !shared.wait_until(std::time::Duration::from_secs(5), ended) {
+            if let Some(s) = shared.lock().sessions.get_mut(&id) {
+                s.restarting = false;
+            }
+            return Err(anyhow!(trf!(
+                "a sessão {id} não terminou",
+                "session {id} did not end"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Vigia os contadores do escopo de um lançamento: acha o cgroup e, por
@@ -1235,6 +1277,12 @@ fn reader(shared: Arc<Shared>, id: u32, pid: i32, master: Arc<File>, mut child: 
         if stopping {
             s.drop_clients(Msg::Detached {
                 reason: tr!("o daemon parou", "the daemon stopped").into(),
+            });
+        } else if s.restarting {
+            s.restarting = false;
+            s.state = SessionState::Encerrada { codigo: code };
+            s.drop_clients(Msg::Detached {
+                reason: tr!("reiniciando", "restarting").into(),
             });
         } else if s.killing {
             s.drop_clients(Msg::Detached {
@@ -1420,7 +1468,7 @@ fn restart_gateway(shared: Arc<Shared>, id: u32, delay: u64) {
     {
         vars.extend(saved);
     }
-    if let Err(e) = relaunch(&shared, id, &vars, None) {
+    if let Err(e) = relaunch(&shared, id, &vars, None, false) {
         let mut st = shared.lock();
         if let Some(s) = st.sessions.get_mut(&id) {
             s.state = SessionState::Parada {
@@ -1559,7 +1607,7 @@ pub fn vault_unlocked(shared: &Arc<Shared>) {
             };
             let mut vars = shared.default_vars();
             vars.extend(values);
-            if let Err(e) = relaunch(&shared, id, &vars, None) {
+            if let Err(e) = relaunch(&shared, id, &vars, None, false) {
                 let mut st = shared.lock();
                 if let Some(s) = st.sessions.get_mut(&id) {
                     s.state = SessionState::Parada {
