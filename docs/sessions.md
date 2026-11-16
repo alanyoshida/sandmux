@@ -31,7 +31,7 @@ O `sandmuxd` é o processo de cada usuário que segura as sessões. Uma sessão 
 | `sandmux attach [id]` | Anexa o terminal. Sem identificador, à única sessão viva |
 | `sandmux detach <id>` | Desanexa todos os terminais da sessão |
 | `sandmux kill <id>` | Pede ao harness que termine (SIGTERM e SIGHUP); depois de 5 segundos, encerra à força. A sessão sai da lista |
-| `sandmux restart <id>` | Relança uma sessão encerrada ou parada, com as mesmas opções e o mesmo perfil, resolvendo a configuração de novo. Os valores de `pass-env` vêm do terminal que pede |
+| `sandmux restart <id>` | Relança uma sessão encerrada ou parada, com as mesmas opções e o mesmo perfil, resolvendo a configuração de novo. Os valores de `pass-env` vêm do terminal que pede. Com `--force`, reinicia também uma sessão viva: o harness é encerrado (TERM, e KILL depois de 5 s) e volta com a configuração de agora, sem a notificação de aba encerrada |
 | `sandmux update <harness> [--yes] [-- args]` | Roda o atualizador oficial do harness no host, fora do sandbox ([detalhes](#atualizar-o-harness)) |
 | `sandmux daemon status` | Estado do daemon, sem iniciá-lo |
 | `sandmux daemon stop` | Encerra os harnesses e para o daemon. As sessões vivas voltam na próxima subida |
@@ -117,7 +117,7 @@ O código do harness entra no sandbox em somente leitura, e a atualização auto
 - O comando termina com o código de saída do atualizador.
 - Os argumentos depois de `--` vão para o atualizador: `sandmux update omp -- --check`.
 - O `shell` não tem atualizador. Um harness não instalado é recusado com a instrução de instalação, como no `run`: o sandmux não instala harness.
-- **Abas vivas:** se há abas vivas do harness, o comando as lista e pergunta antes, porque o atualizador troca arquivos que elas podem estar usando. `--yes` pula a pergunta; sem terminal e sem `--yes`, o comando recusa. Depois, ele diz quais abas reiniciar (Ctrl+b `r`, ou `sandmux restart <id>`) para usar a versão nova.
+- **Abas vivas:** se há abas vivas do harness, o comando as lista e pergunta antes, porque o atualizador troca arquivos que elas podem estar usando. `--yes` pula a pergunta; sem terminal e sem `--yes`, o comando recusa. Depois, ele diz quais abas reiniciar (Ctrl+b `r`, ou `sandmux restart <id> --force`) para usar a versão nova.
 
 O sandmux em si é atualizado pelo pacote ou pelo `install.sh` ([install.md](install.md)).
 
@@ -175,7 +175,7 @@ Socket Unix de fluxo. Cada quadro tem 4 bytes de tamanho (big-endian, só o cont
 | 0 | Mensagem de controle em JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Bytes de terminal: entrada do cliente ou saída da sessão |
 
-A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados, a pasta de configuração e o idioma do cliente (o daemon responde nesse idioma). Esta versão usa o protocolo 34. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
+A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados, a pasta de configuração e o idioma do cliente (o daemon responde nesse idioma). Esta versão usa o protocolo 35. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
 
 O cliente envia ao daemon, junto com o pedido de sessão, as opções dadas no `run`, o perfil nomeado, a pasta atual, as variáveis da lista segura, o `SHELL` e os valores de `pass-env` da política efetiva. O daemon resolve as camadas de configuração ([docs/config.md](config.md)) e compõe a especificação de lançamento com a mesma função do `run` direto.
 

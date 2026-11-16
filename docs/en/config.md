@@ -70,6 +70,10 @@ pass-env = ["OPENROUTER_API_KEY"]
 An invalid file makes `run` refuse the launch, with the file, the line and the reason: malformed TOML, unknown section or key, wrong type, relative path, a value in `pass-env`, or the same path in `ro` and `rw` of the same section. Nothing in the file is silently ignored.
 
 
+### Live tabs
+
+The configuration applies to the tabs launched after the change. Live tabs keep the old value until they are restarted: the settings page says how many there are, and `sandmux config set`, `unset`, `add` and `remove` list the live sessions when the daemon is running. Ctrl+b `r` on the tab, or `sandmux restart <id> --force`, restarts with the new configuration.
+
 ### Harness prompts
 
 By default, sandmux launches the harnesses in the mode where they do not ask for confirmation to edit, run commands, leave the project folder or read files like `.env`, because the sandbox is what blocks (Landlock, the [file policy](files.md) and the [network](network.md)):

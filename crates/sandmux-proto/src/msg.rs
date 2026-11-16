@@ -506,6 +506,10 @@ pub enum Msg {
         vars: BTreeMap<String, String>,
         size: Size,
         attach: bool,
+        /// Reinicia também uma sessão viva, encerrando-a antes (protocolo
+        /// 35).
+        #[serde(default)]
+        force: bool,
     },
     Attach {
         id: Option<u32>,

@@ -648,7 +648,7 @@ fn relaunch_all(shared: &Arc<Shared>, relaunch: Vec<u32>) {
     let vars = shared.default_vars();
     let mut by_id: HashMap<u32, String> = HashMap::new();
     for id in relaunch {
-        if let Err(e) = session::relaunch(shared, id, &vars, None) {
+        if let Err(e) = session::relaunch(shared, id, &vars, None, false) {
             by_id.insert(id, format!("{e:#}"));
         }
     }

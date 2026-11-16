@@ -91,7 +91,12 @@ enum Cmd {
     /// Troca o nome de uma sessão (o nome da aba na TUI).
     Rename { id: u32, nome: String },
     /// Relança uma sessão encerrada ou parada, na mesma pasta e com as mesmas opções.
-    Restart { id: u32 },
+    Restart {
+        id: u32,
+        /// Reinicia também uma sessão viva, encerrando o harness antes.
+        #[arg(long)]
+        force: bool,
+    },
     /// Controla o daemon de sessões.
     #[command(subcommand)]
     Daemon(DaemonCmd),
@@ -555,6 +560,10 @@ const HELP_EN: &[(&str, &str)] = &[
     (
         "Relança uma sessão encerrada ou parada, na mesma pasta e com as mesmas opções.",
         "Relaunches an ended or stopped session, in the same folder and with the same options.",
+    ),
+    (
+        "Reinicia também uma sessão viva, encerrando o harness antes.",
+        "Also restarts a live session, ending the harness first.",
     ),
     (
         "Controla o daemon de sessões.",
@@ -1068,7 +1077,7 @@ fn dispatch(cmd: Cmd) -> Result<i32> {
             FolderCmd::List { id } => sessions::folder_list(id),
         },
         Cmd::Rename { id, nome } => sessions::rename(id, &nome),
-        Cmd::Restart { id } => sessions::restart(id),
+        Cmd::Restart { id, force } => sessions::restart(id, force),
         Cmd::Daemon(c) => match c {
             DaemonCmd::Status => sessions::daemon_status(),
             DaemonCmd::Stop => sessions::daemon_stop(),

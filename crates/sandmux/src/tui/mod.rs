@@ -300,6 +300,8 @@ pub enum Modal {
     List(usize),
     Rename(String),
     Close,
+    /// Confirma o reinício de uma aba viva.
+    Restart(u32),
     Help,
     Net(Box<netscreen::NetScreen>),
     /// Tela de arquivos: os acessos da sessão, o escolhido e um aviso.
@@ -1709,12 +1711,17 @@ impl App {
             return;
         };
         if t.state == SessionState::Viva {
-            self.say(tr!(
-                "a aba está viva; feche-a antes para relançar",
-                "the tab is alive; close it before relaunching"
-            ));
+            self.modal = Some(Modal::Restart(t.id));
             return;
         }
+        self.relaunch(false);
+    }
+
+    /// Relança a aba ativa; `force` encerra antes uma aba viva.
+    fn relaunch(&mut self, force: bool) {
+        let Some(t) = self.tabs.get(self.active) else {
+            return;
+        };
         let (id, opts) = (t.id, t.opts.clone());
         let r = (|| -> Result<UnixStream> {
             let host = Host::detect()?;
@@ -1730,6 +1737,7 @@ impl App {
                 vars,
                 size: self.size,
                 attach: true,
+                force,
             })?;
             let mut s = c.stream;
             Self::until_created(&mut s)?;
@@ -2539,6 +2547,17 @@ impl App {
                     _ => {}
                 }
             }
+            Modal::Restart(id) => match k {
+                Key::Char('s' | 'S' | 'y' | 'Y') => {
+                    let id = *id;
+                    self.modal = None;
+                    if self.tabs.get(self.active).map(|t| t.id) == Some(id) {
+                        self.relaunch(true);
+                    }
+                }
+                Key::Char('n' | 'N') | Key::Esc => self.modal = None,
+                _ => {}
+            },
             Modal::Close => match k {
                 Key::Char('s' | 'S' | 'y' | 'Y') => {
                     self.modal = None;

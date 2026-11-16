@@ -61,7 +61,7 @@ All of them start with the prefix key, Ctrl+b by default:
 | `z` | Zooms the active pane to the whole tab, or goes back to the layout |
 | `<` / `>` | Shrinks / grows the active pane |
 | `,` | Rename the tab |
-| `r` | Restart the ended or stopped tab |
+| `r` | Restart the tab: ended or stopped, right away; live, after confirming (`y/n`), ending the harness. It comes back with the current configuration |
 | `x` | Close the tab (ends the session, with confirmation) |
 | `v` | Paste image from the clipboard |
 | `d` | Leave the TUI (the sessions keep running) |
@@ -108,6 +108,7 @@ With a terminal at least 100 columns wide, a 34-column panel sits on the right. 
 - the write layer;
 - the work folder and the extra folders, read-only or with write access;
 - GPU and KVM;
+- the [window](window.md), on or direct (in yellow, because it opens the desktop);
 - writing to the clipboard;
 - the `pass-env` variables, with the warning that they are within the agent's reach;
 - the memory and process caps;
