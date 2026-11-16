@@ -80,6 +80,7 @@ By default, sandmux launches the harnesses in the mode where they do not ask for
 | Claude Code | `--dangerously-skip-permissions` and `--settings '{"skipDangerousModePermissionPrompt":true}'` |
 | hermes | `HERMES_YOLO_MODE=1` (hermes's fixed blocks still apply) |
 | oh-my-pi | `--auto-approve` |
+| Antigravity CLI | `--dangerously-skip-permissions` |
 
 `harness-asks = true` (global, profile or project, or the "Harness prompts" item in the TUI settings page) launches the harness as it is, with the prompts. The adjustment goes through the environment and the arguments of each launch: the harness configuration files in the synthetic HOME do not change. The `shell` and the chat tab are not affected.
 

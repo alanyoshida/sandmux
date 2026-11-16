@@ -56,8 +56,8 @@ impl std::fmt::Display for PolicyError {
                 presets::PRESETS.join(", ")
             ),
             PolicyError::NoUpdater(h) => trf!(
-                "{h} não tem atualizador. Harnesses com atualizador: opencode, hermes, claude, omp",
-                "{h} has no updater. Harnesses with an updater: opencode, hermes, claude, omp"
+                "{h} não tem atualizador. Harnesses com atualizador: opencode, hermes, claude, omp, agy",
+                "{h} has no updater. Harnesses with an updater: opencode, hermes, claude, omp, agy"
             ),
             PolicyError::NotInstalled {
                 harness,

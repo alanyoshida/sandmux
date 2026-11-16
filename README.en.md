@@ -73,7 +73,7 @@ sandmux setup
 | Command | What it does |
 |---|---|
 | `sandmux` (or `sandmux tui`) | Opens the interface with tabs, one per session, with the bar in colored blocks at the bottom: switch with Ctrl+b n/p/1–9, new tab with Ctrl+b c, list with Ctrl+b w, menu with Ctrl+b `:`, settings with Ctrl+b `e` (toggles and themes such as Catppuccin, Rosé Pine, Tokyo Night, Kanagawa, Gruvbox and Dracula, written to `config.toml`), quit with Ctrl+b d ([docs/en/tui.md](docs/en/tui.md)) |
-| `sandmux run <harness>` | Starts the harness confined in the current folder. Harnesses: `opencode`, `hermes`, `claude` (Claude Code, with the subscription login kept outside the sandbox; [docs/en/claude.md](docs/en/claude.md)) `omp` (oh-my-pi; [docs/en/omp.md](docs/en/omp.md)) and `shell` (a confined shell, without an agent). On the first run, asks whether to import the configuration you already have. In a terminal, creates a session in the daemon and attaches to it; without a terminal (script, pipe, CI), runs directly, in the foreground, without the daemon . The harnesses run without permission prompts, because the sandbox is the barrier; `harness-asks = true` brings the prompts back ([docs/en/config.md](docs/en/config.md#harness-prompts)) |
+| `sandmux run <harness>` | Starts the harness confined in the current folder. Harnesses: `opencode`, `hermes`, `claude` (Claude Code, with the subscription login kept outside the sandbox; [docs/en/claude.md](docs/en/claude.md)) `omp` (oh-my-pi; [docs/en/omp.md](docs/en/omp.md)), `agy` (Google's Antigravity CLI; [docs/en/agy.md](docs/en/agy.md)) and `shell` (a confined shell, without an agent). On the first run, asks whether to import the configuration you already have. In a terminal, creates a session in the daemon and attaches to it; without a terminal (script, pipe, CI), runs directly, in the foreground, without the daemon . The harnesses run without permission prompts, because the sandbox is the barrier; `harness-asks = true` brings the prompts back ([docs/en/config.md](docs/en/config.md#harness-prompts)) |
 | `sandmux ls` | Lists the sessions: identifier, name, group, state (alive, ended with the exit code, stopped with the reason), attached terminals and folder |
 | `sandmux attach [id]` | Attaches this terminal to a session. Without an identifier, to the only live session |
 | `sandmux group list\|move\|rename` | Tab groups, like tmux sessions: each TUI shows one group, and `sandmux run --group <group>` creates the session in it ([docs/en/sessions.md](docs/en/sessions.md#tab-groups)) |
@@ -237,7 +237,7 @@ The development order, the decisions and the accepted risks are in the [roadmap]
 - Kernel 6.12 or newer (Landlock with abstract socket scoping), with unprivileged user namespaces and `/dev/net/tun`. overlayfs in a user namespace is optional: without it, the caches start empty and the toolchains stay read-only.
 - Tested and supported distros: Ubuntu 26.04, Debian 13, current Fedora and Arch (the last three in containers, with the test machine's kernel).
 - Binaries published only for `x86_64`; on another architecture, build with `cargo install`.
-- The harnesses (opencode, hermes, Claude Code, oh-my-pi) are installed by you, on the host. sandmux does not install harnesses; `sandmux update <harness>` runs the official updater outside the sandbox.
+- The harnesses (opencode, hermes, Claude Code, oh-my-pi, Antigravity CLI) are installed by you, on the host. sandmux does not install harnesses; `sandmux update <harness>` runs the official updater outside the sandbox.
 
 ## Architecture
 

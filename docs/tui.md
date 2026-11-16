@@ -279,7 +279,7 @@ Um tema, elemento ou cor desconhecido torna o arquivo inválido. O tema vale ao 
 
 O modal pede três coisas:
 
-- **harness:** com ← e →, entre `opencode`, `hermes`, `claude`, `omp`, `shell` e `chat`. Com `chat`, Enter abre o [modal de chat](chat.md#abrir-uma-conversa), com o modelo e a mensagem, e a pasta e o perfil não valem;
+- **harness:** com ← e →, entre `opencode`, `hermes`, `claude`, `omp`, `agy`, `shell` e `chat`. Com `chat`, Enter abre o [modal de chat](chat.md#abrir-uma-conversa), com o modelo e a mensagem, e a pasta e o perfil não valem;
 - **pasta de trabalho:** por padrão, a pasta de onde a TUI foi aberta;
 - **perfil nomeado:** opcional.
 

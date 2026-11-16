@@ -8,7 +8,7 @@ use crate::PolicyError;
 use crate::host::Host;
 
 /// Nomes dos presets, na ordem em que aparecem nas mensagens.
-pub const PRESETS: &[&str] = &["opencode", "hermes", "claude", "omp", "shell"];
+pub const PRESETS: &[&str] = &["opencode", "hermes", "claude", "omp", "agy", "shell"];
 
 /// O que um preset acrescenta à baseline.
 #[derive(Debug, Clone, Default)]
@@ -29,7 +29,10 @@ pub fn exists(name: &str) -> bool {
 
 /// O preset tem estado real que pode ser importado.
 pub fn importable(name: &str) -> bool {
-    matches!(name, "opencode" | "hermes" | "claude" | "omp" | "shell")
+    matches!(
+        name,
+        "opencode" | "hermes" | "claude" | "omp" | "agy" | "shell"
+    )
 }
 
 /// Shell de sistema para o sandbox: o do usuário quando está nas pastas de
@@ -155,7 +158,11 @@ pub fn tools_for(domains: &[String]) -> Vec<String> {
 }
 
 /// Os harnesses que recebem as chaves falsas dos provedores.
-pub const FAKE_KEY_HARNESSES: &[&str] = &["opencode", "hermes", "omp", "chat"];
+pub const FAKE_KEY_HARNESSES: &[&str] = &["opencode", "hermes", "omp", "agy", "chat"];
+
+/// Configuração do Antigravity CLI só daquela execução, com a chave do
+/// Gemini no lançamento: a chave da variável no lugar do login do Google.
+pub const AGY_GEMINI_SETTINGS: &str = r#"{"modelProvider":"gemini"}"#;
 
 /// Configuração injetada no opencode para que a chave passada por
 /// `--pass-env` vença o valor falso do `auth.json` importado.
@@ -316,6 +323,40 @@ pub fn plan(
                 shell: system_shell(host),
             })
         }
+        "agy" => {
+            // Antigravity CLI: um binário Go só; o estado é recriado no HOME
+            // sintético.
+            let exe = host.h(".local/bin/agy");
+            if !executable(&exe) {
+                return Err(PolicyError::NotInstalled {
+                    harness: name.into(),
+                    searched: vec![exe],
+                    hint: sandmux_spec::tr!(
+                        "instale o Antigravity CLI no host seguindo https://antigravity.google/docs/cli (o binário agy em ~/.local/bin)",
+                        "install the Antigravity CLI on the host following https://antigravity.google/docs/cli (the agy binary in ~/.local/bin)"
+                    )
+                    .into(),
+                });
+            }
+            let mut command = vec![exe.to_string_lossy().into_owned()];
+            // Com a chave do Gemini, o `agy` usa a variável e não o login.
+            if pass_env.iter().any(|v| v == "GEMINI_API_KEY") {
+                command.push("--settings".into());
+                command.push(AGY_GEMINI_SETTINGS.into());
+            }
+            command.extend(args.iter().cloned());
+            Ok(PresetPlan {
+                mounts: vec![ro(&exe)],
+                layered: vec![],
+                // O valor precisa ser `true`: com `1`, a atualização roda.
+                env: vec![(
+                    "AGY_CLI_DISABLE_AUTO_UPDATE".to_string(),
+                    "true".to_string(),
+                )],
+                command,
+                shell: system_shell(host),
+            })
+        }
         "shell" => {
             let shell = system_shell(host);
             Ok(PresetPlan {
@@ -355,6 +396,7 @@ pub fn updater(name: &str, host: &Host, args: &[String]) -> Result<Vec<String>, 
         // O link, não a versão resolvida: o `claude update` troca o alvo.
         "claude" => (".local/bin/claude", "update"),
         "omp" => (".local/bin/omp", "update"),
+        "agy" => (".local/bin/agy", "update"),
         other => return Err(PolicyError::NoUpdater(other.into())),
     };
     Ok(
@@ -407,6 +449,7 @@ mod tests {
         )
         .unwrap();
         exe(&home.join(".local/bin/omp"));
+        exe(&home.join(".local/bin/agy"));
         let s = |p: &str| home.join(p).to_string_lossy().into_owned();
         assert_eq!(
             updater("opencode", &h, &[]).unwrap(),
@@ -424,6 +467,10 @@ mod tests {
             updater("omp", &h, &["--check".into()]).unwrap(),
             [s(".local/bin/omp"), "update".into(), "--check".into()]
         );
+        assert_eq!(
+            updater("agy", &h, &[]).unwrap(),
+            [s(".local/bin/agy"), "update".into()]
+        );
         assert!(matches!(
             updater("shell", &h, &[]),
             Err(PolicyError::NoUpdater(_))
@@ -440,6 +487,37 @@ mod tests {
         let h = host(d.path());
         assert!(matches!(
             updater("claude", &h, &[]),
+            Err(PolicyError::NotInstalled { .. })
+        ));
+    }
+
+    #[test]
+    fn agy_com_a_chave_do_gemini_usa_a_variavel() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path();
+        let h = host(home);
+        exe(&home.join(".local/bin/agy"));
+        let agy = home.join(".local/bin/agy").to_string_lossy().into_owned();
+        let args = ["-p".to_string(), "oi".to_string()];
+        let p = plan("agy", &h, &args, &["GEMINI_API_KEY".into()]).unwrap();
+        assert_eq!(
+            p.command,
+            [
+                agy.clone(),
+                "--settings".into(),
+                AGY_GEMINI_SETTINGS.into(),
+                "-p".into(),
+                "oi".into()
+            ]
+        );
+        assert!(
+            p.env
+                .contains(&("AGY_CLI_DISABLE_AUTO_UPDATE".into(), "true".into()))
+        );
+        let p = plan("agy", &h, &args, &["OPENROUTER_API_KEY".into()]).unwrap();
+        assert_eq!(p.command, [agy, "-p".into(), "oi".into()]);
+        assert!(matches!(
+            plan("agy", &host(&home.join("vazio")), &[], &[]),
             Err(PolicyError::NotInstalled { .. })
         ));
     }

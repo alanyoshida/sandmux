@@ -356,7 +356,7 @@ struct RunArgs {
 
 #[derive(clap::Args)]
 struct UpdateArgs {
-    /// Harness: opencode, hermes, claude ou omp.
+    /// Harness: opencode, hermes, claude, omp ou agy.
     harness: String,
     /// Não pergunta quando há abas vivas do harness.
     #[arg(long)]
@@ -368,7 +368,7 @@ struct UpdateArgs {
 
 #[derive(clap::Args)]
 struct ImportArgs {
-    /// Harness: opencode, hermes, claude ou omp.
+    /// Harness: opencode, hermes, claude, omp ou agy.
     harness: String,
     /// Substitui os arquivos que já existem no HOME sintético.
     #[arg(long)]
@@ -837,8 +837,8 @@ const HELP_EN: &[(&str, &str)] = &[
     ),
     // ImportArgs e UpdateArgs
     (
-        "Harness: opencode, hermes, claude ou omp.",
-        "Harness: opencode, hermes, claude or omp.",
+        "Harness: opencode, hermes, claude, omp ou agy.",
+        "Harness: opencode, hermes, claude, omp or agy.",
     ),
     (
         "Não pergunta quando há abas vivas do harness.",

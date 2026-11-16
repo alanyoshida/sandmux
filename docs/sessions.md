@@ -113,6 +113,7 @@ O código do harness entra no sandbox em somente leitura, e a atualização auto
 | `hermes` | `~/.local/bin/hermes update` |
 | `claude` | `~/.local/bin/claude update` |
 | `omp` | `~/.local/bin/omp update` |
+| `agy` | `~/.local/bin/agy update` |
 
 - O comando termina com o código de saída do atualizador.
 - Os argumentos depois de `--` vão para o atualizador: `sandmux update omp -- --check`.

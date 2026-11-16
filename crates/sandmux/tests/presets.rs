@@ -44,7 +44,7 @@ fn preset_desconhecido_lista_os_disponiveis() {
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
     assert!(
-        err.contains("opencode, hermes, claude, omp, shell"),
+        err.contains("opencode, hermes, claude, omp, agy, shell"),
         "{err}"
     );
 }
@@ -395,6 +395,92 @@ fn omp_sem_os_bancos_e_com_a_chave_falsa() {
     );
 }
 
+/// `agy` falso: pula `--dangerously-skip-permissions` e, com a chave do
+/// Gemini, o `--settings` do lançamento, e executa o resto.
+const FAKE_AGY: &str = "[ \"$1\" = --dangerously-skip-permissions ] && shift\n[ \"$1\" = --settings ] && shift 2\nexec \"$@\"";
+
+#[test]
+fn agy_sem_o_login_e_com_a_atualizacao_desligada() {
+    let e = Env::new();
+    let out = run(&e, &["run", "agy"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(
+        err.contains(".local/bin/agy") && err.contains("antigravity.google"),
+        "{err}"
+    );
+    exe(&e.home.join(".local/bin/agy"), FAKE_AGY);
+    let cli = e.home.join(".gemini/antigravity-cli");
+    let cfg = e.home.join(".gemini/config");
+    for d in [
+        cli.join("conversations"),
+        cfg.join("projects"),
+        cfg.join("skills/s"),
+        e.home.join(".config/antigravity"),
+    ] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(cli.join("settings.json"), r#"{"model":"x"}"#).unwrap();
+    std::fs::write(cli.join("antigravity-oauth-token"), "TOKEN-REAL").unwrap();
+    std::fs::write(cli.join("history.jsonl"), "{}").unwrap();
+    std::fs::write(cli.join("conversations/c.pb"), "C").unwrap();
+    std::fs::write(cfg.join("mcp_config.json"), r#"{"mcpServers":{}}"#).unwrap();
+    std::fs::write(cfg.join("projects/p.json"), "{}").unwrap();
+    std::fs::write(cfg.join("skills/s/SKILL.md"), "skill").unwrap();
+    std::fs::write(e.home.join(".gemini/GEMINI.md"), "regras").unwrap();
+    std::fs::write(
+        e.home.join(".config/antigravity/plugin-secrets.json"),
+        "SEGREDO",
+    )
+    .unwrap();
+    let out = run(
+        &e,
+        &[
+            "run",
+            "agy",
+            "--import",
+            "--",
+            "sh",
+            "-c",
+            "cd ~/.gemini; find . -type f | LC_ALL=C sort; test -e ~/.config/antigravity/plugin-secrets.json && echo SEGREDOS; echo $AGY_CLI_DISABLE_AUTO_UPDATE; echo x > ~/.local/bin/agy 2>/dev/null && echo ALTEROU || echo NEGADO",
+        ],
+    );
+    assert_eq!(
+        stdout(&out),
+        "./GEMINI.md\n./antigravity-cli/settings.json\n./config/mcp_config.json\n./config/skills/s/SKILL.md\ntrue\nNEGADO\n",
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn agy_com_a_chave_do_gemini_usa_a_variavel() {
+    let e = Env::new();
+    exe(
+        &e.home.join(".local/bin/agy"),
+        "echo \"args=$*\"; echo \"chave=${GEMINI_API_KEY:-}\"",
+    );
+    let go = |extra: &[&str]| {
+        let mut args = vec!["run", "agy", "--no-import"];
+        args.extend_from_slice(extra);
+        args.extend_from_slice(&["--", "-p", "oi"]);
+        let mut cmd = e.cmd(&e.work, &args);
+        cmd.env("GEMINI_API_KEY", "valor-de-teste");
+        let out = cmd.output().unwrap();
+        assert!(out.status.success(), "{}", stderr(&out));
+        stdout(&out)
+    };
+    assert_eq!(
+        go(&["--pass-env", "GEMINI_API_KEY"]),
+        "args=--dangerously-skip-permissions --settings {\"modelProvider\":\"gemini\"} -p oi\nchave=valor-de-teste\n"
+    );
+    // Sem a chave, o `agy` usa o login dele.
+    assert_eq!(
+        go(&[]),
+        "args=--dangerously-skip-permissions -p oi\nchave=\n"
+    );
+}
+
 /// Atualizador falso: registra no HOME real como foi chamado.
 fn fake_updater(p: &Path, code: i32) {
     exe(
@@ -421,6 +507,13 @@ fn update_roda_o_atualizador_oficial_fora_do_sandbox() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let got = std::fs::read_to_string(e.home.join("atualizou")).unwrap();
     assert!(got.trim().ends_with("opencode upgrade"), "{got}");
+
+    let agy = e.home.join(".local/bin/agy");
+    fake_updater(&agy, 0);
+    let out = run(&e, &["update", "agy"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let got = std::fs::read_to_string(e.home.join("atualizou")).unwrap();
+    assert_eq!(got.trim(), format!("{} update", agy.display()));
 }
 
 #[test]
@@ -460,6 +553,7 @@ fn harnesses_sem_perguntas_por_padrao_e_harness_asks_devolve() {
     fake_hermes(&e);
     show(&e, Path::new(".local/bin/hermes"));
     show(&e, Path::new(".local/bin/omp"));
+    show(&e, Path::new(".local/bin/agy"));
     let real = e.home.join(".local/share/claude/versions/9.9.9");
     show(&e, Path::new(".local/share/claude/versions/9.9.9"));
     std::os::unix::fs::symlink(&real, e.home.join(".local/bin/claude")).unwrap();
@@ -481,6 +575,7 @@ fn harnesses_sem_perguntas_por_padrao_e_harness_asks_devolve() {
     );
     assert!(go("hermes").contains("yolo=1\n"));
     assert!(go("omp").contains("args=--auto-approve x\n"));
+    assert!(go("agy").contains("args=--dangerously-skip-permissions x\n"));
     let sh = stdout(&run(
         &e,
         &[
@@ -501,4 +596,5 @@ fn harnesses_sem_perguntas_por_padrao_e_harness_asks_devolve() {
     assert!(go("claude").contains("args=x\n"));
     assert!(go("hermes").contains("yolo=\n"));
     assert!(go("omp").contains("args=x\n"));
+    assert!(go("agy").contains("args=x\n"));
 }

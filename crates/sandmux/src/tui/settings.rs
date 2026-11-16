@@ -269,8 +269,8 @@ pub const ITEMS: &[Item] = &[
         Kind::Toggle,
         At::Layer,
         [
-            "Deixa o opencode, o Claude Code, o hermes e o oh-my-pi pedirem confirmação antes de agir. Desligado, eles rodam sem perguntar, e o sandbox é a barreira.",
-            "Lets opencode, Claude Code, hermes and oh-my-pi ask for confirmation before acting. Off, they run without asking, and the sandbox is the barrier."
+            "Deixa o opencode, o Claude Code, o hermes, o oh-my-pi e o Antigravity CLI pedirem confirmação antes de agir. Desligado, eles rodam sem perguntar, e o sandbox é a barreira.",
+            "Lets opencode, Claude Code, hermes, oh-my-pi and the Antigravity CLI ask for confirmation before acting. Off, they run without asking, and the sandbox is the barrier."
         ]
     ),
     item!(

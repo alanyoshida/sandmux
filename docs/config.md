@@ -78,6 +78,7 @@ Por padrão, o sandmux lança os harnesses no modo em que eles não pedem confir
 | Claude Code | `--dangerously-skip-permissions` e `--settings '{"skipDangerousModePermissionPrompt":true}'` |
 | hermes | `HERMES_YOLO_MODE=1` (os bloqueios fixos do hermes continuam) |
 | oh-my-pi | `--auto-approve` |
+| Antigravity CLI | `--dangerously-skip-permissions` |
 
 `harness-asks = true` (global, perfil ou projeto, ou o item "Perguntas do harness" na tela de configurações da TUI) lança o harness como ele é, com as perguntas. O ajuste vai pelo ambiente e pelos argumentos de cada lançamento: os arquivos de configuração do harness no HOME sintético não mudam. O `shell` e a aba de chat não são afetados.
 

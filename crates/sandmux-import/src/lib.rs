@@ -119,6 +119,7 @@ fn state_roots(harness: &str) -> &'static [&'static str] {
         "hermes" => &[".hermes"],
         "claude" => &[".claude", ".claude.json"],
         "omp" => &[".omp"],
+        "agy" => &[".gemini/antigravity-cli", ".gemini/config"],
         _ => &[],
     }
 }
@@ -187,9 +188,34 @@ fn table(harness: &str) -> Option<&'static [Item]> {
         Item::Dir(".omp/agent/commands"),
         Item::Dir(".omp/agent/prompts"),
     ];
+    // Antigravity CLI: sem o token do login do Google, os segredos de plugins
+    // (`~/.config/antigravity`), os projetos (caminhos do host), as conversas,
+    // os registros, os caches e os bancos.
+    const AGY: &[Item] = &[
+        Item::File(".gemini/antigravity-cli/settings.json"),
+        Item::File(".gemini/antigravity-cli/keybindings.json"),
+        Item::File(".gemini/config/config.json"),
+        Item::File(".gemini/config/mcp_config.json"),
+        Item::File(".gemini/config/hooks.json"),
+        Item::File(".gemini/config/AGENTS.md"),
+        Item::File(".gemini/config/GEMINI.md"),
+        Item::File(".gemini/config/skills.json"),
+        Item::File(".gemini/config/rules.json"),
+        Item::File(".gemini/config/plugins.json"),
+        Item::File(".gemini/config/agents.json"),
+        Item::Dir(".gemini/config/hooks"),
+        Item::Dir(".gemini/config/plugins"),
+        Item::Dir(".gemini/config/skills"),
+        Item::Dir(".gemini/config/agents"),
+        Item::Dir(".gemini/config/rules"),
+        Item::Dir(".gemini/config/workflows"),
+        Item::File(".gemini/GEMINI.md"),
+        Item::File(".gemini/AGENTS.md"),
+    ];
     match harness {
         "opencode" => Some(OPENCODE),
         "omp" => Some(OMP),
+        "agy" => Some(AGY),
         "hermes" => Some(HERMES),
         "claude" => Some(CLAUDE),
         "shell" => Some(shell_table(&shell_name())),
