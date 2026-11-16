@@ -45,6 +45,36 @@ pub struct WindowMounts {
     pub pulse: Option<PathBuf>,
 }
 
+/// Permissões do opencode sem perguntas: o sandbox é a barreira.
+pub const OPENCODE_ALLOW_ALL: &str = r#"{"*":"allow","edit":"allow","bash":"allow","webfetch":"allow","read":"allow","external_directory":"allow","doom_loop":"allow"}"#;
+
+/// Opções do Claude Code sem perguntas, sem a confirmação do modo.
+pub const CLAUDE_NO_ASKS: &[&str] = &[
+    "--dangerously-skip-permissions",
+    "--settings",
+    r#"{"skipDangerousModePermissionPrompt":true}"#,
+];
+
+/// Lança o harness no modo em que ele não pede confirmação, pelo mecanismo
+/// de cada um. O `shell` e o `chat` não mudam.
+fn no_asks(harness: &str, plan: &mut presets::PresetPlan) {
+    let after_exe = |plan: &mut presets::PresetPlan, args: &[&str]| {
+        let at = 1.min(plan.command.len());
+        for (i, a) in args.iter().enumerate() {
+            plan.command.insert(at + i, (*a).to_string());
+        }
+    };
+    match harness {
+        "opencode" => plan
+            .env
+            .push(("OPENCODE_PERMISSION".into(), OPENCODE_ALLOW_ALL.into())),
+        "hermes" => plan.env.push(("HERMES_YOLO_MODE".into(), "1".into())),
+        "claude" => after_exe(plan, CLAUDE_NO_ASKS),
+        "omp" => after_exe(plan, &["--auto-approve"]),
+        _ => {}
+    }
+}
+
 /// `XDG_RUNTIME_DIR` dentro do sandbox, com a opção `window`.
 pub fn window_runtime_dir(uid: u32) -> PathBuf {
     PathBuf::from(format!("/run/user/{uid}"))
@@ -102,6 +132,9 @@ pub struct RunOptions {
     pub repo: bool,
     pub kvm: bool,
     pub no_gpu: bool,
+    /// Deixa o harness pedir confirmação para as ações (`harness-asks`).
+    /// Sem ela, o sandbox é a barreira, e o harness roda sem perguntas.
+    pub harness_asks: bool,
     pub args: Vec<String>,
     pub layer: LayerMode,
     /// Socket do Docker privado da sessão, montado em
@@ -175,6 +208,7 @@ impl RunOptions {
             repo: false,
             kvm: false,
             no_gpu: false,
+            harness_asks: false,
             args: vec![],
             layer: LayerMode::Persistent,
             docker_socket: None,
@@ -644,7 +678,10 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     if opts.harness == "opencode" {
         plan_names.extend(fake_names.iter().map(|n| n.to_string()));
     }
-    let plan = presets::plan(&opts.harness, host, &opts.args, &plan_names)?;
+    let mut plan = presets::plan(&opts.harness, host, &opts.args, &plan_names)?;
+    if !opts.harness_asks {
+        no_asks(&opts.harness, &mut plan);
+    }
 
     let workdir = canonical(opts.workdir.as_deref().unwrap_or(&host.cwd), &host.cwd)?;
     check_dangerous(host, &workdir, true)?;

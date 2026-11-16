@@ -8,6 +8,10 @@ The `omp` preset runs the oh-my-pi installed on your machine inside the sandbox,
 sandmux run omp
 ```
 
+## Without prompts
+
+oh-my-pi runs with `--auto-approve`, without asking for confirmation for the tools: the sandbox is the barrier. `harness-asks = true` in the configuration brings the prompts back ([config.md](config.md#harness-prompts)).
+
 ## Installation
 
 sandmux uses the host's `~/.local/bin/omp` binary, read-only: to update, run `sandmux update omp`, which runs `omp update` outside the sandbox ([sessions.md](sessions.md#updating-the-harness)). Without the binary, `run` refuses and says where it should be. On the first run, oh-my-pi extracts its native library into `~/.omp/natives` in the synthetic HOME.

@@ -617,6 +617,8 @@ pub fn run_layer(opts: &LaunchOptions) -> Result<config::Layer> {
     Ok(config::Layer {
         network,
         window: opts.window,
+        // `harness-asks` é só de configuração.
+        harness_asks: None,
         deny: pats(&opts.deny, "--deny")?,
         allow: pats(&opts.allow, "--allow")?,
         allow_off: vec![],

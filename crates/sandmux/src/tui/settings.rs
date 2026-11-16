@@ -264,6 +264,17 @@ pub const ITEMS: &[Item] = &[
     ),
     item!(
         3,
+        "harness-asks",
+        ["Perguntas do harness", "Harness prompts"],
+        Kind::Toggle,
+        At::Layer,
+        [
+            "Deixa o opencode, o Claude Code, o hermes e o oh-my-pi pedirem confirmação antes de agir. Desligado, eles rodam sem perguntar, e o sandbox é a barreira.",
+            "Lets opencode, Claude Code, hermes and oh-my-pi ask for confirmation before acting. Off, they run without asking, and the sandbox is the barrier."
+        ]
+    ),
+    item!(
+        3,
         "ro",
         ["Pastas só leitura", "Read-only folders"],
         Kind::List,

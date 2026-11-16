@@ -8,6 +8,10 @@ The `claude` preset runs the [Claude Code](https://code.claude.com) installed on
 sandmux run claude
 ```
 
+## Without prompts
+
+Claude Code runs with `--dangerously-skip-permissions`, without asking for confirmation to edit and run commands: the sandbox is the barrier. `harness-asks = true` in the configuration brings the prompts back ([config.md](config.md#harness-prompts)).
+
 ## Installation
 
 sandmux uses the host's native installation: the `~/.local/bin/claude` link, which points to a version in `~/.local/share/claude/versions`. Without it, `run` refuses and shows the install command:

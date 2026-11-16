@@ -35,6 +35,10 @@ Cada token vai para o cofre como um segredo com a ferramenta do canal. O agente 
 - **Registro:** o caminho de um pedido ao Telegram vai para o registro com o falso, nunca com o real. O WebSocket do Discord vira uma linha `https` com o status `101`, gravada quando a conexão termina.
 - **Webhook do Telegram:** o padrão do hermes é o polling, que não precisa de porta de entrada. Com webhook, use a [allowlist de portas](network.md#allowlist-de-portas) (`--port 8443@0.0.0.0`). O segredo do webhook (`TELEGRAM_WEBHOOK_SECRET`) fica fora da troca: o hermes o confere nos pedidos que chegam, e o falso funciona como o próprio segredo.
 
+## Sem perguntas
+
+O hermes roda com `HERMES_YOLO_MODE=1`, sem pedir aprovação para comandos perigosos; os bloqueios fixos dele continuam, e o sandbox é a barreira. `harness-asks = true` na configuração devolve as aprovações ([config.md](config.md#perguntas-do-harness)).
+
 ## Limites
 
 - **WhatsApp:** não é suportado nesta versão.

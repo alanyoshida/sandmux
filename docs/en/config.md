@@ -35,6 +35,7 @@ pass-env = ["OPENROUTER_API_KEY"]
 | `kvm` | true or false | `--kvm` / `--no-kvm` |
 | `gpu` | true or false | `--gpu` / `--no-gpu` |
 | `clipboard` | true or false | `--allow-clipboard` / `--no-allow-clipboard` |
+| `harness-asks` | true or false | (configuration only; see below) |
 | `window` | true, false or `"direct"` | `--window` / `--window-direct` / `--no-window` (see [window.md](window.md)) |
 | `memory` | text: `"50%"`, `"16G"` or `"max"` | `--memory` (see [limits.md](limits.md)) |
 | `processes` | number or `"max"` | `--processes` |
@@ -67,6 +68,20 @@ pass-env = ["OPENROUTER_API_KEY"]
 - **Project folders:** absolute paths.
 
 An invalid file makes `run` refuse the launch, with the file, the line and the reason: malformed TOML, unknown section or key, wrong type, relative path, a value in `pass-env`, or the same path in `ro` and `rw` of the same section. Nothing in the file is silently ignored.
+
+
+### Harness prompts
+
+By default, sandmux launches the harnesses in the mode where they do not ask for confirmation to edit, run commands, leave the project folder or read files like `.env`, because the sandbox is what blocks (Landlock, the [file policy](files.md) and the [network](network.md)):
+
+| Harness | How |
+|---|---|
+| opencode | `OPENCODE_PERMISSION` with everything set to `allow` |
+| Claude Code | `--dangerously-skip-permissions` and `--settings '{"skipDangerousModePermissionPrompt":true}'` |
+| hermes | `HERMES_YOLO_MODE=1` (hermes's fixed blocks still apply) |
+| oh-my-pi | `--auto-approve` |
+
+`harness-asks = true` (global, profile or project, or the "Harness prompts" item in the TUI settings page) launches the harness as it is, with the prompts. The adjustment goes through the environment and the arguments of each launch: the harness configuration files in the synthetic HOME do not change. The `shell` and the chat tab are not affected.
 
 ## Layers
 
