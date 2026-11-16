@@ -452,7 +452,9 @@ fn menu_abre_as_configuracoes_e_a_pagina_grava_o_toml() {
     t.write(b"\x02:");
     t.wait_text("Menu");
     t.wait_text("configurações");
-    // "configurações" é a penúltima (a última é o shell de dentro).
+    // "configurações" é a antepenúltima (depois vêm o diagnóstico e o
+    // shell de dentro).
+    t.write(UP);
     t.write(UP);
     t.write(UP);
     t.write(b"\r");
@@ -1267,6 +1269,101 @@ fn cofre_gerenciado_pela_pagina() {
     t.wait_text("aberto · 0 segredos");
     let list = stdout(&e.run(&e.work, &["vault", "list"]));
     assert!(!list.contains("lmstudio"), "{list}");
+    t.write(b"\x1b");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
+fn diagnostico_na_pagina_e_chaves_ao_cofre() {
+    use std::io::Write;
+    let e = Env::new();
+    sessao(&e, &e.work);
+    // O cofre existe e fica trancado.
+    let mut c = e
+        .cmd(&e.work, &["vault", "init"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    c.stdin.take().unwrap().write_all(b"senha-um\n").unwrap();
+    assert!(c.wait_with_output().unwrap().status.success());
+    assert!(e.run(&e.work, &["vault", "lock"]).status.success());
+    // Chaves reais sem domínio conhecido (o vigia do daemon não as move):
+    // duas no opencode.json e uma no auth.json, com uma URL logo abaixo.
+    let home = e.data_dir().join("homes/opencode");
+    let cfg = home.join(".config/opencode/opencode.json");
+    let auth = home.join(".local/share/opencode/auth.json");
+    std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+    let cfg_text = "{\n  \"provider\": {\n    \"a\": {\n      \"options\": {\n        \"headers\": {\n          \"Authorization\": \"Bearer sk-a-REALAAA11\"\n        }\n      }\n    },\n    \"b\": {\n      \"options\": {\n        \"headers\": {\n          \"Authorization\": \"Bearer sk-b-REALBBB22\"\n        }\n      }\n    }\n  }\n}\n";
+    std::fs::write(&cfg, cfg_text).unwrap();
+    std::fs::write(
+        &auth,
+        "{\n  \"corp\": {\n    \"type\": \"api\",\n    \"key\": \"sk-corp-REALCORP33\",\n    \"baseURL\": \"https://api.exemplo.com/v1\"\n  }\n}\n",
+    )
+    .unwrap();
+
+    let mut t = tui_cols(&e, 120);
+    t.wait_text("O cofre de segredos está trancado.");
+    t.write(b"\x1b");
+    t.wait_text(&tab(1, "shell:app"));
+    // Ctrl+b D abre a página no diagnóstico, com as falhas na lateral.
+    t.write(b"\x02D");
+    t.wait_text("sandmux · configurações");
+    t.wait_text("Diagnóstico ✗");
+    t.wait_text("✓ Landlock com escopo");
+    // As chaves reais ficam no fim da lista.
+    for _ in 0..40 {
+        t.write(DOWN);
+    }
+    t.wait_text("Chaves reais");
+    t.wait_text("opencode: .local/share/opencode/auth.json");
+    t.wait_text("O agente pode ler esta chave");
+    // f pede a senha do cofre trancado e segue arquivo a arquivo.
+    t.write(b"f");
+    t.wait_text("Desbloquear o cofre para mover as chaves");
+    t.write(b"senha-um");
+    t.wait_text("••••••••");
+    t.write(b"\r");
+    // opencode.json: confirma a primeira chave e pula o arquivo na segunda.
+    t.wait_text("Domínios de opencode:.config/opencode/opencode.json:a.Authorization");
+    t.write(b"a.exemplo.com\r");
+    t.wait_text("Domínios de opencode:.config/opencode/opencode.json:b.Authorization");
+    t.write(b"\x1b");
+    // auth.json: o campo vem com a URL próxima, e o usuário o troca.
+    t.wait_text("Domínios de opencode:.local/share/opencode/auth.json:corp.key");
+    t.wait_text("api.exemplo.com▏");
+    t.write(&[0x7f; 15]);
+    t.write(b"llm.exemplo.com\r");
+    t.wait_text("1 chave(s) levadas ao cofre; reinicie as abas de opencode");
+    t.with_screen(|s| assert!(!s.contents().contains("REAL"), "{}", s.contents()));
+    // O relatório foi relido: o auth.json saiu da lista.
+    t.wait_for("auth.json fora da lista", |s| {
+        !s.contains("opencode: .local/share/opencode/auth.json")
+            && s.contains("opencode: .config/opencode/opencode.json")
+    });
+    let list = stdout(&e.run(&e.work, &["vault", "list"]));
+    assert!(
+        list.contains("opencode:.local/share/opencode/auth.json:corp.key  (llm.exemplo.com)"),
+        "{list}"
+    );
+    assert!(!list.contains("Authorization"), "{list}");
+    let a = std::fs::read_to_string(&auth).unwrap();
+    assert!(
+        a.contains("sandmux-fake-") && !a.contains("REALCORP"),
+        "{a}"
+    );
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), cfg_text);
+    // r roda de novo: sem o arquivo, as linhas dele somem.
+    std::fs::remove_file(&cfg).unwrap();
+    t.write(b"r");
+    t.wait_text("verificações feitas de novo");
+    t.wait_for("opencode.json fora da lista", |s| {
+        !s.contains("opencode: .config/opencode/opencode.json")
+    });
     t.write(b"\x1b");
     t.write(b"q");
     t.write(b"\x02d");

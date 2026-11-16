@@ -384,6 +384,7 @@ pub const TUI_ACTIONS: &[(&str, char)] = &[
     ("command", 'g'),
     ("menu", ':'),
     ("settings", 'e'),
+    ("doctor", 'D'),
     ("enter", 't'),
     ("group-prev", '('),
     ("group-next", ')'),

@@ -72,7 +72,7 @@ O `setup` instala o perfil do AppArmor do lançador quando a distro restringe us
 
 | Comando | O que faz |
 |---|---|
-| `sandmux` (ou `sandmux tui`) | Abre a interface com abas, uma por sessão, com a barra em blocos coloridos embaixo: troca com Ctrl+b n/p/1–9, nova aba com Ctrl+b c, lista com Ctrl+b w, menu com Ctrl+b `:`, configurações com Ctrl+b `e` (toggles e temas como Catppuccin, Rosé Pine, Tokyo Night, Kanagawa, Gruvbox e Dracula, gravados no `config.toml`), sair com Ctrl+b d ([docs/tui.md](docs/tui.md)) |
+| `sandmux` (ou `sandmux tui`) | Abre a interface com abas, uma por sessão, com a barra em blocos coloridos embaixo: troca com Ctrl+b n/p/1–9, nova aba com Ctrl+b c, lista com Ctrl+b w, menu com Ctrl+b `:`, configurações com Ctrl+b `e` (toggles e temas como Catppuccin, Rosé Pine, Tokyo Night, Kanagawa, Gruvbox e Dracula, gravados no `config.toml`), diagnóstico do `doctor` com Ctrl+b `D`, sair com Ctrl+b d ([docs/tui.md](docs/tui.md)) |
 | `sandmux run <harness>` | Sobe o harness confinado na pasta atual. Harnesses: `opencode`, `hermes`, `claude` (o Claude Code, com o login da assinatura fora do sandbox; [docs/claude.md](docs/claude.md)) `omp` (o oh-my-pi; [docs/omp.md](docs/omp.md)), `agy` (o Antigravity CLI do Google, com o login do Google fora do sandbox; [docs/agy.md](docs/agy.md)) e `shell` (um shell confinado, sem agente). Na primeira execução, pergunta se deve importar a configuração que você já tem. Num terminal, cria uma sessão no daemon e anexa a ela; sem terminal (script, pipe, CI), roda direto, em primeiro plano, sem daemon . Os harnesses rodam sem perguntas de permissão, porque o sandbox é a barreira; `harness-asks = true` devolve as perguntas ([docs/config.md](docs/config.md#perguntas-do-harness)) |
 | `sandmux ls` | Lista as sessões: identificador, nome, grupo, estado (viva, encerrada com o código, parada com o motivo), terminais anexados e pasta |
 | `sandmux attach [id]` | Anexa este terminal a uma sessão. Sem identificador, à única sessão viva |
@@ -88,7 +88,7 @@ O `setup` instala o perfil do AppArmor do lançador quando a distro restringe us
 | `sandmux import <harness>` | Copia a configuração existente do harness para o HOME sintético, trocando os segredos por valores falsos. Rodado de novo, copia só o que é novo; `--overwrite` substitui. No `shell`, traz o `.bashrc`, o `.zshrc` e afins do shell em uso, com o framework ([docs/sessions.md](docs/sessions.md#configuração-do-shell)) |
 | `sandmux update <harness>` | Roda o atualizador oficial do harness no host, fora do sandbox, e diz quais abas reiniciar ([docs/sessions.md](docs/sessions.md#atualizar-o-harness)) |
 | `sandmux doctor --fix` | Leva para o cofre as chaves reais gravadas dentro do sandbox (o "Connect provider" do opencode, por exemplo), deixando valores falsos no lugar |
-| `sandmux doctor` | Mostra se a máquina tem o suporte necessário e o que falta |
+| `sandmux doctor` | Mostra se a máquina tem o suporte necessário e o que falta; na TUI, a seção Diagnóstico das configurações (Ctrl+b `D`) mostra o mesmo e leva as chaves reais ao cofre |
 
 Opções de `run`:
 

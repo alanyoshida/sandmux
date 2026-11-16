@@ -795,13 +795,30 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
             _ => (Style::default().fg(muted).bg(surface), " "),
         };
         let text = format!("{mark} {name}");
-        let pad = side as usize - text.chars().count().min(side as usize);
+        // O diagnóstico mostra quantas verificações falharam.
+        let fails = match &s.doctor.report {
+            Some(r) if i == super::settings::DOCTOR && r.failures() > 0 => {
+                format!(" ✗{}", r.failures())
+            }
+            _ => String::new(),
+        };
+        let used = text.chars().count() + fails.chars().count();
+        let pad = side as usize - used.min(side as usize);
+        let fail_style = if sel && !s.on_items {
+            style
+        } else {
+            style.fg(err)
+        };
         put(
             f,
             side_r.x,
             y,
             side,
-            Line::raw(format!("{text}{}", " ".repeat(pad))),
+            Line::from(vec![
+                Span::styled(text, style),
+                Span::styled(fails, fail_style.add_modifier(Modifier::BOLD)),
+                Span::styled(" ".repeat(pad), style),
+            ]),
             style,
         );
         hits.push((y, side_r.x, side_r.x + side, Hit::Section(i)));
@@ -828,6 +845,322 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
     let help_rows = 4u16;
     let bottom = inner.y + inner.height;
     let selected_item = s.selected();
+
+    if s.section == super::settings::DOCTOR {
+        use crate::doctor::State;
+        let d = &s.doctor;
+        let detail_rows = 5u16;
+        let warn = c("status-fg");
+        let Some(rep) = &d.report else {
+            put(
+                f,
+                x0,
+                y,
+                w,
+                Line::styled(tr!("verificando…", "checking…"), base.fg(muted)),
+                base,
+            );
+            return;
+        };
+        let fails = rep.failures();
+        let status = if fails == 0 {
+            Line::from(vec![
+                Span::styled("✓ ", base.fg(ok)),
+                Span::styled(tr!("nenhuma falha", "no failures"), base),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("✗ ", base.fg(err)),
+                Span::styled(
+                    if fails == 1 {
+                        tr!("1 falha", "1 failure").to_string()
+                    } else {
+                        trf!("{fails} falhas", "{fails} failures")
+                    },
+                    base,
+                ),
+                Span::styled(
+                    if rep.can_launch {
+                        tr!(" · o sandbox sobe", " · the sandbox starts")
+                    } else {
+                        tr!(" · o sandbox não sobe", " · the sandbox does not start")
+                    },
+                    base.fg(muted),
+                ),
+            ])
+        };
+        put(f, x0, y, w, status, base);
+        y += 2;
+        // As linhas: o nome de cada grupo e as verificações dele.
+        let mut rows: Vec<Option<(usize, &crate::doctor::Check)>> = Vec::new();
+        let mut names = Vec::new();
+        let mut n = 0;
+        for g in &rep.groups {
+            names.push((rows.len(), g.name.as_str()));
+            rows.push(None);
+            for c in &g.checks {
+                rows.push(Some((n, c)));
+                n += 1;
+            }
+        }
+        let form_rows = if d.fix.is_some() || d.unlock.is_some() {
+            5
+        } else {
+            2
+        };
+        let room = bottom.saturating_sub(y + detail_rows + form_rows + 2) as usize;
+        let at = rows
+            .iter()
+            .position(|r| matches!(r, Some((i, _)) if *i == d.sel))
+            .unwrap_or(0);
+        let start = (at + 1).saturating_sub(room.max(1));
+        let lw = (w as usize / 2).clamp(20, 46);
+        let busy = d.fix.is_some() || d.unlock.is_some();
+        for (ri, r) in rows.iter().enumerate().skip(start).take(room.max(1)) {
+            match r {
+                None => {
+                    let name = names
+                        .iter()
+                        .find(|(i, _)| *i == ri)
+                        .map(|(_, n)| *n)
+                        .unwrap_or("");
+                    put(
+                        f,
+                        x0,
+                        y,
+                        w,
+                        Line::styled(
+                            name.to_string(),
+                            base.fg(accent).add_modifier(Modifier::BOLD),
+                        ),
+                        base,
+                    );
+                }
+                Some((i, check)) => {
+                    let sel = s.on_items && *i == d.sel && !busy;
+                    let row_bg = if sel { surface } else { bg };
+                    let (mark, color) = match check.state {
+                        State::Ok => ("✓", ok),
+                        State::Fail => ("✗", err),
+                        State::Warn => ("!", warn),
+                        State::Info => ("·", muted),
+                    };
+                    let line = Line::from(vec![
+                        Span::styled(
+                            if sel { "▌" } else { " " },
+                            Style::default().fg(accent).bg(row_bg),
+                        ),
+                        Span::styled(format!("{mark} "), Style::default().fg(color).bg(row_bg)),
+                        Span::styled(
+                            format!("{:<lw$} ", cut(&check.label, lw)),
+                            Style::default().fg(fg).bg(row_bg).add_modifier(if sel {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            }),
+                        ),
+                        Span::styled(
+                            cut(&check.summary, (w as usize).saturating_sub(lw + 4)),
+                            Style::default().fg(muted).bg(row_bg),
+                        ),
+                    ]);
+                    put(f, x0, y, w, line, Style::default().bg(row_bg));
+                    hits.push((y, x0, x0 + w, Hit::Item(*i)));
+                }
+            }
+            y += 1;
+        }
+        y += 1;
+        if let Some(form) = &d.unlock {
+            put(
+                f,
+                x0,
+                y,
+                w,
+                Line::styled(
+                    tr!(
+                        "Desbloquear o cofre para mover as chaves",
+                        "Unlock the vault to move the keys"
+                    ),
+                    base.fg(accent).add_modifier(Modifier::BOLD),
+                ),
+                base,
+            );
+            let shown = "•".repeat(form.fields[0].chars().count());
+            put(
+                f,
+                x0,
+                y + 1,
+                w,
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {:<12} ", tr!("Senha", "Password")),
+                        base.fg(muted),
+                    ),
+                    Span::styled(
+                        format!("{shown}▏"),
+                        Style::default()
+                            .fg(fg)
+                            .bg(surface)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                base,
+            );
+            put(
+                f,
+                x0,
+                y + 2,
+                w,
+                Line::styled(
+                    tr!(
+                        "Enter desbloqueia · Esc cancela",
+                        "Enter unlocks · Esc cancels"
+                    ),
+                    base.fg(muted),
+                ),
+                base,
+            );
+        } else if let Some(fix) = &d.fix {
+            if fix.on_agy {
+                put(
+                    f,
+                    x0,
+                    y,
+                    w,
+                    Line::styled(
+                        tr!(
+                            "Mover o login do Google do agy para o cofre? s confirma · outra tecla pula",
+                            "Move the agy Google login to the vault? y confirms · any other key skips"
+                        ),
+                        base.fg(accent).add_modifier(Modifier::BOLD),
+                    ),
+                    base,
+                );
+            } else {
+                put(
+                    f,
+                    x0,
+                    y,
+                    w,
+                    Line::styled(
+                        trf!("Domínios de {}", "Domains of {}", fix.name()),
+                        base.fg(accent).add_modifier(Modifier::BOLD),
+                    ),
+                    base,
+                );
+                put(
+                    f,
+                    x0,
+                    y + 1,
+                    w,
+                    Line::styled(fix.context(), base.fg(muted)),
+                    base,
+                );
+                put(
+                    f,
+                    x0,
+                    y + 2,
+                    w,
+                    Line::from(vec![
+                        Span::styled(
+                            format!(" {:<20} ", tr!("Domínios (vírgula)", "Domains (comma)")),
+                            base.fg(muted),
+                        ),
+                        Span::styled(
+                            format!("{}▏", fix.input),
+                            Style::default()
+                                .fg(fg)
+                                .bg(surface)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]),
+                    base,
+                );
+                put(
+                    f,
+                    x0,
+                    y + 3,
+                    w,
+                    Line::styled(
+                        tr!(
+                            "Enter confirma · Esc pula o arquivo · vazio guarda sem domínio (sem troca no tráfego)",
+                            "Enter confirms · Esc skips the file · empty stores it with no domain (no swap in traffic)"
+                        ),
+                        base.fg(muted),
+                    ),
+                    base,
+                );
+            }
+        } else {
+            put(
+                f,
+                x0,
+                y,
+                w,
+                Line::styled(
+                    tr!(
+                        "r verifica de novo · f leva as chaves reais ao cofre",
+                        "r checks again · f moves the real keys to the vault"
+                    ),
+                    base.fg(muted),
+                ),
+                base,
+            );
+        }
+        // A causa e a correção da linha escolhida.
+        let hy = bottom.saturating_sub(detail_rows + 1);
+        if let Some(c) = d.selected().filter(|_| s.on_items && !busy) {
+            // O rótulo e o resumo inteiros, e embaixo a causa e a correção.
+            let mut lines = vec![Line::from(vec![
+                Span::styled(c.label.clone(), Style::default().fg(accent)),
+                Span::styled(
+                    if c.summary.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {}", c.summary)
+                    },
+                    Style::default().fg(muted),
+                ),
+            ])];
+            if !c.help.is_empty() {
+                lines.push(Line::styled(c.help.clone(), Style::default().fg(fg)));
+            }
+            f.render_widget(
+                Paragraph::new(lines).wrap(Wrap { trim: true }).style(base),
+                Rect::new(x0, hy, w, detail_rows),
+            );
+        } else if !busy {
+            put(
+                f,
+                x0,
+                hy,
+                w,
+                Line::styled(
+                    tr!(
+                        "Tab ou → entra na lista; a linha escolhida mostra a causa e a correção aqui.",
+                        "Tab or → enters the list; the chosen line shows the cause and the fix here."
+                    ),
+                    base.fg(muted),
+                ),
+                base,
+            );
+        }
+        if let Some((note, is_err)) = &s.note {
+            put(
+                f,
+                x0,
+                bottom.saturating_sub(1),
+                w,
+                Line::raw(note.clone()),
+                Style::default()
+                    .fg(if *is_err { err } else { ok })
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
+        return;
+    }
 
     if s.section == super::settings::VAULT {
         let v = &s.vault;

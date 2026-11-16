@@ -72,6 +72,7 @@ Todos começam pela tecla de prefixo, Ctrl+b por padrão:
 | `i` | Modal de chat: uma pergunta a um modelo, que abre uma aba de chat ([chat.md](chat.md)) |
 | `g` | Modal de comando: o modelo gera um comando, escrito na aba sem executar ([chat.md](chat.md#modal-de-comando)) |
 | `e` | [Configurações](#configurações) |
+| `D` | [Diagnóstico](#diagnóstico) nas configurações |
 | `t` | Shell dentro do sandbox da aba ([sessions.md](sessions.md#shell-dentro-do-sandbox-de-uma-aba)) |
 | `:` | [Menu](#menu) com todas as ações |
 | o prefixo de novo | Envia o prefixo ao harness |
@@ -91,7 +92,7 @@ new = "t"
 close = "q"
 ```
 
-- **Ações:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings`, `enter`, `group-prev`, `group-next`, `groups`, `split-side`, `split-stack`, `zoom`, `pane-grow` e `pane-shrink`. As setas depois do prefixo, que movem o foco entre os painéis, são fixas.
+- **Ações:** `new`, `next`, `prev`, `list`, `rename`, `restart`, `close`, `paste-image`, `detach`, `help`, `panel`, `network`, `files`, `folders`, `mcp`, `chat`, `command`, `menu`, `settings`, `doctor`, `enter`, `group-prev`, `group-next`, `groups`, `split-side`, `split-stack`, `zoom`, `pane-grow` e `pane-shrink`. As setas depois do prefixo, que movem o foco entre os painéis, são fixas.
 - **Teclas:** um caractere visível, que não seja dígito, porque os dígitos levam às abas.
 - **Duas ações na mesma tecla** escolhidas em `[tui.keys]` tornam o arquivo inválido. Uma tecla escolhida que é a padrão de outra ação vence, e a outra ação fica sem tecla (aparece com `—` na ajuda e continua no menu). Assim uma ação nova numa versão nova nunca invalida o arquivo.
 - **`[tui]` não é camada de política:** não muda nada nos sandboxes.
@@ -190,6 +191,7 @@ Ctrl+b `e`, ou "configurações" no menu, abre uma página de tela cheia com as 
 | Assistente | modelos do chat e de comandos, modelos sugeridos (Enter, ou `a` na lista, abre a [lista dos provedores](chat.md#lista-de-modelos); `e` edita o texto) |
 | Registro | dias e teto do registro de rede |
 | Cofre | o estado e os segredos do cofre, sem os valores; criar, desbloquear, trancar, trocar a senha, acrescentar segredo e chave SSH, editar domínios e apagar ([vault.md](vault.md#pela-tui)) |
+| Diagnóstico | as verificações do `sandmux doctor`, e as chaves reais levadas ao cofre ([veja abaixo](#diagnóstico)) |
 
 Cada item mostra o valor atual e de onde ele vem ("padrão", "do global"):
 
@@ -223,6 +225,27 @@ Um clique escolhe uma seção ou um item, e alterna um toggle.
 - política das sessões: no próximo lançamento da aba (Ctrl+b `r`).
 
 As opções de `[tui]`, `[assistant]` e do registro valem só no global; com o alvo num projeto, elas aparecem como "só global". As teclas de cada ação (`[tui.keys]`), as cores de cada elemento (`[tui.colors]`), os perfis e os provedores próprios do assistente ficam no arquivo.
+
+### Diagnóstico
+
+A seção Diagnóstico, no fim da página, mostra as verificações do `sandmux doctor` ([install.md](install.md)). Ctrl+b `D`, ou "diagnóstico" no menu, abre a página direto nela.
+
+- **Na lateral:** o nome da seção mostra quantas verificações falharam, como `Diagnóstico ✗1`. As verificações rodam ao abrir a página e ao entrar na seção, e `r` roda de novo.
+- **Na lista:** uma linha por verificação, agrupada em Sandbox, Instalação, Configuração, Daemon, Cofre e Chaves reais. A marca é `✓` (certo), `✗` (falha), `!` (aviso) ou `·` (informação).
+- **Embaixo:** a linha escolhida mostra o rótulo e o resumo inteiros, com a causa e a correção. O comando que grava o perfil do AppArmor é longo e fica só no `sandmux doctor` do terminal.
+
+**Mover as chaves reais (`f`):** faz o mesmo que o `sandmux doctor --fix` ([vault.md](vault.md#chaves-gravadas-dentro-do-sandbox)).
+
+1. Com o cofre trancado, `f` pede a senha. Sem cofre, aponta a seção Cofre.
+2. Para cada chave, o campo "Domínios" vem preenchido e pode ser editado.
+   - O campo vem do nome da chave, do provedor ou do `baseURL`, como no `doctor --fix`.
+   - Sem nada disso, vem o host da URL mais próxima da chave no arquivo (até 10 linhas). Essa sugestão existe só aqui: o daemon nunca move uma chave por ela.
+3. Enter confirma a chave. Um campo vazio guarda a chave sem domínio, e então não há troca no tráfego. Esc pula o arquivo inteiro.
+4. As chaves de um arquivo vão ao cofre só depois de todas confirmadas. Só então o arquivo é regravado com os valores falsos; se o cofre recusar uma, o arquivo fica como estava.
+5. O login do Google do `agy` pede `s` para confirmar.
+6. No fim, um aviso diz quantas chaves foram levadas e quais abas reiniciar (Ctrl+b `r`).
+
+Os valores reais nunca aparecem na tela.
 
 ## Tema de cores
 
