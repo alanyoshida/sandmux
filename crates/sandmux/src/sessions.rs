@@ -528,6 +528,7 @@ pub fn policy_lines(p: &sandmux_proto::msg::PolicySummary) -> Vec<String> {
         ));
     }
     l.push(format!("GPU: {} · KVM: {}", yes(p.gpu), yes(p.kvm)));
+    l.push(trf!("janela: {}", "window: {}", p.window.label()));
     l.push(format!(
         "clipboard: {}",
         if p.clipboard {
@@ -920,7 +921,7 @@ pub fn kill(id: u32) -> Result<i32> {
     Ok(0)
 }
 
-pub fn restart(id: u32) -> Result<i32> {
+pub fn restart(id: u32, force: bool) -> Result<i32> {
     let mut conn = client::connect_or_start()?;
     let sessions = list(&mut conn)?;
     let Some(s) = sessions.iter().find(|s| s.id == id) else {
@@ -940,6 +941,7 @@ pub fn restart(id: u32) -> Result<i32> {
         vars,
         size: client::terminal_size(),
         attach,
+        force,
     })?;
     if attach {
         return client::attached(conn);

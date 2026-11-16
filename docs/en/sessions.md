@@ -33,7 +33,7 @@
 | `sandmux attach [id]` | Attaches the terminal. Without an ID, to the only alive session |
 | `sandmux detach <id>` | Detaches all terminals from the session |
 | `sandmux kill <id>` | Asks the harness to end (SIGTERM and SIGHUP); after 5 seconds, it ends it by force. The session leaves the list |
-| `sandmux restart <id>` | Relaunches an ended or stopped session, with the same options and the same profile, resolving the configuration again. The `pass-env` values come from the terminal that asks |
+| `sandmux restart <id>` | Relaunches an ended or stopped session, with the same options and the same profile, resolving the configuration again. The `pass-env` values come from the terminal that asks. With `--force`, it also restarts a live session: the harness is ended (TERM, and KILL after 5 s) and comes back with the current configuration, without the ended-tab notification |
 | `sandmux update <harness> [--yes] [-- args]` | Runs the harness's official updater on the host, outside the sandbox ([details](#updating-the-harness)) |
 | `sandmux daemon status` | State of the daemon, without starting it |
 | `sandmux daemon stop` | Ends the harnesses and stops the daemon. Alive sessions come back at the next start |
@@ -120,7 +120,7 @@ The harness code goes into the sandbox read-only, and auto-update is turned off 
 - The command exits with the updater's exit code.
 - The arguments after `--` go to the updater: `sandmux update omp -- --check`.
 - `shell` has no updater. A harness that is not installed is refused with the installation instructions, as in `run`: sandmux does not install harnesses.
-- **Live tabs:** if the harness has live tabs, the command lists them and asks first, because the updater replaces files they may be using. `--yes` skips the question; without a terminal and without `--yes`, the command refuses. Afterwards, it says which tabs to restart (Ctrl+b `r`, or `sandmux restart <id>`) to use the new version.
+- **Live tabs:** if the harness has live tabs, the command lists them and asks first, because the updater replaces files they may be using. `--yes` skips the question; without a terminal and without `--yes`, the command refuses. Afterwards, it says which tabs to restart (Ctrl+b `r`, or `sandmux restart <id> --force`) to use the new version.
 
 sandmux itself is updated by the package or by `install.sh` ([install.md](install.md)).
 
@@ -178,7 +178,7 @@ Unix stream socket. Each frame has 4 bytes of length (big-endian, content only, 
 | 0 | Control message in JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Terminal bytes: client input or session output |
 
-The first message is the greeting (`hello`), with the protocol number, the version, the data directory, the configuration folder and the language of the client (the daemon answers in that language). This version uses protocol 34. Different numbers end the connection, and the client shows both versions and points to `sandmux daemon restart`. A different data directory or configuration folder is also refused, with both folders in the message.
+The first message is the greeting (`hello`), with the protocol number, the version, the data directory, the configuration folder and the language of the client (the daemon answers in that language). This version uses protocol 35. Different numbers end the connection, and the client shows both versions and points to `sandmux daemon restart`. A different data directory or configuration folder is also refused, with both folders in the message.
 
 Along with the session request, the client sends the daemon the options given to `run`, the named profile, the current folder, the variables of the safe list, `SHELL` and the `pass-env` values of the effective policy. The daemon resolves the configuration layers ([docs/config.md](config.md)) and composes the launch specification with the same function as the direct `run`.
 

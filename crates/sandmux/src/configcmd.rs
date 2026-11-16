@@ -145,7 +145,39 @@ fn change(host: &Host, path: &Path, alvo: &Alvo, op: edit::Op) -> Result<i32> {
         ),
         (false, None) => eprintln!("{}", tr!("sandmux: nada mudou", "sandmux: nothing changed")),
     }
+    if out.changed
+        && let Some(ids) = live_sessions()
+        && !ids.is_empty()
+    {
+        let list = ids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "{}",
+            trf!(
+                "sandmux: as sessões vivas ({list}) continuam com o valor antigo; `sandmux restart <id> --force` relança cada uma",
+                "sandmux: the live sessions ({list}) keep the old value; `sandmux restart <id> --force` relaunches each one"
+            )
+        );
+    }
     Ok(0)
+}
+
+/// As sessões vivas, quando o daemon já está rodando (sem subir um).
+fn live_sessions() -> Option<Vec<u32>> {
+    let mut c = sandmux::client::Conn::connect().ok()??;
+    match c.call(&sandmux_proto::Msg::List).ok()? {
+        sandmux_proto::Msg::Sessions { sessions, .. } => Some(
+            sessions
+                .iter()
+                .filter(|s| s.state == sandmux_proto::SessionState::Viva)
+                .map(|s| s.id)
+                .collect(),
+        ),
+        _ => None,
+    }
 }
 
 fn file_line(path: &Path) -> String {

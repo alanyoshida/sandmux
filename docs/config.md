@@ -68,6 +68,10 @@ pass-env = ["OPENROUTER_API_KEY"]
 Um arquivo inválido faz o `run` recusar o lançamento, com o arquivo, a linha e o motivo: TOML malformado, seção ou chave desconhecida, tipo errado, caminho relativo, valor em `pass-env`, ou o mesmo caminho em `ro` e `rw` da mesma seção. Nada do arquivo é ignorado em silêncio.
 
 
+### Abas vivas
+
+A configuração vale para as abas lançadas a partir da mudança. As abas vivas continuam com o valor antigo até serem reiniciadas: a tela de configurações diz quantas são, e o `sandmux config set`, `unset`, `add` e `remove` listam as sessões vivas quando o daemon está rodando. Ctrl+b `r` na aba, ou `sandmux restart <id> --force`, reinicia com a configuração nova.
+
 ### Perguntas do harness
 
 Por padrão, o sandmux lança os harnesses no modo em que eles não pedem confirmação para editar, rodar comandos, sair da pasta do projeto ou ler arquivos como o `.env`, porque quem bloqueia é o sandbox (Landlock, a [política de arquivos](files.md) e a [rede](network.md)):

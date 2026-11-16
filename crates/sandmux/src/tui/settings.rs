@@ -767,8 +767,8 @@ pub fn apply(
                 item.key
             ),
             _ => trf!(
-                "{} gravado em {}; vale no próximo lançamento da aba (Ctrl+b r)",
-                "{} saved in {}; applies on the tab's next launch (Ctrl+b r)",
+                "{} gravado em {}; vale nas abas lançadas a partir de agora",
+                "{} saved in {}; applies to tabs launched from now on",
                 item.key,
                 where_(&target, item)
             ),
@@ -981,7 +981,24 @@ impl App {
             return;
         };
         let r = apply(&s.path, &self.host, item, s.project(), ch);
+        // O que vale no lançamento não chega às abas vivas.
+        let live = self
+            .tabs
+            .iter()
+            .filter(|t| t.state == sandmux_proto::SessionState::Viva)
+            .count();
+        let saved =
+            matches!(&r, Ok(n) if n.contains(sandmux_spec::tr!(" gravado em ", " saved in ")));
         s.note = Some(match r {
+            Ok(_) if saved && item.at == At::Layer && live > 0 => (
+                sandmux_spec::trf!(
+                    "{} gravado em {}; {live} aba(s) viva(s) com o valor antigo: Ctrl+b r reinicia",
+                    "{} saved in {}; {live} live tab(s) with the old value: Ctrl+b r restarts",
+                    item.key,
+                    where_(&target_of(item, s.project()), item)
+                ),
+                false,
+            ),
             Ok(n) => (n, false),
             Err(e) => (e, true),
         });

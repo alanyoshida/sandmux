@@ -59,7 +59,7 @@ Todos começam pela tecla de prefixo, Ctrl+b por padrão:
 | `z` | Amplia o painel ativo para a aba inteira, ou volta ao layout |
 | `<` / `>` | Diminui / aumenta o painel ativo |
 | `,` | Renomear a aba |
-| `r` | Reiniciar a aba encerrada ou parada |
+| `r` | Reiniciar a aba: encerrada ou parada, na hora; viva, depois de confirmar (`s/n`), encerrando o harness. Ela volta com a configuração de agora |
 | `x` | Fechar a aba (encerra a sessão, com confirmação) |
 | `v` | Colar imagem do clipboard |
 | `d` | Sair da TUI (as sessões continuam) |
@@ -106,6 +106,7 @@ Com o terminal de pelo menos 100 colunas, um painel de 34 colunas fica à direit
 - a camada de escrita;
 - a pasta de trabalho e as pastas extras, em leitura ou com escrita;
 - GPU e KVM;
+- a [janela](window.md), ligada ou direta (em amarelo, porque abre o desktop);
 - a escrita no clipboard;
 - as variáveis de `pass-env`, com o aviso de que ficam ao alcance do agente;
 - os tetos de memória e de processos;
