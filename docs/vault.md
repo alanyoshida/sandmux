@@ -72,6 +72,7 @@ Cada segredo tem um valor falso (`sandmux-fake-` e 32 caracteres): o que a impor
 - **No sandbox:** nas sessões do opencode, do hermes, do oh-my-pi e do Antigravity CLI, com o cofre desbloqueado, cada provedor de inferência com segredo no cofre entra sozinho no ambiente com o valor falso: `OPENROUTER_API_KEY` (`openrouter.ai`), `ANTHROPIC_API_KEY` (`api.anthropic.com`), `OPENAI_API_KEY` (`api.openai.com`), `GEMINI_API_KEY` (`generativelanguage.googleapis.com`), `DEEPSEEK_API_KEY` (`api.deepseek.com`), `MISTRAL_API_KEY` (`api.mistral.ai`), `GROQ_API_KEY` (`api.groq.com`) e `XAI_API_KEY` (`api.x.ai`). No opencode, a configuração injetada aponta a chave do provedor para a variável; no hermes, o falso vai no `~/.hermes/.env` daquela execução; no Antigravity CLI, a `GEMINI_API_KEY` faz o `agy` usar a chave no lugar do login do Google ([agy.md](agy.md#chaves)). Um `--pass-env` da mesma variável é ignorado, com aviso: vale o falso, e o valor real não entra.
 - **No gateway:** os domínios donos dos segredos são [decifrados](network.md#decifração-do-tls). A cada conexão decifrada, o gateway pede os segredos ao daemon pelo socket privado e troca, nos cabeçalhos, o falso pelo real, só quando o domínio do pedido é dono do segredo. O falso mandado a outro destino segue falso. O corpo nunca é alterado.
 - **Cofre trancado:** nada é trocado; os pedidos saem com o falso e o provedor recusa. Desbloqueie e repita.
+- **Logins capturados:** os tokens dos logins que o gateway captura (`claude:*`, do Claude Code, e `agy:*`, do Antigravity CLI) só valem nas abas do harness deles: as outras abas não decifram esses domínios por causa deles, e o falso segue falso ([claude.md](claude.md), [agy.md](agy.md#login-do-google)).
 - **Registro:** a linha `https` de um pedido com troca tem o nome do segredo usado (`chave: openrouter` no `sandmux net` e no painel), nunca o valor.
 - **Modo só inferência:** com o cofre desbloqueado e algum segredo de um provedor do catálogo, o modo `inferencia` libera só os provedores com segredo.
 
@@ -147,6 +148,7 @@ Uma chave colada dentro do harness, como no "Connect provider" do opencode ou no
 - **Busca:** o `sandmux doctor` procura credenciais reais nos arquivos de configuração (JSON, YAML, `.env`) que a importação copia, nos HOMEs sintéticos do opencode e do hermes, com as mesmas regras da importação. Ele lista cada uma (harness, arquivo, provedor, chave e linha), sem o valor.
 - **`sandmux doctor --fix`:** leva essas chaves para o cofre, com o domínio descoberto como acima. O arquivo só é regravado com valores falsos depois de o cofre aceitar todas as chaves dele; o real não fica em nenhum arquivo do HOME sintético.
 - **Depois:** reinicie as abas do harness, que pode ter a chave antiga na memória.
+- **Login do Antigravity CLI:** o `doctor` também acha o token real de um login do Google feito dentro do sandbox (`~/.gemini/antigravity-cli/antigravity-oauth-token` do HOME do `agy`), e o `--fix` o leva ao cofre como `agy:access` e `agy:refresh` ([agy.md](agy.md#login-do-google)).
 
 #### Movimento automático
 

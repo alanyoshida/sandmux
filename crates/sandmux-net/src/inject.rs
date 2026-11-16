@@ -10,9 +10,17 @@ use sandmux_proto::{Frame, Msg, PROTOCOL, read_frame, write_control};
 use sandmux_spec::VaultAccess;
 use sandmux_spec::net::Pattern;
 
-/// Os segredos com domínio, pedidos ao daemon; vazio se o daemon não
-/// responde ou o cofre está trancado.
-pub fn fetch(access: &VaultAccess, tag: &str) -> Vec<Injection> {
+/// Os segredos com domínio que valem na aba de `harness`, pedidos ao
+/// daemon; vazio se o daemon não responde ou o cofre está trancado. Os
+/// segredos de login de outro harness ficam de fora.
+pub fn fetch(access: &VaultAccess, tag: &str, harness: &str) -> Vec<Injection> {
+    fetch_all(access, tag)
+        .into_iter()
+        .filter(|i| sandmux_spec::net::secret_for_harness(&i.name, harness))
+        .collect()
+}
+
+fn fetch_all(access: &VaultAccess, tag: &str) -> Vec<Injection> {
     let Ok(mut s) = UnixStream::connect(&access.socket) else {
         return Vec::new();
     };
@@ -49,6 +57,7 @@ pub fn fetch(access: &VaultAccess, tag: &str) -> Vec<Injection> {
 pub fn capture(
     access: &VaultAccess,
     tag: &str,
+    harness: &str,
     items: Vec<(String, String)>,
 ) -> Result<Vec<String>, String> {
     let mut s = UnixStream::connect(&access.socket).map_err(|e| e.to_string())?;
@@ -73,6 +82,7 @@ pub fn capture(
         &mut s,
         &Msg::VaultCapture {
             tag: tag.into(),
+            harness: harness.into(),
             items,
         },
     )

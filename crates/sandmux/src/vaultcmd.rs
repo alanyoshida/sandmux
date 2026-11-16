@@ -324,6 +324,37 @@ fn new_password(input: &mut Input, what: &str) -> Result<Zeroizing<String>> {
     Ok(a)
 }
 
+/// Leva ao cofre, pelo daemon, os tokens reais do login do Google do `agy`
+/// (`agy:access` e `agy:refresh`) e grava em `target` o arquivo com os
+/// falsos. Sem cofre que aceite, nada é gravado.
+pub(crate) fn store_agy_login(
+    login: &sandmux_import::agy_login::Login,
+    target: &std::path::Path,
+) -> Result<()> {
+    let reals = login.reals();
+    let roles: Vec<String> = reals.iter().map(|(r, _)| r.clone()).collect();
+    let Msg::Captured { fakes } = call(&Msg::VaultCapture {
+        tag: "import".into(),
+        harness: "agy".into(),
+        items: reals,
+    })?
+    else {
+        bail!(tr!(
+            "resposta inesperada do daemon",
+            "unexpected answer from the daemon"
+        ));
+    };
+    if fakes.len() != roles.len() {
+        bail!(tr!(
+            "resposta inesperada do daemon",
+            "unexpected answer from the daemon"
+        ));
+    }
+    let pairs: Vec<(String, String)> = roles.into_iter().zip(fakes).collect();
+    sandmux_import::agy_login::write(target, &login.with_fakes(&pairs))?;
+    Ok(())
+}
+
 pub(crate) fn call(msg: &Msg) -> Result<Msg> {
     let mut conn = client::connect_or_start()?;
     conn.call(msg)

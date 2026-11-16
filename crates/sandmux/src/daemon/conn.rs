@@ -391,13 +391,17 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 }
                 reply_unit(&mut stream, r)?;
             }
-            Msg::VaultCapture { tag, items } => {
+            Msg::VaultCapture {
+                tag,
+                harness,
+                items,
+            } => {
                 let _ = tag;
                 let r: Result<Vec<String>, String> = {
                     let mut v = shared.vault.lock().unwrap_or_else(|e| e.into_inner());
                     items
                         .iter()
-                        .map(|(role, real)| v.capture(role, real))
+                        .map(|(role, real)| v.capture(&harness, role, real))
                         .collect()
                 };
                 match r {

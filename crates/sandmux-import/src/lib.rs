@@ -6,6 +6,7 @@
 //! troca sem o valor real. Rodada de novo, a importação só copia arquivos que
 //! ainda não existem e lista os que diferem.
 
+pub mod agy_login;
 pub mod secrets;
 
 use std::collections::BTreeSet;
@@ -553,7 +554,7 @@ fn processed(real: &Path, rel: &Path) -> Result<(Vec<u8>, Vec<secrets::Replaceme
     }
 }
 
-fn write_private(path: &Path, data: &[u8], mode: u32) -> Result<(), ImportError> {
+pub(crate) fn write_private(path: &Path, data: &[u8], mode: u32) -> Result<(), ImportError> {
     use std::os::unix::fs::PermissionsExt;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| io(e, parent))?;

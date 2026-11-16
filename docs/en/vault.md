@@ -74,6 +74,7 @@ Each secret has a fake value (`sandmux-fake-` and 32 characters): the one the im
 - **In the sandbox:** in opencode, hermes, oh-my-pi and Antigravity CLI sessions, with the vault unlocked, each inference provider with a secret in the vault enters the environment on its own with the fake value: `OPENROUTER_API_KEY` (`openrouter.ai`), `ANTHROPIC_API_KEY` (`api.anthropic.com`), `OPENAI_API_KEY` (`api.openai.com`), `GEMINI_API_KEY` (`generativelanguage.googleapis.com`), `DEEPSEEK_API_KEY` (`api.deepseek.com`), `MISTRAL_API_KEY` (`api.mistral.ai`), `GROQ_API_KEY` (`api.groq.com`) and `XAI_API_KEY` (`api.x.ai`). In opencode, the injected configuration points the provider's key to the variable; in hermes, the fake goes in that run's `~/.hermes/.env`; in the Antigravity CLI, `GEMINI_API_KEY` makes `agy` use the key instead of the Google login ([agy.md](agy.md#keys)). A `--pass-env` of the same variable is ignored, with a warning: the fake wins, and the real value does not enter.
 - **In the gateway:** the domains that own the secrets are [decrypted](network.md#tls-decryption). On each decrypted connection, the gateway asks the daemon for the secrets over the private socket and swaps, in the headers, the fake for the real value, only when the request's domain owns the secret. The fake sent to another destination stays fake. The body is never changed.
 - **Locked vault:** nothing is swapped; requests go out with the fake and the provider refuses them. Unlock and try again.
+- **Captured logins:** the tokens of the logins the gateway captures (`claude:*`, from Claude Code, and `agy:*`, from the Antigravity CLI) apply only in the tabs of their harness: the other tabs do not decrypt those domains because of them, and the fake stays fake ([claude.md](claude.md), [agy.md](agy.md#google-login)).
 - **Log:** the `https` line of a request with a swap has the name of the secret used (`key: openrouter` in `sandmux net` and in the panel), never the value.
 - **Inference-only mode:** with the vault unlocked and some secret for a provider in the catalog, the `inferencia` mode allows only the providers with a secret.
 
@@ -149,6 +150,7 @@ A key pasted inside the harness, as in opencode's "Connect provider" or in herme
 - **Scan:** `sandmux doctor` looks for real credentials in the configuration files (JSON, YAML, `.env`) that the import copies, in the opencode and hermes synthetic HOMEs, with the same rules as the import. It lists each one (harness, file, provider, key and line), without the value.
 - **`sandmux doctor --fix`:** moves those keys to the vault, with the domain discovered as above. The file is only rewritten with fake values after the vault accepts all of its keys; the real value does not stay in any file of the synthetic HOME.
 - **Afterwards:** restart the harness's tabs, which may have the old key in memory.
+- **Antigravity CLI login:** `doctor` also finds the real token of a Google login made inside the sandbox (`~/.gemini/antigravity-cli/antigravity-oauth-token` in the `agy` HOME), and `--fix` moves it to the vault as `agy:access` and `agy:refresh` ([agy.md](agy.md#google-login)).
 
 #### Automatic move
 

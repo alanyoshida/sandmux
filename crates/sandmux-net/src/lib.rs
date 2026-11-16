@@ -63,6 +63,9 @@ pub struct Config {
     pub tls: Option<sandmux_spec::TlsSpec>,
     /// Acesso ao daemon para os segredos (só nas sessões).
     pub vault: Option<sandmux_spec::VaultAccess>,
+    /// Harness da aba: os endpoints de login capturados e os segredos de
+    /// login trocados são só os dele.
+    pub harness: String,
 }
 
 struct State {
@@ -72,6 +75,7 @@ struct State {
     mitm: Option<(Arc<tls::Ca>, Arc<rustls::ClientConfig>)>,
     vault: Option<sandmux_spec::VaultAccess>,
     tag: String,
+    harness: String,
     names: policy::Names,
     policy: policy::Policy,
     icmp: Mutex<HashMap<IpAddr, Instant>>,
@@ -293,10 +297,11 @@ async fn tcp(mut s: ipstack::IpStackTcpStream, st: Arc<State>) {
         // sido trancado ou mudado desde a última conexão).
         let injections = match st.vault.clone() {
             Some(access) => {
-                let tag = st.tag.clone();
-                let all = tokio::task::spawn_blocking(move || inject::fetch(&access, &tag))
-                    .await
-                    .unwrap_or_default();
+                let (tag, harness) = (st.tag.clone(), st.harness.clone());
+                let all =
+                    tokio::task::spawn_blocking(move || inject::fetch(&access, &tag, &harness))
+                        .await
+                        .unwrap_or_default();
                 inject::for_host(all, &name)
             }
             None => Vec::new(),
@@ -310,6 +315,7 @@ async fn tcp(mut s: ipstack::IpStackTcpStream, st: Arc<State>) {
             injections,
             vault: st.vault.clone(),
             tag: st.tag.clone(),
+            harness: st.harness.clone(),
         });
         let guest = mitm::Prefixed::new(first, s);
         let (read, written) = (guest.read.clone(), guest.written.clone());
@@ -696,6 +702,7 @@ async fn run(
         log: Arc::new(log::Log::new(&cfg.log_dir, &cfg.tag, &cfg.workdir)),
         vault: cfg.vault.clone(),
         tag: cfg.tag.clone(),
+        harness: cfg.harness.clone(),
         mitm: cfg.tls.as_ref().and_then(|t| {
             let ca = tls::Ca::from_pem(&t.ca_cert_pem, &t.ca_key_pem).ok()?;
             Some((
@@ -723,6 +730,7 @@ async fn run(
             st.vault.clone().map(|access| hostports::Vault {
                 access,
                 tag: st.tag.clone(),
+                harness: st.harness.clone(),
             }),
             st.stop.clone(),
         ));

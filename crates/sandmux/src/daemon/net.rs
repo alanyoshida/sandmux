@@ -59,17 +59,19 @@ pub fn write_policy(
     std::fs::rename(&tmp, path)
 }
 
-/// A política com os domínios donos dos segredos do cofre desbloqueado na
-/// lista de decifração.
+/// A política com os domínios donos dos segredos do cofre desbloqueado que
+/// valem na aba de `harness` na lista de decifração (os de login de outro
+/// harness ficam de fora).
 pub fn with_vault(
     shared: &Shared,
     mut p: sandmux_spec::net::NetPolicy,
+    harness: &str,
 ) -> sandmux_spec::net::NetPolicy {
     let domains = shared
         .vault
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .domains();
+        .domains_for(harness);
     for d in &domains {
         if let Ok(pat) = d.parse::<sandmux_spec::net::Pattern>()
             && !p.decrypt.contains(&pat)
@@ -165,7 +167,7 @@ pub fn recompile(shared: &Shared, id: u32) -> anyhow::Result<Recompiled> {
     }
     let new = eff
         .net_policy()
-        .map(|p| with_ssh(shared, with_vault(shared, p), &eff.ssh_keys));
+        .map(|p| with_ssh(shared, with_vault(shared, p, &opts.harness), &eff.ssh_keys));
     let desc = eff.network.value.describe();
     if new == old {
         return Ok(Recompiled::Same);

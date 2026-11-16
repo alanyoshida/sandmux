@@ -657,9 +657,12 @@ pub enum Msg {
     },
     /// Tokens reais capturados numa resposta de login (papel e valor), do
     /// gateway de um lançamento ao daemon, que os guarda e devolve os falsos
-    /// (protocolo 26).
+    /// (protocolo 26). `harness` é o dono do login (`claude`, `agy`), que
+    /// dá o nome e os domínios dos segredos (protocolo 36).
     VaultCapture {
         tag: String,
+        #[serde(default)]
+        harness: String,
         items: Vec<(String, String)>,
     },
 

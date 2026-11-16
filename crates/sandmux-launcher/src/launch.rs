@@ -295,6 +295,7 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
             aliases: Vec::new(),
             tls: n.tls.clone(),
             vault: n.vault.clone(),
+            harness: n.harness.clone(),
         };
         match sandmux_net::spawn(tun, cfg) {
             Ok(g) => gateway = Some(g),
