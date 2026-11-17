@@ -1,18 +1,19 @@
-sandmux 0.1.17, antes da v1: o login do Google do `agy` fora do sandbox e o diagnóstico na TUI.
+sandmux 0.1.18, antes da v1: o portal do desktop e a troca de uma chave vencida.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Login do `agy` fora do sandbox:** o token real do login do Google não fica mais no HOME do sandbox. O agente só vê valores falsos, e o gateway põe o real só no tráfego ao Google, nas abas do `agy`.
-  - Com o cofre aberto, `sandmux import agy` (ou a primeira execução) leva o login do host ao cofre como `agy:access` e `agy:refresh`, e o `agy` abre já logado. Com o cofre trancado, rode `sandmux import agy --overwrite` depois de abri-lo.
-  - Sem login no host, o login feito dentro do `agy` (colando o código da página) é capturado pelo gateway e vai ao cofre.
-  - Um login real que tenha ficado no sandbox vai sozinho ao cofre quando ele abre, ou pelo `sandmux doctor --fix`.
-  - O modo de rede só inferência passa a liberar os hosts do login e do modelo do `agy`. Detalhes em [docs/agy.md](https://github.com/alanyoshida/sandmux/blob/main/docs/agy.md#login-do-google).
-- **Diagnóstico na TUI:** a página de configurações ganhou a seção Diagnóstico, aberta também por Ctrl+b `D`, com as verificações do `sandmux doctor` e a causa e a correção de cada falha. A tecla `f` leva as chaves reais do sandbox ao cofre, com o domínio de cada uma num campo que dá para editar.
-- **Rodapé das configurações:** mostra só as teclas que valem no momento, conforme a seção e o item escolhido.
+- **Portal do desktop:** toda aba ganha, por padrão, um D-Bus próprio do sandmux, que não é o seu.
+  - **Tema:** os programas de dentro leem o tema claro ou escuro do seu desktop.
+  - **Notificações:** o `notify-send` e o portal chegam ao seu desktop com o nome da aba no título, no máximo 5 a cada 10 segundos por aba.
+  - **Abrir link:** o `xdg-open` abre links no seu navegador, mas só para domínios que a política de rede da aba permite; cada pedido entra em `sandmux net`.
+  - Qualquer outro serviço do D-Bus recebe erro, e nada do sandbox chega ao seu D-Bus.
+  - Para desligar, use `--no-portal` ou `portal = false`. Detalhes em [docs/window.md](https://github.com/alanyoshida/sandmux/blob/main/docs/window.md#portal-do-desktop).
+- **Trocar uma chave que venceu:** `sandmux vault set <nome>`, ou a tecla `v` na seção Cofre da TUI, troca só o valor e mantém o falso e os domínios. Os arquivos do harness continuam valendo, e o valor novo vale na próxima conexão, sem reiniciar a aba. Detalhes em [docs/vault.md](https://github.com/alanyoshida/sandmux/blob/main/docs/vault.md#trocar-uma-chave-que-venceu).
+- **Teste mais estável:** um teste do Docker que falhava às vezes foi corrigido; a causa era o nome repetido de um arquivo de saída do próprio teste.
 
-Esta versão muda o protocolo entre o gateway e o daemon (36). Depois de atualizar, rode `sandmux daemon restart` e abra a TUI de novo.
+Esta versão muda o protocolo entre o cliente e o daemon (38). Depois de atualizar, rode `sandmux daemon restart` e abra a TUI de novo.
 
 ## Instalar
 
