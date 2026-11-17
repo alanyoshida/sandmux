@@ -45,6 +45,20 @@ pub struct LaunchSpec {
     /// continuam passando pelo supervisor, sem registro.
     #[serde(default)]
     pub files: Option<FilesSpec>,
+    /// Repassador do barramento do portal: o processo 1 cria `listen` dentro
+    /// do sandbox e liga cada conexão a `target`, o socket do daemon montado
+    /// no sandbox. Um socket criado lá dentro tem um caminho que o AppArmor
+    /// dos programas com perfil (o `notify-send`) consegue resolver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus_relay: Option<BusRelay>,
+}
+
+/// O repassador do barramento do portal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BusRelay {
+    pub listen: PathBuf,
+    pub target: PathBuf,
 }
 
 /// Lugar das pastas novas dentro do sandbox.
@@ -378,6 +392,10 @@ impl LaunchSpec {
         for p in self.landlock.read.iter().chain(&self.landlock.write) {
             check_path("landlock", p)?;
         }
+        if let Some(r) = &self.bus_relay {
+            check_path("bus_relay", &r.listen)?;
+            check_path("bus_relay", &r.target)?;
+        }
         for v in &self.env {
             if v.name.is_empty() || v.name.contains('=') || v.name.contains('\0') {
                 return Err(SpecError::Invalid(crate::trf!(
@@ -535,6 +553,7 @@ mod tests {
             cwd: "/tmp".into(),
             network: None,
             files: None,
+            bus_relay: None,
         }
     }
 

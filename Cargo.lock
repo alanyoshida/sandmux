@@ -3081,6 +3081,7 @@ dependencies = [
  "bytes",
  "clap",
  "crossterm",
+ "futures-util",
  "http-body-util",
  "hyper",
  "hyper-util",

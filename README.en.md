@@ -104,6 +104,7 @@ sandmux setup
 | `--kvm`, `--no-kvm` | Allows (or not) `/dev/kvm` |
 | `--gpu`, `--no-gpu` | Exposes (or not) the GPU, exposed by default when there is one |
 | `--window`, `--window-direct`, `--no-window` | Lets (or not) the agent open windows on the desktop and use audio: through the compositor's restricted socket, with the privileged protocols hidden, or through the plain socket; never X11 ([docs/en/window.md](docs/en/window.md)) |
+| `--no-portal` | Removes the desktop portal, on by default: theme, notifications and opening links in your browser only for domains the tab's network allows, through a D-Bus of sandmux's own ([docs/en/window.md](docs/en/window.md#desktop-portal)) |
 | `--memory <cap>`, `--processes <cap>` | Changes the memory cap (`50%`, `16G`, `max`) or the process cap (`512`, `max`) |
 | `--network <mode>` | `aberta` (default), `inferencia`, `custom` or `sem-rede` |
 | `--deny <pattern>`, `--allow <pattern>` | Denies or allows (in `custom` mode) a destination in this tab: `exemplo.com`, `*.exemplo.com`, IPv4 or CIDR |

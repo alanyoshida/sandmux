@@ -15,6 +15,7 @@ pub mod mounter;
 mod mounts;
 mod namer;
 mod net;
+mod relay;
 pub mod seccomp;
 pub mod support;
 mod sys;

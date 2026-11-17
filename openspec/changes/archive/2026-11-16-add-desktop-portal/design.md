@@ -34,14 +34,16 @@ O `notify-send` do host foi barrado pelo perfil do AppArmor dele (`/etc/apparmor
 ## Decisions
 
 ### Barramento mínimo por conexão
-O daemon cria, por aba com o portal, um socket Unix na pasta privada da aba (como os outros sockets dela) e o monta em `/run/user/<uid>/bus` no sandbox. Cada conexão aceita vira um servidor zbus ponto a ponto, e o daemon serve, em cada conexão, os objetos abaixo.
+O daemon cria, por aba com o portal, um socket Unix na pasta de runtime dele (`<runtime>/portal/<aba>.sock`) e o monta em `/run/sandmux/portal.sock` no sandbox.
+
+O `/run/user/<uid>/bus` é criado dentro do sandbox por um repassador. Achado na implementação (2026-11-16): com o socket do daemon montado direto no `bus`, o AppArmor do `notify-send` do Ubuntu negava a conexão com `Failed name lookup - disconnected path`, porque o socket fora criado fora da raiz do sandbox. Por isso a especificação do lançamento ganhou `bus_relay`. O processo 1 do sandbox cria o `bus` antes do comando, e um filho dele, sem capabilities, com `no_new_privs` e o seccomp do processo 1, liga cada conexão ao `portal.sock`, copiando os bytes. Se o agente matar o repassador, só o portal da aba para. Cada conexão aceita vira um servidor zbus ponto a ponto, e o daemon serve, em cada conexão, os objetos abaixo.
 
 - `/org/freedesktop/DBus`, com a interface `org.freedesktop.DBus`:
   - `Hello` devolve um nome único `:1.N` por conexão;
   - `AddMatch` e `RemoveMatch` aceitam e não fazem nada;
   - `GetNameOwner` e `NameHasOwner` respondem só pelos nomes servidos: `org.freedesktop.DBus`, `org.freedesktop.portal.Desktop` e `org.freedesktop.Notifications`;
   - `ListNames`, `ListActivatableNames`, `StartServiceByName` (já rodando) e `GetId`;
-  - `RequestName` devolve "já existe" e não registra nada.
+  - `RequestName` responde como dono e não registra nada: um app que pede o próprio nome não pode achar que já existe outra instância dele.
 - `/org/freedesktop/portal/desktop`, com as interfaces `org.freedesktop.portal.Settings`, `org.freedesktop.portal.Notification` e `org.freedesktop.portal.OpenURI`, cada uma com a propriedade `version`.
 - `/org/freedesktop/Notifications`, com a interface `org.freedesktop.Notifications`.
 
@@ -81,10 +83,10 @@ No modo aberta, quase todo domínio passa, então o abrir link vale para quase q
 ### Os programas usam o portal
 Com o portal, a composição põe:
 
-- o `tmpfs` em `/run/user/<uid>`, com o `bus` e um `flatpak-info` vazio, em somente leitura;
+- o `tmpfs` em `/run/user/<uid>`, com o `flatpak-info` vazio em somente leitura e o `bus` criado pelo repassador;
 - `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus` e `GIO_USE_PORTALS=1`.
 
-Com a janela, é a mesma pasta, e os sockets dela continuam lá. O `flatpak-info` só faz o `xdg-open` escolher o caminho do portal; a GLib procura o `/.flatpak-info` na raiz, e não esse arquivo.
+Com a janela, é a mesma pasta, e os sockets dela continuam lá. O `flatpak-info` só faz o `xdg-open` escolher o caminho do portal; a GLib procura o `/.flatpak-info` na raiz, e não esse arquivo. Conferido na implementação: a GIO (2.88) só usa o portal para abrir um link quando não acha um programa que trate `https`; com o Chrome instalado, o `gio open` tenta o Chrome dentro do sandbox. O `xdg-open`, que os harnesses de terminal usam, passa pelo portal.
 
 ### Opção e protocolo
 `portal` entra em `BOOL_KEYS`, com padrão `true`, e nas opções da sessão (`SessionOptions.portal`), o que leva o protocolo a 37. Precedência: a opção do `run`, depois o projeto, o perfil e o global. O `run` sem terminal ignora o padrão e recusa o `--portal` explícito.

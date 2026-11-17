@@ -84,6 +84,8 @@ pub struct Session {
     pub db: Option<super::db::DbSocket>,
     /// Socket da janela do lançamento atual.
     pub window: Option<crate::window::WindowSocket>,
+    /// Barramento do portal do lançamento atual.
+    pub portal: Option<crate::portal::PortalSocket>,
     /// Proteção aplicada no último lançamento.
     pub policy: Option<sandmux_proto::msg::PolicySummary>,
     /// Lançamentos feitos, para numerar as etiquetas de rede.
@@ -153,6 +155,7 @@ impl Session {
             ssh_agent: None,
             db: None,
             window: None,
+            portal: None,
             policy: None,
             launches: 0,
             tags: Vec::new(),
@@ -462,6 +465,7 @@ pub struct Spawned {
     pub ssh_agent: Option<super::sshagent::AgentSocket>,
     pub db: Option<super::db::DbSocket>,
     pub window: Option<crate::window::WindowSocket>,
+    pub portal: Option<crate::portal::PortalSocket>,
     pub policy: sandmux_proto::msg::PolicySummary,
     /// Número deste lançamento na sessão e a etiqueta de rede dele.
     pub launch: u32,
@@ -692,6 +696,7 @@ pub fn spawn(
         ssh_agent,
         db,
         window: prepared.window,
+        portal: prepared.portal,
         policy: prepared.summary,
         launch,
         tag,
@@ -835,6 +840,7 @@ fn spawn_enter(
         ssh_agent: None,
         db: None,
         window: None,
+        portal: None,
         policy,
         launch,
         policy_file: super::net::policy_path(&tag),
@@ -1014,6 +1020,7 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
         ssh_agent,
         db,
         window,
+        portal,
         policy,
         launch,
         tag,
@@ -1034,6 +1041,7 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
             s.ssh_agent = ssh_agent;
             s.db = db;
             s.window = window;
+            s.portal = portal;
             s.policy = Some(policy);
             s.launches = s.launches.max(launch);
             if let Some(old) = s.policy_file.take() {
@@ -1319,6 +1327,7 @@ fn reader(shared: Arc<Shared>, id: u32, pid: i32, master: Arc<File>, mut child: 
         s.ssh_agent = None;
         s.db = None;
         s.window = None;
+        s.portal = None;
         if let Some(f) = s.policy_file.take() {
             let _ = std::fs::remove_file(f);
         }

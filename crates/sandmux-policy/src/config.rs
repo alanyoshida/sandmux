@@ -27,7 +27,7 @@ pub const FILE: &str = "config.toml";
 /// Chaves de lista, na ordem em que aparecem nas mensagens.
 pub const LIST_KEYS: &[&str] = &["ro", "rw", "pass-env"];
 /// Chaves de liga e desliga.
-pub const BOOL_KEYS: &[&str] = &["repo", "kvm", "gpu", "clipboard", "harness-asks"];
+pub const BOOL_KEYS: &[&str] = &["repo", "kvm", "gpu", "clipboard", "harness-asks", "portal"];
 /// Chaves de teto.
 pub const LIMIT_KEYS: &[&str] = &["memory", "processes"];
 /// Chaves da rede: o modo, em qualquer seção; a retenção do registro, só em
@@ -194,6 +194,8 @@ pub struct Layer {
     pub clipboard: Option<bool>,
     /// As perguntas de permissão do harness (`harness-asks`).
     pub harness_asks: Option<bool>,
+    /// O portal do desktop (`portal`).
+    pub portal: Option<bool>,
     pub memory: Option<MemoryLimit>,
     pub processes: Option<ProcessLimit>,
     pub network: Option<NetworkMode>,
@@ -260,6 +262,7 @@ impl Layer {
             "gpu" => self.gpu,
             "clipboard" => self.clipboard,
             "harness-asks" => self.harness_asks,
+            "portal" => self.portal,
             _ => None,
         }
     }
@@ -271,6 +274,7 @@ impl Layer {
             "gpu" => Some(&mut self.gpu),
             "clipboard" => Some(&mut self.clipboard),
             "harness-asks" => Some(&mut self.harness_asks),
+            "portal" => Some(&mut self.portal),
             _ => None,
         }
     }
@@ -1110,7 +1114,7 @@ fn layer_in(
                     l.pass_env.push(s);
                 }
             }
-            "repo" | "kvm" | "gpu" | "clipboard" | "harness-asks" => {
+            "repo" | "kvm" | "gpu" | "clipboard" | "harness-asks" | "portal" => {
                 let v = item.as_bool().ok_or_else(|| {
                     err(
                         vspan.clone(),
@@ -1879,6 +1883,7 @@ pub struct Effective {
     pub gpu: Setting,
     pub clipboard: Setting,
     pub harness_asks: Setting,
+    pub portal: Setting,
     pub memory: LimitSetting<MemoryLimit>,
     pub processes: LimitSetting<ProcessLimit>,
     pub network: LimitSetting<NetworkMode>,
@@ -2033,6 +2038,7 @@ impl Effective {
             ssh_agent_socket: None,
             ssh_servers: Vec::new(),
             window: None,
+            portal: None,
             files_log: None,
             file_policy: Default::default(),
             file_policy_file: None,
@@ -2085,6 +2091,7 @@ impl Effective {
             "gpu" => Some(&self.gpu),
             "clipboard" => Some(&self.clipboard),
             "harness-asks" => Some(&self.harness_asks),
+            "portal" => Some(&self.portal),
             _ => None,
         }
     }
@@ -2331,6 +2338,7 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
         gpu: default(true),
         clipboard: default(false),
         harness_asks: default(false),
+        portal: default(true),
         memory: LimitSetting {
             value: limits::DEFAULT_MEMORY,
             origin: Origin::Default,
@@ -2422,6 +2430,7 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
                     "kvm" => &mut eff.kvm,
                     "gpu" => &mut eff.gpu,
                     "harness-asks" => &mut eff.harness_asks,
+                    "portal" => &mut eff.portal,
                     _ => &mut eff.clipboard,
                 };
                 *s = Setting {

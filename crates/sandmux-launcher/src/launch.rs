@@ -447,6 +447,23 @@ fn init_process(
         unsafe { libc::_exit(EXIT_SETUP) };
     }
 
+    // O barramento do portal, criado dentro do sandbox antes do comando.
+    if let Some(r) = &spec.bus_relay {
+        // SAFETY: o processo 1 tem uma única thread.
+        if let Err(e) = unsafe { crate::relay::spawn(r, &spec.seccomp) } {
+            report(
+                &err_w,
+                MSG_SETUP,
+                &sandmux_spec::trf!(
+                    "falha ao criar o barramento do portal: {e}",
+                    "failed to create the portal bus: {e}"
+                ),
+            );
+            // SAFETY: saída imediata do filho.
+            unsafe { libc::_exit(EXIT_SETUP) };
+        }
+    }
+
     // SAFETY: o processo 1 tem uma única thread.
     let cmd = match unsafe { nix::unistd::fork() } {
         Ok(nix::unistd::ForkResult::Child) => command_process(spec, &err_w, &files_w),

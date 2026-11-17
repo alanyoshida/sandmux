@@ -291,6 +291,12 @@ struct RunArgs {
     /// Sem janela nem áudio, mesmo que a configuração peça.
     #[arg(long = "no-window")]
     no_window: bool,
+    /// Liga o portal do desktop (aparência, notificações e abrir link), que já vem ligado por padrão.
+    #[arg(long, conflicts_with = "no_portal")]
+    portal: bool,
+    /// Sem o portal do desktop, mesmo que a configuração peça.
+    #[arg(long = "no-portal")]
+    no_portal: bool,
     /// Deixa o harness gravar no clipboard do seu terminal (OSC 52).
     #[arg(long = "allow-clipboard", conflicts_with = "no_allow_clipboard")]
     allow_clipboard: bool,
@@ -767,6 +773,14 @@ const HELP_EN: &[(&str, &str)] = &[
     (
         "Sem janela nem áudio, mesmo que a configuração peça.",
         "No window or audio, even if the configuration asks for it.",
+    ),
+    (
+        "Liga o portal do desktop (aparência, notificações e abrir link), que já vem ligado por padrão.",
+        "Turns on the desktop portal (appearance, notifications and opening links), which is on by default.",
+    ),
+    (
+        "Sem o portal do desktop, mesmo que a configuração peça.",
+        "No desktop portal, even if the configuration asks for it.",
     ),
     (
         "Não expõe a GPU dentro do sandbox.",
@@ -1362,6 +1376,7 @@ fn launch_options(host: &Host, a: &RunArgs) -> LaunchOptions {
         kvm: flag(a.kvm, a.no_kvm),
         gpu: flag(a.gpu, a.no_gpu),
         allow_clipboard: flag(a.allow_clipboard, a.no_allow_clipboard),
+        portal: flag(a.portal, a.no_portal),
         window: match (a.window, a.window_direct, a.no_window) {
             (_, true, _) => Some(sandmux_spec::window::WindowMode::Direct),
             (true, _, _) => Some(sandmux_spec::window::WindowMode::On),

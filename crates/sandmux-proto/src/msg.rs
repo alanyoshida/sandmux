@@ -47,6 +47,10 @@ pub struct LaunchOptions {
     /// protocolo 34).
     #[serde(default)]
     pub window: Option<sandmux_spec::window::WindowMode>,
+    /// Portal do desktop dado no `run` (`--portal`, `--no-portal`;
+    /// protocolo 37).
+    #[serde(default)]
+    pub portal: Option<bool>,
     /// Tetos dados no `run` (`--memory`, `--processes`), como texto.
     #[serde(default)]
     pub memory: Option<String>,
@@ -112,6 +116,7 @@ impl LaunchOptions {
             gpu: None,
             allow_clipboard: None,
             window: None,
+            portal: None,
             memory: None,
             processes: None,
             network: None,
@@ -320,6 +325,9 @@ pub struct PolicySummary {
     /// Janela do lançamento (protocolo 34).
     #[serde(default)]
     pub window: sandmux_spec::window::WindowMode,
+    /// Portal do desktop do lançamento (protocolo 37).
+    #[serde(default)]
+    pub portal: bool,
 }
 
 /// Consumo do Docker privado da pasta de uma sessão.

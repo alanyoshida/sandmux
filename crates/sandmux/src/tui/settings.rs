@@ -235,6 +235,17 @@ pub const ITEMS: &[Item] = &[
     ),
     item!(
         3,
+        "portal",
+        ["Portal", "Portal"],
+        Kind::Toggle,
+        At::Layer,
+        [
+            "Portal do desktop: tema claro ou escuro, notificações e abrir link no seu navegador, só para domínios que a rede da aba permite. Um D-Bus próprio do sandmux, não o seu.",
+            "Desktop portal: light or dark theme, notifications and opening links in your browser, only for domains the tab's network allows. A D-Bus of sandmux's own, not yours."
+        ]
+    ),
+    item!(
+        3,
         "clipboard",
         ["Clipboard", "Clipboard"],
         Kind::Toggle,
@@ -568,7 +579,7 @@ pub fn is_model_item(key: &str) -> bool {
 
 /// Valor padrão de uma chave de liga e desliga.
 pub fn default_bool(key: &str) -> bool {
-    matches!(key, "gpu" | "panel" | "notify")
+    matches!(key, "gpu" | "panel" | "notify" | "portal")
 }
 
 /// De onde vem o valor mostrado.

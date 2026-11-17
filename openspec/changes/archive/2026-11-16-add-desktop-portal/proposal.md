@@ -13,7 +13,7 @@ O ponto que ficou em aberto, se o portal vem com a janela ou numa opção própr
 - **Opção `portal`:** chave nova `portal = true|false` no global, nos perfis e nos projetos, e as opções `--portal` e `--no-portal` no `sandmux run`.
   - Decisão do usuário (2026-11-16): fica ligada por padrão em toda aba do daemon, com ou sem janela.
   - A página de configurações ganha o item "Portal" na seção Sandbox, e o painel de proteção da TUI mostra o estado.
-- **D-Bus do sandmux, não o do usuário:** com o portal ligado, o sandbox ganha `/run/user/<uid>/bus`, servido pelo daemon. É um barramento mínimo, que responde ao `org.freedesktop.DBus` (o `Hello` e as consultas de nome) e a poucos serviços. Qualquer outro destino ou interface recebe erro. O D-Bus de sessão do usuário continua fora do sandbox.
+- **D-Bus do sandmux, não o do usuário:** com o portal ligado, o sandbox ganha `/run/user/<uid>/bus`, servido pelo daemon por um repassador que o processo 1 do sandbox cria lá dentro. É um barramento mínimo, que responde ao `org.freedesktop.DBus` (o `Hello` e as consultas de nome) e a poucos serviços. Qualquer outro destino ou interface recebe erro. O D-Bus de sessão do usuário continua fora do sandbox.
 - **Aparência (`org.freedesktop.portal.Settings`):** `Read`, `ReadAll` e `ReadOne` só do namespace `org.freedesktop.appearance` (`color-scheme`, `accent-color` e `contrast`). O daemon lê os valores do portal do host; sem portal no host, responde "sem preferência".
 - **Notificações:**
   - Decisão do usuário (2026-11-16): o portal (`org.freedesktop.portal.Notification`) e o `org.freedesktop.Notifications` direto, que o `notify-send` usa.
@@ -41,6 +41,7 @@ O ponto que ficou em aberto, se o portal vem com a janela ou numa opção própr
 - `crates/sandmux/src/daemon/portal.rs` (novo): o barramento por aba (zbus em modo ponto a ponto, um servidor por conexão), os serviços e o repasse ao host.
 - `crates/sandmux/src/daemon/notify.rs`: o repasse das notificações do sandbox.
 - `crates/sandmux-policy`: a chave `portal`, a composição do `XDG_RUNTIME_DIR` com o `bus` e o `flatpak-info`, e as variáveis.
+- `crates/sandmux-spec` e `crates/sandmux-launcher`: o campo `bus_relay` da especificação e o repassador do processo 1 (`relay.rs`).
 - `crates/sandmux-proto`: o portal nas opções da sessão, protocolo 37.
 - `crates/sandmux/src/main.rs`, `launch.rs` e a TUI (configurações e painel).
 - O zbus ganha o recurso `p2p`.

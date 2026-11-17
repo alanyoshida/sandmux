@@ -2,7 +2,7 @@
 
 > English: [en/window.md](en/window.md)
 
-Por padrão, nada do desktop entra no sandbox: nenhum socket do Wayland, do X11, do PipeWire ou do D-Bus, e as variáveis da sessão gráfica são apagadas. A opção `window` deixa o agente abrir janelas no seu desktop (um navegador para testar uma página, o app que ele construiu) e usar o áudio.
+Por padrão, nada do desktop entra no sandbox: nenhum socket do Wayland, do X11, do PipeWire ou do seu D-Bus, e as variáveis da sessão gráfica são apagadas. A opção `window` deixa o agente abrir janelas no seu desktop (um navegador para testar uma página, o app que ele construiu) e usar o áudio. O [portal do desktop](#portal-do-desktop), ligado por padrão, dá o tema, as notificações e o abrir link por um D-Bus próprio do sandmux.
 
 ## Ligar
 
@@ -64,8 +64,37 @@ google-chrome https://localhost:3000
 
 No modo `--headless`, o navegador funciona sem a janela.
 
+## Portal do desktop
+
+Toda aba do daemon ganha, por padrão, um D-Bus próprio do sandmux, que não é o seu D-Bus de sessão. Por ele, um programa confinado lê o tema, manda notificações e abre links no seu navegador. Qualquer outro serviço do D-Bus recebe erro, e nenhuma mensagem do sandbox chega ao seu D-Bus.
+
+```sh
+sandmux run opencode --no-portal        # sem o portal
+sandmux config set --global portal false
+```
+
+A chave `portal` aceita `true` ou `false`, no global, nos perfis e nos projetos ([config.md](config.md)). Na TUI, o item "Portal" fica na seção Sandbox das configurações, e o painel de proteção mostra o estado. Sem terminal (script, pipe), o `run` segue sem portal, e um `--portal` explícito termina com erro.
+
+- **Aparência:** o `org.freedesktop.portal.Settings` responde só `org.freedesktop.appearance` (`color-scheme`, `accent-color` e `contrast`), com os valores do portal do seu desktop. Sem portal no desktop, a resposta é "sem preferência".
+- **Notificações:** o portal (`org.freedesktop.portal.Notification`) e o `org.freedesktop.Notifications` direto, que o `notify-send` usa.
+  - As notificações chegam ao seu desktop com o nome da aba no título, como `shell:app: Pronto`.
+  - Título e corpo são cortados, e a marcação vira texto.
+  - Ícones, ações, sons e imagens do sandbox não passam.
+  - O limite é de 5 notificações a cada 10 segundos por aba; o excesso é descartado sem erro.
+- **Abrir link:** o `OpenURI` do portal abre um link `http` ou `https` direto no seu navegador padrão, mas só quando a política de rede da aba permite o domínio ([network.md](network.md)).
+  - No modo só inferência, por exemplo, só os provedores de modelo abrem.
+  - Cada pedido, aberto ou recusado, entra no registro de rede da aba (`sandmux net`), com o protocolo `open-uri`.
+  - Arquivos e pastas (`OpenFile`, `OpenDirectory`) são recusados.
+
+### Como os programas chegam ao portal
+
+- **Variáveis:** `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus` e `GIO_USE_PORTALS=1`, numa pasta `XDG_RUNTIME_DIR` em memória. Com a janela ligada, é a mesma pasta.
+- **`xdg-open`:** um `flatpak-info` vazio nessa pasta faz o `xdg-open` (e o pacote `open` do Node, que traz uma cópia dele) abrir links pelo portal.
+- **O socket:** o `bus` é criado dentro do sandbox por um repassador do processo 1, sem capabilities e com o seccomp. Ele liga cada conexão ao barramento, que vive no daemon. Um socket montado de fora seria negado pelo AppArmor de programas com perfil, como o `notify-send` do Ubuntu.
+
 ## Limites
 
-- Sem D-Bus e sem portais: um app que pede um diálogo do sistema, o tema pelo portal ou um link aberto no navegador do host não consegue. O portal com aparência, notificações e abrir link filtrado pela política de rede é o próximo passo.
+- **Só os três serviços do portal:** um app que pede um diálogo do sistema (o seletor de arquivos), a captura de tela, o keyring ou outro serviço do D-Bus recebe erro.
+- **Apps da GIO:** um app da GIO prefere o programa que trata `https`, e só usa o portal quando não acha nenhum. Sem a janela, o navegador desse programa não abre. O `xdg-open` e os programas que o chamam usam o portal.
 - Um app que precisa de um protocolo fora da allowlist perde aquele recurso, em geral opcional, ou não abre.
 - Depois de um reinício do daemon, a aba refaz o socket. Se o compositor ainda não subiu, ela volta encerrada com a mensagem, e Ctrl+b `r` tenta de novo.

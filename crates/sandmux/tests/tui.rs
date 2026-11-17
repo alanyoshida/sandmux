@@ -477,8 +477,8 @@ fn menu_abre_as_configuracoes_e_a_pagina_grava_o_toml() {
     assert!(text.starts_with("# do usuário"), "{text}");
     assert!(text.contains("kvm = true"), "{text}");
     t.wait_text("● ligado");
-    // Memória recusada: nada muda (depois de GPU, janela e clipboard).
-    for _ in 0..4 {
+    // Memória recusada: nada muda (depois de GPU, janela, portal e clipboard).
+    for _ in 0..5 {
         t.write(DOWN);
     }
     t.write(b"\r");
@@ -601,6 +601,8 @@ fn painel_lateral_mostra_protecao_e_some_com_atalho() {
 
     let mut t = tui_cols(&e, 120);
     t.wait_text("Proteção");
+    // O portal vem ligado por padrão.
+    t.wait_text("● portal");
     t.wait_text("docs (leitura)");
     t.wait_text("CHAVE_PAINEL");
     t.wait_text("Recursos");
