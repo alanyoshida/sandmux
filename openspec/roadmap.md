@@ -462,13 +462,24 @@ Release `v0.1.17` (2026-11-16), com os changes 66 e 67 e o ajuste do rodapé das
 
 Release `v0.1.18` (2026-11-16), com os changes 62 e 68 e a correção do teste instável do Docker. Decisão do usuário (2026-11-16): publicar depois de testar o build local ("instalei, ficou certo").
 
+### Etapa 14 - Confinamento do Docker privado
+
+Objetivo: o Docker privado sob as mesmas regras do sandbox do agente. Hoje o que limita o `dockerd` e os contêineres é só a visão de arquivos (achados de 2026-11-16, na seção 6). Decisões do usuário (2026-11-16), na exploração do backend eBPF: o eBPF entra para dar uma capacidade nova, o confinamento do Docker privado e de outros processos que rodam fora do Landlock; o confinamento cobre os arquivos e as chamadas de sistema; o trabalho se divide em dois changes, com o endurecimento sem privilégio primeiro.
+
+| # | Change | Situação | Conteúdo |
+|---|---|---|---|
+| 69 | `harden-docker-view` | Em planejamento: proposta, specs, design e tarefas escritos e validados (`openspec validate --strict`) em 2026-11-16, com 21 tarefas; nada implementado. Muda `container-engine` (seis requisitos novos); sem mudança de protocolo. Decisões do usuário (2026-11-16): os cgroups entram neste change; o paliativo dos segredos entra neste change. Decisões do agente: o `file-deny` da configuração da pasta é coberto junto com os segredos; acima de 4096 coberturas o Docker privado não sobe; o chaveiro devolve `ENOSYS` (o `runc` cria um chaveiro por contêiner), com o `--no-new-keyring` como recuo; a GPU e o `/dev/kvm` da visão seguem a configuração da pasta; sem escopo do systemd, a visão não monta cgroup nenhum | Sem privilégio, em toda máquina: filtro seccomp instalado pelo `exec_view` antes do `dockerd` e herdado por todo contêiner (`bpf`, `perf_event_open`, módulos, `kexec`, chaveiro, `userfaultfd`, `io_uring`, `TIOCSTI` e `TIOCLINUX`; as chamadas de montagem continuam liberadas); `/dev` mínimo na visão do Docker, no lugar do `/dev` do host; cgroup namespace e cgroup2 próprio, no lugar do `/sys/fs/cgroup` do host; paliativo dos arquivos: os segredos e os caminhos de `file-deny` que existem quando o Docker sobe chegam vazios e em somente leitura aos contêineres, menos os que o agente criou; testes que reproduzem os achados. Limite escrito na proposta: uma cobertura por montagem cai para um contêiner privilegiado |
+| 70 | `add-ebpf-docker-policy` | A propor | Binário `sandmux-helper` como serviço root, que só restringe cgroups do usuário que pede; BPF LSM filtrado pelo cgroup `sandmux-docker-<id>.slice`, com a política de arquivos da pasta (segredos escondidos, `file-deny` e `file-allow`, `.git/commondir`) e o registro de arquivos dos contêineres; regras sobre o que pode ser montado; ativação automática, com recuo para o nível do change 69; regra marcada como obrigatória ou opcional |
+
+Verificações: as listadas em "Decisões ainda não tomadas" (seção 6), e os dois achados, que vêm da leitura do código e ainda não foram testados.
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
 
 | Item | Conteúdo |
 |---|---|
-| Backend eBPF | Binário `sandmux-helper` como serviço root; observação de arquivos e rede no kernel; regras exclusivas marcadas como obrigatórias ou opcionais; ativação automática com recuo para o nível sem privilégio |
+| Backend eBPF | Binário `sandmux-helper` como serviço root; observação de arquivos e rede no kernel; regras exclusivas marcadas como obrigatórias ou opcionais; ativação automática com recuo para o nível sem privilégio. Priorizado pelo usuário em 2026-11-16, como capacidade nova e não como otimização: a primeira regra exclusiva é o confinamento do Docker privado (change 70, etapa 14), depois do endurecimento sem privilégio (change 69). A observação da rede no kernel fica sem uso por enquanto, porque o Docker privado já passa pelo gateway. As outras lacunas que o backend fecharia estão em "Outras lacunas do backend eBPF", abaixo da tabela |
 | Keyring | Keyring do sistema como backend do cofre; permite desbloqueio sem digitar a senha. Priorizado pelo usuário em 2026-11-15: change 47, só com a senha do cofre no keyring, ligado por comando |
 | OAuth e mais provedores | Login por assinatura, com reescrita da resposta de login e encaminhamento da porta de retorno; provedores além do OpenRouter. A captura dos tokens do Claude Code veio no change 43 (sem a porta de retorno: o código é colado). O login do Google do Antigravity CLI (change 63) sai do sandbox no change 66, importado do host ou capturado. Também em aberto: o gateway de modelos de empresa do `agy` (`AGY_LLM_GATEWAY_URL`), que poderia levar o `agy` ao OpenRouter |
 | Validação de prompt injection | Inspeção do conteúdo que vem da internet e do input do usuário; depende de ampliar a decifração de TLS |
@@ -490,6 +501,28 @@ Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
 | Importação sincronizada | Trazer o que é novo a cada execução, sem rodar o `import` |
 | Binários para `aarch64` | Release também para ARM 64 bits; precisa de um toolchain cruzado de musl. A primeira release (change 23) é só `x86_64` |
 | Pasta atual do shell no modal de comando | Mandar ao modelo a pasta em que o shell da aba está, lida do processo em primeiro plano do PTY, no lugar da pasta de trabalho (change 22). Priorizado pelo usuário em 2026-11-15: change 56 |
+
+### Outras lacunas do backend eBPF
+
+Levantadas pelo agente em 2026-11-17, a pedido do usuário, pela leitura das specs e pelo que o agente conhece do kernel. Nada foi testado, e nenhuma tem change. Ficam além do confinamento do Docker privado (change 70) e das coberturas que caem para um contêiner privilegiado (seção 6).
+
+| Lacuna de hoje | O que o eBPF daria | Ressalva |
+|---|---|---|
+| Não há registro do que o agente executa. O registro de arquivos cobre `open`, `openat`, `openat2` e `creat`, e só nas pastas do agente; um `curl` de `/usr/bin` não deixa linha | Um registro de execuções, com o binário e os argumentos, pelo gancho de execução do kernel | Só observa. Seria uma regra opcional |
+| O registro de rede não diz qual processo abriu a conexão | O processo de cada conexão, para separar a chamada de inferência do harness de um `curl` lançado por uma ferramenta | Entregar a chave real só ao binário do harness também ficaria possível, mas só sobe a barra: o agente pode depurar o harness dentro do sandbox |
+| Ferramentas que montam (bubblewrap, podman sem root) não rodam no sandbox, porque um processo sob Landlock não monta nada | A política de arquivos decidida pelo arquivo, e não pelo caminho, que deixa de depender de proibir montagens | A mais cara: exige marcar árvores de pastas no kernel |
+| O Ubuntu 24.04 com o kernel 6.8 fica de fora, por faltar o escopo de sockets abstratos e de sinais do Landlock | Os dois escopos em BPF LSM. Seria uma regra obrigatória: nessa máquina a aba só subiria com eBPF | Depende de o `bpf` estar entre os LSMs ativos do 24.04 (a verificar, seção 6) |
+| A interceptação de arquivos do próprio agente custa de 3,1x a 3,5x em leitura em massa e depende de emulação (tradução do `/proc/self`, namespaces aninhados, `lsof` limitado) | A decisão e o registro dentro do kernel, sem ida e volta ao supervisor | É a otimização, o motivo original deste item, que o usuário deixou em segundo plano em 2026-11-16 |
+
+Sugestão do agente, ainda não decidida pelo usuário: depois do change 70, o registro de execuções e o processo de cada conexão. Os dois usam a mesma base do change 70 (programas presos ao cgroup e uma fila de eventos) e só observam.
+
+O que parece caso de eBPF e não é:
+
+- **Regra de rede nova não corta as conexões abertas, e conexão longa só aparece no registro quando termina:** o gateway termina as duas pontas e pode resolver os dois sozinho.
+- **SNI vazio atrás de uma CDN:** sem o nome, nenhum mecanismo sabe o domínio.
+- **Aberturas com `O_PATH` fora do registro, e o nome do segredo aparecendo no `ls`:** pelo que o agente conhece, o kernel não tem gancho para nenhum dos dois.
+- **Superfície do kernel exposta** (drivers de GPU, Docker): o eBPF não corrige falha de kernel.
+- **Tetos de memória e de processos numa máquina sem systemd de usuário:** dependem do auxiliar root (`sandmux-helper`), e não do eBPF.
 
 ## 6. Riscos e pontos em aberto
 
@@ -533,6 +566,10 @@ Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
 ### Riscos conhecidos e aceitos
 
 - Um contêiner do Docker privado roda com o seccomp do Docker e no user namespace do `rootlesskit`, e não com o Landlock e o seccomp do sandmux. A visão de arquivos é a mesma do sandbox, o que protege credenciais e o resto do HOME. O user namespace sem privilégio impede `bpf`, módulos e montagens no host. Registrado pelo agente no change 24 (2026-11-13), sob a autorização do usuário de seguir sem parar; pode ser revisto.
+- **Achado em 2026-11-16, na exploração do backend eBPF; ainda não testado nem aceito:** as regras de arquivo que só o supervisor de aberturas aplica não valem para o Docker privado. O `exec_view` do lançador sobe o `dockerd` sem Landlock, sem seccomp e sem o supervisor, e a visão do Docker monta a pasta de trabalho com um bind comum, só com a proteção do `.git`. Pela leitura do código, um contêiner com a pasta de trabalho montada (`docker run -v $PWD:/w ...`) abre os arquivos com cara de segredo que o agente não abre (`.env`, `*.pem`), ignora `file-deny` e `file-allow`, pode criar `.git/commondir` (a brecha fechada no change 16) e não deixa linha no registro de arquivos. A rede não tem essa lacuna: o Docker já passa pelo gateway (change 10). A spec `file-policy`, os testes de `docker.rs` e os limites de `docs/docker.md` não tratam do caso. Falta confirmar com um teste: um `.env` criado no host e lido por um contêiner. A correção em estudo é o backend eBPF (seção 5): BPF LSM filtrado pelo cgroup `sandmux-docker-<id>.slice`, carregado pelo `sandmux-helper`; as decisões pendentes estão em "Decisões ainda não tomadas".
+- **Achado em 2026-11-16, na mesma exploração; ainda não testado nem aceito:** a visão do Docker privado monta o `/dev` do host inteiro, com escrita e com as montagens de dentro dele (`compose_docker_view`), enquanto o sandbox do agente tem um `/dev` mínimo. Pela leitura do código e das permissões da máquina de referência, um contêiner com `-v /dev:/d` alcança o que o usuário alcança: os pseudoterminais dos outros terminais do usuário em `/dev/pts` (ler disputa as teclas digitadas, escrever põe texto na tela), a câmera (`/dev/video0`) e o áudio (`/dev/snd`), pela ACL do usuário e sem a opção `window`, e o `/dev/shm` do host. Corrigível sem eBPF, com um `/dev` mínimo na visão, como o do sandbox.
+- **Achado em 2026-11-16, ao propor o change 69; ainda não testado nem aceito:** a visão do Docker privado monta o `/sys/fs/cgroup` do host com escrita, enquanto o sandbox do agente tem o `/sys` em somente leitura. Pela leitura do código, um contêiner com `-v /sys/fs/cgroup:/c` pode aumentar o teto de memória da própria slice ou matar outros cgroups do usuário, que são dele. Entra no change 69, com um cgroup namespace.
+- **Achado em 2026-11-16, ao propor o change 69; a regra do kernel foi testada, o caminho pelo Docker não:** as proteções da visão do Docker feitas por montagem por cima (o somente-leitura de `.git/hooks` e `.git/config`, as coberturas de `/etc` e as coberturas novas do change 69) caem para um contêiner com `CAP_SYS_ADMIN` no user namespace do Docker (`--privileged`). Num teste em namespace próprio, um mount namespace do mesmo user namespace tirou o somente-leitura de um bind e desmontou a cobertura de um arquivo; num user namespace filho, as duas operações foram recusadas, porque as montagens ficam trancadas. O caso mais sério é o `.git`: um hook gravado assim roda no host quando o usuário usa o git. O sandbox do agente não tem esse caminho, porque nega as chamadas de montagem. Filtrar a API do Docker não resolve: o agente chega à raiz da visão por outros caminhos, como o socket do `containerd`. As saídas são trancar a visão (montá-la num user namespace acima do que o `dockerd` usa) ou o eBPF; a decisão está em "Decisões ainda não tomadas".
 - No modo aberta, o conteúdo da pasta de trabalho pode ser enviado para qualquer domínio fora da denylist. A defesa é o registro, o destaque de domínio novo e o bloqueio rápido.
 - Com a rede local liberada, serviços locais sem senha ficam ao alcance do agente.
 - No MCP de banco, a proteção depende das permissões do usuário cadastrado no banco.
@@ -582,7 +619,30 @@ Os changes abaixo foram arquivados em 2026-11-15 por decisão do usuário, antes
 
 ### Decisões ainda não tomadas
 
-Nenhuma no momento. A última, o `--rw` sobre arquivos que o host executa (achado do change 3), foi decidida pelo usuário em 2026-11-15: recusar (change 40).
+A última decisão antiga, o `--rw` sobre arquivos que o host executa (achado do change 3), foi decidida pelo usuário em 2026-11-15: recusar (change 40).
+
+Em aberto desde a exploração do backend eBPF (2026-11-16). Nela o usuário escolheu a direção: o eBPF entra para dar uma capacidade nova, e não desempenho, e essa capacidade é confinar o Docker privado e outros processos que rodam fora do Landlock por precisarem montar. O achado que motiva isso está em "Riscos conhecidos e aceitos".
+
+Decidido pelo usuário em 2026-11-16: o confinamento do Docker privado cobre os arquivos e as chamadas de sistema, e não só os arquivos; e o trabalho se divide em dois changes (69 e 70, etapa 14). O motivo da divisão é um achado do agente: a paridade de chamadas de sistema e a de dispositivos não precisam de eBPF. Um filtro seccomp comum, instalado pelo `exec_view` antes do `dockerd`, é herdado por todo contêiner, mesmo com `--privileged` ou `--security-opt seccomp=unconfined`. Só as chamadas de montagem ficam de fora dele, porque o `dockerd` e o `runc` precisam delas.
+
+| Decisão | Opções |
+|---|---|
+| Máquina sem eBPF | O Docker privado sobe só com o endurecimento do change 69, com aviso (regra opcional), ou não sobe (regra obrigatória) |
+| Trancar a visão do Docker | Um change próprio antes do change 70, sem privilégio, que monta a visão num user namespace acima do que o `dockerd` usa, para as coberturas e a proteção do `.git` resistirem a um contêiner privilegiado em toda máquina (mexe na ordem dos namespaces, na rede e talvez na publicação de portas; precisa de uma prova antes); ou deixar para o eBPF, que decide pelo arquivo e não depende de montagem, e aceitar o limite nas máquinas sem eBPF |
+
+A verificar ao propor:
+
+- os padrões de nome (`*.pem`, `.env.*`) dentro do BPF, e a regra de que o agente vê os segredos que ele criou;
+- se o chaveiro de sessão do usuário fica ao alcance de um contêiner sem o seccomp do Docker;
+- `bpf` na lista de LSMs ativos do Debian 13, do Fedora e do Arch. Na máquina de referência (kernel 7.0) está ativo, com cgroup v2 e BTF, e o BPF sem privilégio está desligado;
+- `bpf` na lista de LSMs ativos do Ubuntu 24.04 com o kernel 6.8, do qual depende levar o sandbox a essa versão (seção 5, "Outras lacunas do backend eBPF");
+- como rodar os testes que exigem root, fora do `check.sh`.
+
+As verificações do change 69 estão nas tarefas dele, cada uma com o recuo escrito no design: o filtro seccomp sem `no_new_privs` (que quebraria o `sudo` dentro dos contêineres), o `runc` com o chaveiro negado, com o `/dev` mínimo e dentro do cgroup namespace.
+
+Decidido pelo usuário em 2026-11-16, ao propor o change 69: o paliativo de cobrir por montagem os segredos que existem quando o Docker sobe entra no change 69, e o fechamento dos cgroups também.
+
+Descartados na exploração, com o motivo: Landlock no Docker (um processo sob Landlock não monta nada); seccomp user notify no Docker (o supervisor resolve caminhos numa raiz só, e cada contêiner tem a sua); fanotify com permissão (a marca de montagem não segue os binds dos contêineres, e a de filesystem pesa no host inteiro).
 
 As demais decisões levantadas até 2026-11-13 estão resolvidas e registradas nas seções 2 e 4.
 
@@ -625,7 +685,7 @@ Novas decisões em aberto que surgirem ao propor um change devem ser anotadas aq
 | Toda aba com sandbox | Changes 1, 2 e 5 |
 | Validação de prompt injection | Pós-v1 |
 | Seguro por padrão, mínimo atrito | Baseline embutida (change 1) e camadas de política (change 3) |
-| eBPF como otimização, com recuo | Pós-v1; detecção de nível no change 23 |
+| eBPF como otimização, com recuo | Pós-v1; detecção de nível no change 23; a primeira regra exclusiva, o confinamento do Docker privado, no change 70 (a propor) |
 | `sudo` na instalação | Change 23 |
 | Ferramentas comuns de desenvolvedor, como o Docker (pedido de 2026-11-12) | Change 24 (Docker privado), change 1 (instalações globais) e change 25 (`gh` e registries privados) |
 | Preset do Antigravity CLI do Google, o `agy` (pedido de 2026-11-15) | Change 63 |
