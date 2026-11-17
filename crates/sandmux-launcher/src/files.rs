@@ -389,15 +389,7 @@ impl Logger {
     }
 }
 
-/// Hash estável de uma pasta de trabalho, para os arquivos por pasta.
-fn dir_hash(p: &Path) -> String {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in p.as_os_str().as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x0100_0000_01b3);
-    }
-    format!("{h:016x}")
-}
+use sandmux_spec::files::dir_hash;
 
 /// A política de arquivos ao vivo, os criados pelo agente e os caminhos
 /// conhecidos da pasta de trabalho.
@@ -413,18 +405,17 @@ struct Live {
 impl Live {
     fn new(spec: Option<&FilesSpec>) -> Live {
         let created_file = spec.and_then(|s| {
-            s.state_dir.as_ref().map(|d| {
-                d.join("created")
-                    .join(format!("{}.json", dir_hash(&s.workdir)))
-            })
+            s.state_dir
+                .as_ref()
+                .map(|d| sandmux_spec::files::created_file(d, &s.workdir))
         });
-        let created = created_file
-            .as_ref()
-            .and_then(|f| std::fs::read(f).ok())
-            .and_then(|b| serde_json::from_slice::<Vec<PathBuf>>(&b).ok())
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
+        let created = spec
+            .and_then(|s| {
+                s.state_dir
+                    .as_ref()
+                    .map(|d| sandmux_spec::files::read_created(d, &s.workdir))
+            })
+            .unwrap_or_default();
         Live {
             policy: spec.map(|s| s.policy.clone()).unwrap_or_default(),
             file: spec.and_then(|s| s.policy_file.clone()),

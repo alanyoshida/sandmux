@@ -16,14 +16,27 @@ Every daemon session receives the socket at `/run/sandmux/docker.sock`, with `DO
 
 - the system, read-only, with the sensitive files of `/etc` covered;
 - the work folder, writable and with the `.git` protection (hooks and config read-only);
-- the inbox folder, read-only.
+- the inbox folder, read-only;
+- the sandbox's `/dev`: the `null`, `zero`, `full`, `random`, `urandom` and `tty` nodes, its own pseudo-terminals and its own `/dev/shm`. The GPU and `/dev/kvm` enter according to the `gpu` and `kvm` keys of the folder's [configuration](config.md), without the sessions' `run` options.
 
 These do not enter:
 
 - the HOME, neither the real nor the synthetic one, and therefore `~/.ssh`, `~/.aws` and `~/.cache`;
-- the extra folders from the sessions' `--ro` and `--rw`, because the Docker belongs to the folder and each session may have different options.
+- the extra folders from the sessions' `--ro` and `--rw`, because the Docker belongs to the folder and each session may have different options;
+- the host's other devices: the user's terminals, the camera, audio, `/dev/net/tun` and `/dev/fuse`. A `--device` for one of them fails, because the device does not exist in the view, and a `-v /dev:/d` shows only the `/dev` above.
 
 A path outside the view fails or arrives empty in the container, even when reached through a symbolic link planted in the work folder. To give a container a file from outside, put it inside the work folder.
+
+## Secrets and denied paths
+
+Containers do not go through the sandbox's open supervisor ([files.md](files.md)). So that a `-v $PWD:/w` does not read what the agent does not read, the folder's Docker, when it starts, walks the work folder with the same file policy and covers:
+
+- the secret-looking files, except those the agent itself created;
+- the `file-deny` files and folders; a denied folder is covered whole.
+
+A covered path reaches the container empty and read-only, and the host's file does not change. `file-allow` and `secret-files-off` apply as they do for the agent. The policy used is the folder's configuration, without the sessions' tab layer, like the caps and the devices.
+
+With more than 4096 paths to cover, the private Docker does not start, and every `docker` shows the count and the cap. Shorten the list with `secret-files-off` or `file-allow` in the folder's configuration.
 
 ## When it starts and when it stops
 
@@ -77,7 +90,8 @@ sudo apt install docker-registry
 
 Each folder's Docker, with all its containers, runs in its own systemd slice (`sandmux-docker-<id>.slice`) with that folder's memory and process caps, resolved by the [configuration](config.md) and separate from each session's caps. A container that goes over the cap is killed, and the Docker keeps running.
 
-- **Why a slice:** rootless `dockerd` runs without managing cgroups (`Cgroup Driver: none`). runc puts each container in a cgroup next to the Docker's scope, in its parent. A cap only on the scope would leave the containers out; in the slice, the scope and the containers are inside.
+- **Why a slice:** the cap sits above everything the containers see. The Docker runs in its own cgroup namespace, whose root is its scope (`sandmux: docker <folder>`), inside the slice: `dockerd` and the other processes stay in the `motor` subgroup, and runc creates each container next to it. A container with `-v /sys/fs/cgroup:/c` sees only the scope and the folder's Docker cgroups; it does not see the slice with the cap, nor `user.slice`, nor the sessions' and the daemon's cgroups. The scope has no cap of its own, because the containers reach it.
+- **Without caps:** on a machine without the systemd user manager, the Docker runs in the same cgroup namespace, rooted at the cgroup it starts in, and the containers do not see the rest of the tree.
 - **Who dies at the cap:** the containers' processes get `oom_score_adj` 900, and `dockerd`, `containerd` and the shims keep the session's value. That way, when the folder goes over the cap, the kernel kills a container, not the Docker. What does this is a `runc` of the Docker view itself, at the front of the `PATH`: it raises the value before creating the container and puts it in the container's `config.json`, because rootless `dockerd` writes the session's value there. One container may be taken along when the cap is exceeded.
 - **`docker run -m`:** does not limit a container by itself; the cap that applies is the folder's.
 - **End:** the slice is stopped together with the folder's Docker. Those left empty, from a daemon that was brought down, are stopped when the daemon starts again.
@@ -98,7 +112,20 @@ Without them, the session starts normally, and every `docker` shows:
 Error response from daemon: the private Docker is not available on this machine: <what is missing>; see `sandmux doctor`
 ```
 
+## Denied system calls
+
+`dockerd` starts with a sandmux seccomp filter, and every process of the folder's Docker inherits it: `containerd`, `runc` and every container. An inherited filter cannot be removed, so it also applies with `--privileged` and with `--security-opt seccomp=unconfined`, which only stop adding Docker's own filter.
+
+- **Denied, with `EPERM`:** the same ones the agent's sandbox denies, minus the mount calls: `bpf`, `perf_event_open`, module loading, `kexec`, `userfaultfd`, `io_uring` and the `ioctl`s `TIOCSTI` and `TIOCLINUX`, which inject keys into the terminal.
+- **Kernel keyring, with `ENOSYS`:** `keyctl`, `add_key` and `request_key` answer as if the kernel had no keyring. It is the only error `runc` accepts when creating a container; with any other, no container starts.
+- **Allowed:** the mount calls, because `dockerd` and `runc` mount each container's root.
+- **Setuid:** the filter does not turn on `no_new_privs`, and the images' `su` and `sudo` work.
+
 ## Limits
 
-- A container runs with Docker's seccomp and in the `rootlesskit` user namespace, not with sandmux's Landlock and seccomp. The file view is the same as the sandbox's, and the unprivileged user namespace prevents `bpf`, modules and mounts on the host.
+- A container runs in the `rootlesskit` user namespace, without sandmux's Landlock and without its open supervisor. What limits it is the file view, the seccomp filter above and the unprivileged user namespace, which prevents modules and mounts on the host.
 - `--privileged` gives no real privilege: the container's root is the user, mapped.
+- A container that needs a host device outside the list, such as a VPN with `/dev/net/tun` or a file system with `/dev/fuse`, does not work in the private Docker.
+- **Covers fall to a privileged container.** With `--privileged`, a container has `CAP_SYS_ADMIN` in the user namespace where the view was mounted, and can unmount a cover or remove the read-only flag from a bind. This applies to the covered secrets and denied paths and to the `.git` protection (hooks and config read-only). An ordinary container cannot.
+- **Files created later are not covered.** A secret created in the folder with the Docker already running, or a change in the file policy, only applies when the folder's Docker starts again (after `sandmux daemon restart`, or when the folder's last session ends).
+- **Without the rest of the file policy:** containers have no file log, no live policy and no `.git/commondir` refusal.

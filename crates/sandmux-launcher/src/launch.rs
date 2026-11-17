@@ -629,11 +629,20 @@ fn command_process(spec: &LaunchSpec, err_w: &OwnedFd, files_w: &OwnedFd) -> ! {
 }
 
 /// Modo de visão: monta a raiz da especificação no mount namespace atual e
-/// executa o comando, sem criar namespaces, sem Landlock e sem seccomp. É
-/// chamado dentro de um user namespace que já confina o processo (o do
-/// `rootlesskit`, no Docker privado): o que limita o comando é a visão de
-/// arquivos.
+/// executa o comando, sem criar namespaces e sem Landlock. É chamado dentro
+/// de um user namespace que já confina o processo (o do `rootlesskit`, no
+/// Docker privado): o que limita o comando é a visão de arquivos e o filtro
+/// seccomp da especificação.
+///
+/// O filtro é instalado sem `no_new_privs`, o que o kernel aceita porque o
+/// processo tem `CAP_SYS_ADMIN` no próprio user namespace. Ele passa a todos
+/// os descendentes e não pode ser removido: vale para todo contêiner, mesmo
+/// com `--privileged` ou `seccomp=unconfined`. O `no_new_privs` ficaria
+/// herdado também, e quebraria o `su` e o `sudo` dentro dos contêineres.
 pub fn exec_view(spec: &LaunchSpec) -> LaunchError {
+    if let Err(e) = seccomp::build(&spec.seccomp) {
+        return LaunchError::Setup(e);
+    }
     // A rede antes da raiz nova, com o /dev/net/tun do host à vista: o TUN
     // vai para o daemon, que roda o gateway do Docker.
     if let Some(sock) = spec.network.as_ref().and_then(|n| n.tun_socket.as_ref()) {
@@ -692,6 +701,14 @@ pub fn exec_view(spec: &LaunchSpec) -> LaunchError {
                 .map(|v| to_c(format!("{}={}", v.name, v.value).as_bytes())),
         )
         .collect();
+    // Por último, depois das montagens: o filtro não nega montagem, mas assim
+    // nada da preparação passa por ele.
+    if let Err(e) = seccomp::install(&spec.seccomp) {
+        return LaunchError::Setup(sandmux_spec::trf!(
+            "falha ao instalar o filtro seccomp da visão: {e}",
+            "failed to install the view's seccomp filter: {e}"
+        ));
+    }
     let err = nix::unistd::execve(&prog_c, &argv, &envp).unwrap_err();
     LaunchError::Exec(sandmux_spec::trf!(
         "executar {}: {err}",

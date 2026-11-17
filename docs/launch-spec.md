@@ -37,6 +37,7 @@ O lançador lê o descritor até o fim, fecha e valida o conteúdo antes de cria
 | `landlock.write` | Caminhos com todos os acessos |
 | `seccomp.deny_syscalls` | Chamadas de sistema que devolvem erro de permissão |
 | `seccomp.deny_ioctls` | Comandos de `ioctl` que devolvem erro de permissão (`TIOCSTI`, `TIOCLINUX`) |
+| `seccomp.enosys_syscalls` | Opcional. Chamadas de sistema que devolvem `ENOSYS`, como se o kernel não as tivesse. Um nome nesta lista e em `deny_syscalls` fica com `ENOSYS`. Usado na visão do Docker para o chaveiro do kernel, porque o `runc` só aceita esse erro |
 | `env` | Ambiente completo do comando, como lista de `{name, value}`. Nada é herdado |
 | `command` | Programa e argumentos |
 | `cwd` | Pasta em que o comando começa, dentro do sandbox |
@@ -56,6 +57,8 @@ Em todas, `dest` é o caminho dentro do sandbox. `source`, `lower` e os caminhos
 | `symlink` | `dest`, `target` | Link simbólico criado na raiz nova |
 | `proc` | `dest` | `/proc` novo, do pid namespace do sandbox |
 | `devpts` | `dest` | Instância nova de pseudoterminais |
+| `sysfs` | `dest` | `/sys` novo, em somente leitura, do namespace de rede de quem monta (visão do Docker) |
+| `cgroup2` | `dest` | cgroup2 novo, com escrita, cuja raiz é a do cgroup namespace de quem monta. Só funciona dentro de um cgroup namespace próprio (visão do Docker) |
 
 A camada de um `overlay` é `{"kind": "persistent", "upper": ..., "work": ...}`, guardada no host e mantida entre execuções, ou `{"kind": "temporary"}`, guardada em memória e descartada quando o sandbox termina.
 

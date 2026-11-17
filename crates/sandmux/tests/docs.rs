@@ -167,6 +167,15 @@ fn documentacao_do_docker_acompanha_o_codigo() {
         "não está disponível nesta máquina",
         "Registries privados",
         "--tool docker",
+        "seccomp=unconfined",
+        "ENOSYS",
+        "/dev/kvm",
+        "/dev/fuse",
+        "cgroup namespace",
+        sandmux::docker::EVACUATE_CGROUP,
+        "secret-files-off",
+        &sandmux_policy::MAX_DOCKER_COVERS.to_string(),
+        "--privileged",
     ] {
         assert!(doc.contains(c), "docs/docker.md não cita {c}");
     }

@@ -5,11 +5,9 @@ use common::*;
 
 use std::process::{Command, Stdio};
 
-/// `sandmux-run --view-file` dentro de um user namespace com mount e pid
-/// namespaces novos, como o filho do `rootlesskit`.
-#[test]
-fn modo_de_visao_monta_so_a_visao() {
-    if Command::new("unshare")
+/// O `unshare` com user namespace funciona nesta máquina.
+fn unshare_ok() -> bool {
+    let ok = Command::new("unshare")
         .args([
             "--user",
             "--map-root-user",
@@ -19,39 +17,20 @@ fn modo_de_visao_monta_so_a_visao() {
             "true",
         ])
         .status()
-        .map(|s| !s.success())
-        .unwrap_or(true)
-    {
+        .is_ok_and(|s| s.success());
+    if !ok {
         eprintln!("pulado: unshare sem user namespace");
-        return;
     }
-    let base = tempfile::tempdir().unwrap();
-    let base = base.path().canonicalize().unwrap();
-    let work = base.join("proj");
-    let dados = base.join("dados");
-    std::fs::create_dir_all(&work).unwrap();
-    std::fs::create_dir_all(&dados).unwrap();
-    std::fs::write(work.join("a"), "projeto\n").unwrap();
-    let host = sandmux_policy::Host::detect().unwrap();
-    let script = format!(
-        "cat {w}/a; echo x > {w}/b && echo gravou; echo y > {d}/c && echo dados; test -e {h} && echo home-visivel || echo home-fora; test -e /proc/1/status && echo proc; echo $ROOTLESSKIT_STATE_DIR",
-        w = work.display(),
-        d = dados.display(),
-        h = host.home.join(".ssh").display()
-    );
-    let spec = sandmux_policy::compose_docker_view(
-        &host,
-        &work,
-        std::slice::from_ref(&dados),
-        vec!["/bin/sh".into(), "-c".into(), script],
-        vec![("PATH".into(), "/usr/bin:/bin".into())],
-        None,
-        None,
-    )
-    .unwrap();
+    ok
+}
+
+/// Roda a especificação da visão com `sandmux-run --view-file`, dentro de um
+/// user namespace com mount e pid namespaces novos, como o filho do
+/// `rootlesskit`.
+fn run_view(base: &Path, spec: &sandmux_spec::LaunchSpec) -> std::process::Output {
     let file = base.join("view.json");
     std::fs::write(&file, spec.to_json()).unwrap();
-    let out = Command::new("unshare")
+    Command::new("unshare")
         .args([
             "--user",
             "--map-root-user",
@@ -66,14 +45,163 @@ fn modo_de_visao_monta_so_a_visao() {
         .env("ROOTLESSKIT_STATE_DIR", "/rk")
         .stdin(Stdio::null())
         .output()
-        .unwrap();
+        .unwrap()
+}
+
+/// O filtro seccomp da visão: as chamadas que o sandbox nega devolvem erro
+/// (o chaveiro, `ENOSYS`), e as de montagem continuam funcionando.
+#[test]
+fn modo_de_visao_nega_as_chamadas_do_sandbox() {
+    if !unshare_ok() {
+        return;
+    }
+    let base = tempfile::tempdir().unwrap();
+    let base = base.path().canonicalize().unwrap();
+    let work = base.join("proj");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::copy(PROBE, work.join("probe")).unwrap();
+    let host = sandmux_policy::Host::detect().unwrap();
+    let script = format!(
+        "P={w}/probe; for c in bpf perf_event_open userfaultfd io_uring_setup keyctl add_key; do $P syscall $c; done; $P ioctl TIOCSTI; mkdir -p /tmp/m && mount -t tmpfs none /tmp/m && echo montou",
+        w = work.display()
+    );
+    let spec = sandmux_policy::compose_docker_view(
+        &host,
+        &work,
+        &[],
+        vec!["/bin/sh".into(), "-c".into(), script],
+        vec![("PATH".into(), "/usr/bin:/bin:/usr/sbin:/sbin".into())],
+        None,
+        None,
+        &sandmux_policy::DockerView::default(),
+    )
+    .unwrap();
+    let out = run_view(&base, &spec);
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(
         out.status.success(),
         "{s}\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(s, "projeto\ngravou\ndados\nhome-fora\nproc\n/rk\n");
+    // Uma linha por tentativa, na ordem do script.
+    let got: Vec<Option<i64>> = s
+        .lines()
+        .filter(|l| l.starts_with('{'))
+        .map(|l| errno(&serde_json::from_str(l).unwrap()))
+        .collect();
+    let (eperm, enosys) = (Some(libc::EPERM as i64), Some(libc::ENOSYS as i64));
+    let want = [
+        ("bpf", eperm),
+        ("perf_event_open", eperm),
+        ("userfaultfd", eperm),
+        ("io_uring_setup", eperm),
+        ("keyctl", enosys),
+        ("add_key", enosys),
+        ("TIOCSTI", eperm),
+    ];
+    assert_eq!(got.len(), want.len(), "{s}");
+    for ((c, w), g) in want.iter().zip(&got) {
+        assert_eq!(g, w, "{c}: {s}");
+    }
+    assert!(s.contains("montou"), "{s}");
+}
+
+/// As coberturas da visão: o `.env` chega vazio e em somente leitura, a
+/// pasta negada chega vazia, o arquivo do host não muda, e uma cobertura cujo
+/// destino sumiu é pulada.
+#[test]
+fn modo_de_visao_cobre_segredos() {
+    if !unshare_ok() {
+        return;
+    }
+    let base = tempfile::tempdir().unwrap();
+    let base = base.path().canonicalize().unwrap();
+    let work = base.join("proj");
+    std::fs::create_dir_all(work.join("privado")).unwrap();
+    std::fs::write(work.join(".env"), "SEGREDO=1\n").unwrap();
+    std::fs::write(work.join(".env.example"), "SEGREDO=\n").unwrap();
+    std::fs::write(work.join("privado/a.txt"), "x").unwrap();
+    let host = sandmux_policy::Host::detect().unwrap();
+    let script = format!(
+        "cd {w}; echo env=$(wc -c < .env); echo exemplo=$(wc -c < .env.example); echo y > .env 2>/dev/null && echo gravou || echo nao-gravou; echo privado=$(ls privado | wc -l); touch privado/b 2>/dev/null && echo criou || echo nao-criou",
+        w = work.display()
+    );
+    let spec = sandmux_policy::compose_docker_view(
+        &host,
+        &work,
+        &[],
+        vec!["/bin/sh".into(), "-c".into(), script],
+        vec![("PATH".into(), "/usr/bin:/bin".into())],
+        None,
+        None,
+        &sandmux_policy::DockerView {
+            covers: vec![work.join(".env"), work.join("privado"), work.join("sumiu")],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let out = run_view(&base, &spec);
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{s}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        s,
+        "env=0\nexemplo=9\nnao-gravou\nprivado=0\nnao-criou\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(work.join(".env")).unwrap(),
+        "SEGREDO=1\n"
+    );
+    assert!(work.join("privado/a.txt").exists() && !work.join("privado/b").exists());
+}
+
+#[test]
+fn modo_de_visao_monta_so_a_visao() {
+    if !unshare_ok() {
+        return;
+    }
+    let base = tempfile::tempdir().unwrap();
+    let base = base.path().canonicalize().unwrap();
+    let work = base.join("proj");
+    let dados = base.join("dados");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::create_dir_all(&dados).unwrap();
+    std::fs::write(work.join("a"), "projeto\n").unwrap();
+    let host = sandmux_policy::Host::detect().unwrap();
+    let script = format!(
+        "cat {w}/a; echo x > {w}/b && echo gravou; echo y > {d}/c && echo dados; test -e {h} && echo home-visivel || echo home-fora; test -e /proc/1/status && echo proc; echo $ROOTLESSKIT_STATE_DIR; echo pts=$(ls /dev/pts); test -e /dev/fuse -o -e /dev/net/tun -o -e /dev/snd && echo dispositivos-do-host || echo dev-minimo",
+        w = work.display(),
+        d = dados.display(),
+        h = host.home.join(".ssh").display()
+    );
+    let spec = sandmux_policy::compose_docker_view(
+        &host,
+        &work,
+        std::slice::from_ref(&dados),
+        vec!["/bin/sh".into(), "-c".into(), script],
+        vec![("PATH".into(), "/usr/bin:/bin".into())],
+        None,
+        None,
+        &sandmux_policy::DockerView::default(),
+    )
+    .unwrap();
+    let out = run_view(&base, &spec);
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{s}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Um devpts novo só tem o `ptmx`: nenhum terminal do host.
+    assert_eq!(
+        s,
+        "projeto\ngravou\ndados\nhome-fora\nproc\n/rk\npts=ptmx\ndev-minimo\n"
+    );
     assert!(work.join("b").exists() && dados.join("c").exists());
 }
 
@@ -255,6 +383,215 @@ docker compose down >/dev/null 2>&1; echo COMPOSE-FIM"
     limpar(&e);
 }
 
+/// Imagem `sp` com o busybox e a sonda, setuid de root. A sonda é dinâmica:
+/// os contêineres montam as bibliotecas do sistema da visão (`LIBS`).
+fn imagem_com_sonda(e: &Env) {
+    let d = e.work.join("sp");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::copy("/usr/bin/busybox", d.join("busybox")).unwrap();
+    std::fs::copy(PROBE, d.join("probe")).unwrap();
+    // O `COPY` do construtor antigo perde o bit setuid: o `chmod` vai no
+    // `RUN`.
+    std::fs::write(
+        d.join("Dockerfile"),
+        "FROM scratch\nCOPY busybox /bin/busybox\nRUN [\"/bin/busybox\",\"--install\",\"-s\",\"/bin\"]\nCOPY probe /probe\nRUN chmod 4755 /probe\n",
+    )
+    .unwrap();
+}
+
+const LIBS: &str = "-v /usr/lib:/lib:ro -v /usr/lib64:/lib64:ro";
+
+/// O filtro seccomp da visão vale num contêiner privilegiado e sem o seccomp
+/// do Docker, e o setuid continua funcionando nos contêineres.
+#[test]
+fn conteiner_privilegiado_herda_o_filtro() {
+    if !docker_ok() {
+        return;
+    }
+    let e = Env::new();
+    imagem_com_sonda(&e);
+    let mut t = term(&e, &e.work, &["run", "shell"]);
+    let s = run_in(
+        &mut t,
+        &e.work,
+        &format!(
+            "DOCKER_BUILDKIT=0 docker build -q -t sp sp >/dev/null && echo BUILD-OK
+docker run --rm --privileged --security-opt seccomp=unconfined {LIBS} sp sh -c 'for c in bpf perf_event_open userfaultfd io_uring_setup keyctl add_key; do /probe syscall $c; done; /probe ioctl TIOCSTI'
+echo SETUID
+docker run --rm --user 1000:1000 {LIBS} sp /probe identity"
+        ),
+    );
+    assert!(s.contains("BUILD-OK"), "{s}");
+    let (antes, depois) = s.split_once("SETUID").unwrap();
+    let got: Vec<Option<i64>> = antes
+        .lines()
+        .filter(|l| l.starts_with('{'))
+        .map(|l| errno(&serde_json::from_str(l).unwrap()))
+        .collect();
+    let (eperm, enosys) = (Some(libc::EPERM as i64), Some(libc::ENOSYS as i64));
+    assert_eq!(
+        got,
+        [eperm, eperm, eperm, eperm, enosys, enosys, eperm],
+        "{s}"
+    );
+    let id = depois
+        .lines()
+        .find(|l| l.starts_with('{'))
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .unwrap_or_else(|| panic!("{s}"));
+    let id: serde_json::Value = serde_json::from_str(id["detail"].as_str().unwrap()).unwrap();
+    assert_eq!(id["uid"], 1000, "{s}");
+    assert_eq!(id["euid"], 0, "o setuid não funcionou no contêiner: {s}");
+    assert_eq!(id["no_new_privs"], "0", "{s}");
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
+}
+
+/// Os contêineres só alcançam o `/dev` mínimo da visão, e o Docker continua
+/// com o overlay do kernel e com terminal nos contêineres.
+#[test]
+fn conteiner_ve_so_o_dev_minimo() {
+    if !docker_ok() {
+        return;
+    }
+    let e = Env::new();
+    let mut t = term(&e, &e.work, &["run", "shell"]);
+    let s = run_in(
+        &mut t,
+        &e.work,
+        &format!(
+            "{IMAGEM}
+echo PTS=$(docker run --rm -v /dev:/d sx ls /d/pts)
+echo DEV=$(docker run --rm -v /dev:/d sx ls /d)
+echo TTY=$(docker run --rm -t sx tty)
+echo DRIVER=$(docker info --format '{{{{.Driver}}}}')"
+        ),
+    );
+    assert!(s.contains("BUILD-OK"), "{s}");
+    assert!(s.contains("PTS=ptmx\n"), "{s}");
+    let dev = s.lines().find_map(|l| l.strip_prefix("DEV=")).unwrap_or("");
+    for d in dev.split_whitespace() {
+        assert!(
+            [
+                "null", "zero", "full", "random", "urandom", "tty", "pts", "ptmx", "shm", "fd",
+                "stdin", "stdout", "stderr", "dri", "kvm"
+            ]
+            .contains(&d)
+                || d.starts_with("nvidia"),
+            "dispositivo do host no contêiner: {d}\n{s}"
+        );
+    }
+    assert!(s.contains("TTY=/dev/pts/"), "{s}");
+    assert!(s.contains("DRIVER=overlay"), "{s}");
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
+}
+
+/// Os segredos do usuário na pasta chegam vazios aos contêineres; o exemplo e
+/// o segredo que o agente criou, não.
+#[test]
+fn conteiner_nao_le_os_segredos_da_pasta() {
+    if !docker_ok() {
+        return;
+    }
+    let e = Env::new();
+    std::fs::write(e.work.join(".env"), "SEGREDO=do-usuario\n").unwrap();
+    std::fs::write(e.work.join(".env.example"), "SEGREDO=\n").unwrap();
+    let mut t = term(&e, &e.work, &["run", "shell"]);
+    let s = run_in(
+        &mut t,
+        &e.work,
+        &format!(
+            "echo do-agente > chave.pem
+{IMAGEM}
+echo ENV=$(docker run --rm -v $PWD:/w sx cat /w/.env)
+echo EXEMPLO=$(docker run --rm -v $PWD:/w sx cat /w/.env.example)
+echo AGENTE=$(docker run --rm -v $PWD:/w sx cat /w/chave.pem)"
+        ),
+    );
+    assert!(s.contains("BUILD-OK"), "{s}");
+    assert!(s.contains("ENV=\n"), "{s}");
+    assert!(s.contains("EXEMPLO=SEGREDO=\n"), "{s}");
+    assert!(s.contains("AGENTE=do-agente\n"), "{s}");
+    assert_eq!(
+        std::fs::read_to_string(e.work.join(".env")).unwrap(),
+        "SEGREDO=do-usuario\n"
+    );
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
+}
+
+/// Com mais coberturas que o teto, o Docker privado não sobe, e o `docker`
+/// mostra a contagem e como reduzir.
+#[test]
+fn segredos_demais_o_docker_nao_sobe() {
+    if !docker_ok() {
+        return;
+    }
+    let e = Env::new();
+    let d = e.work.join("certs");
+    std::fs::create_dir_all(&d).unwrap();
+    for i in 0..=sandmux_policy::MAX_DOCKER_COVERS {
+        std::fs::write(d.join(format!("{i}.pem")), "").unwrap();
+    }
+    let mut t = term(&e, &e.work, &["run", "shell"]);
+    let s = run_in(&mut t, &e.work, "docker ps; echo PS=$?");
+    assert!(
+        s.contains("4097") && s.contains("4096") && s.contains("secret-files-off"),
+        "{s}"
+    );
+    assert!(!s.contains("PS=0"), "{s}");
+    assert_eq!(docker_procs(&e), 0);
+    t.write(b"exit\r");
+    t.wait_exit();
+}
+
+/// Sem os tetos (aqui, sem o `systemd-run` no `PATH` do daemon), o Docker
+/// continua funcionando, e os contêineres só enxergam o cgroup em que ele
+/// roda, nunca a árvore do usuário.
+#[test]
+fn sem_tetos_o_docker_so_ve_o_proprio_cgroup() {
+    if !docker_ok() {
+        return;
+    }
+    let e = Env::new();
+    // Um PATH com tudo de /usr/bin menos o systemd-run.
+    let bin = e.home.join("bin-sem-systemd-run");
+    std::fs::create_dir_all(&bin).unwrap();
+    for f in std::fs::read_dir("/usr/bin").unwrap().flatten() {
+        if f.file_name() != "systemd-run" {
+            let _ = std::os::unix::fs::symlink(f.path(), bin.join(f.file_name()));
+        }
+    }
+    let mut cmd = e.cmd(&e.work, &["run", "shell"]);
+    cmd.env("SHELL", "/bin/bash")
+        .env("PATH", format!("{}:/usr/local/bin", bin.display()));
+    let mut t = Term::spawn(cmd, 160, 40);
+    let s = run_in(
+        &mut t,
+        &e.work,
+        &format!(
+            "{IMAGEM}
+echo CG=$(docker run --rm -v /sys/fs/cgroup:/c sx ls /c)
+docker run --rm sx echo RODOU"
+        ),
+    );
+    assert!(s.contains("BUILD-OK"), "{s}");
+    let cg = s.lines().find_map(|l| l.strip_prefix("CG=")).unwrap_or("");
+    for n in ["user.slice", "init.scope", "system.slice"] {
+        assert!(!cg.split_whitespace().any(|x| x == n), "{n} visível: {s}");
+    }
+    assert!(s.contains("RODOU"), "{s}");
+    let st = stdout(&e.run(&e.work, &["stats", "1"]));
+    assert!(st.contains("Docker privado da pasta: rodando"), "{st}");
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
+}
+
 #[test]
 fn porta_so_no_localhost_teto_e_stats() {
     if !docker_ok() {
@@ -298,6 +635,20 @@ sleep 1; wget -q -O /dev/null http://host.sandmux.internal:{port}/ ; echo WGET=$
         "{st}"
     );
     assert!(st.contains(&format!("80 → 127.0.0.1:{port} (web)")), "{st}");
+
+    // O contêiner só vê os cgroups do Docker da pasta: nem o teto (na slice,
+    // acima do escopo) nem os cgroups do usuário.
+    let s = run_in(
+        &mut t,
+        &e.work,
+        "docker run --rm -v /sys/fs/cgroup:/c sx sh -c 'echo CG=$(ls /c); echo TETO=$(grep -rlx 536870912 /c 2>/dev/null)'",
+    );
+    let cg = s.lines().find_map(|l| l.strip_prefix("CG=")).unwrap_or("");
+    for n in ["user.slice", "init.scope", "app.slice", "session.slice"] {
+        assert!(!cg.split_whitespace().any(|x| x == n), "{n} visível: {s}");
+    }
+    assert!(cg.split_whitespace().any(|x| x == "motor"), "{s}");
+    assert!(s.contains("TETO=\n"), "o teto da pasta está visível: {s}");
 
     // 700M num teto de 512M: o OOM da slice mata o `dd` (137). A alocação é
     // limitada por `ulimit -v`, para nunca passar de ~1 GB se o teto falhar, e

@@ -145,6 +145,9 @@ pub fn dockerd_command(dirs: &Dirs, mirror: Option<u16>) -> Vec<String> {
         "native.cgroupdriver=cgroupfs".into(),
         // Sem barra no começo, o cgroup dos contêineres nasce dentro do cgroup
         // do `dockerd`; o padrão os punha ao lado do escopo, fora do teto.
+        // (O `dockerd` sem root fica com o driver `none`; com o cgroup
+        // namespace, o runc cria cada contêiner na raiz dele, que é o escopo
+        // da pasta, ao lado de [`EVACUATE_CGROUP`].)
         "--cgroup-parent".into(),
         "conteineres".into(),
     ];
@@ -173,9 +176,18 @@ pub fn dockerd_env(dirs: &Dirs) -> Vec<(String, String)> {
     ]
 }
 
-/// Argumentos do `rootlesskit` até o `sandmux-run --view-file`.
-pub fn rootlesskit_args(dirs: &Dirs, runner: &Path) -> Vec<String> {
-    vec![
+/// Subgrupo do escopo para onde o `rootlesskit` leva os processos do Docker:
+/// a raiz do cgroup namespace fica sem processos, e os cgroups dos
+/// contêineres ficam ao lado dele.
+pub const EVACUATE_CGROUP: &str = "motor";
+
+/// Argumentos do `rootlesskit` até o `sandmux-run --view-file`. O Docker
+/// roda sempre num cgroup namespace próprio, cuja raiz é o cgroup em que o
+/// `rootlesskit` sobe: com `scope` (há escopo com os tetos), o escopo da
+/// pasta, e os processos vão para o subgrupo [`EVACUATE_CGROUP`]. Assim ele
+/// não enxerga a slice com o teto nem os outros cgroups do usuário.
+pub fn rootlesskit_args(dirs: &Dirs, runner: &Path, scope: bool) -> Vec<String> {
+    let mut v = vec![
         format!("--state-dir={}", dirs.rootlesskit().display()),
         // Sem rede própria: a visão cria o TUN do gateway do sandmux.
         "--net=none".into(),
@@ -185,11 +197,20 @@ pub fn rootlesskit_args(dirs: &Dirs, runner: &Path) -> Vec<String> {
         // como destino de montagem.
         "--propagation=rslave".into(),
         "--pidns".into(),
+        "--cgroupns".into(),
+    ];
+    // Levar os processos para um subgrupo exige escrever no cgroup, o que só
+    // o escopo delegado permite.
+    if scope {
+        v.push(format!("--evacuate-cgroup2={EVACUATE_CGROUP}"));
+    }
+    v.extend([
         "--".into(),
         runner.display().to_string(),
         "--view-file".into(),
         dirs.view_file().display().to_string(),
-    ]
+    ]);
+    v
 }
 
 /// Prefixo do `systemd-run` com os tetos da pasta, quando há suporte.
@@ -213,8 +234,14 @@ pub fn slice_properties(limits: &Limits) -> Vec<String> {
     p
 }
 
-pub fn scope_prefix(limits: &Limits, workdir: &Path, slice: &str) -> Vec<String> {
-    let mut a = limits::scope_args(limits, &format!("sandmux: docker {}", workdir.display()));
+/// Prefixo do `systemd-run` do escopo do Docker de uma pasta, na slice com o
+/// teto. O escopo não tem teto próprio: ele é a raiz do cgroup namespace do
+/// Docker, que os contêineres enxergam, e o teto fica só na slice, acima.
+pub fn scope_prefix(workdir: &Path, slice: &str) -> Vec<String> {
+    let mut a = limits::scope_args(
+        &Limits::default(),
+        &format!("sandmux: docker {}", workdir.display()),
+    );
     a.insert(a.len() - 1, format!("--slice={slice}"));
     // Os contêineres ficam em cgroups filhos do escopo.
     a.insert(a.len() - 1, "-p".into());
@@ -255,11 +282,13 @@ mod tests {
             slice_properties(&l),
             vec!["MemoryMax=536870912", "MemorySwapMax=0", "TasksMax=100"]
         );
-        let a = scope_prefix(&l, Path::new("/w"), "sandmux-docker-abc.slice").join(" ");
+        let a = scope_prefix(Path::new("/w"), "sandmux-docker-abc.slice").join(" ");
         assert!(
             a.contains("--slice=sandmux-docker-abc.slice") && a.ends_with("--"),
             "{a}"
         );
+        // O teto só na slice: o escopo é a raiz que os contêineres enxergam.
+        assert!(!a.contains("MemoryMax") && !a.contains("TasksMax"), "{a}");
     }
 
     #[test]
@@ -271,6 +300,17 @@ mod tests {
         assert!(!c.contains("registry-mirror"), "{c}");
         assert!(c.contains("--exec-opt native.cgroupdriver=cgroupfs"), "{c}");
         assert!(c.contains("--cgroup-parent conteineres"), "{c}");
+        let r = |ns| rootlesskit_args(&d, Path::new("/bin/sandmux-run"), ns).join(" ");
+        assert!(
+            r(true).contains("--pidns --cgroupns --evacuate-cgroup2=motor -- /bin/sandmux-run"),
+            "{}",
+            r(true)
+        );
+        assert!(
+            r(false).contains("--pidns --cgroupns -- ") && !r(false).contains("evacuate"),
+            "{}",
+            r(false)
+        );
         let m = dockerd_command(&d, Some(5000)).join(" ");
         assert!(
             m.contains("--registry-mirror=http://10.0.2.254:5000"),
@@ -287,25 +327,16 @@ mod tests {
             c.contains("--ip 127.0.0.1") && c.contains("--data-root /d/docker/abc"),
             "{c}"
         );
-        let r = rootlesskit_args(&d, Path::new("/bin/sandmux-run")).join(" ");
+        let r = rootlesskit_args(&d, Path::new("/bin/sandmux-run"), true).join(" ");
         assert!(r.contains("--net=none") && r.contains("--pidns"), "{r}");
         assert!(r.contains("--port-driver=builtin"), "{r}");
         assert!(
             r.ends_with("-- /bin/sandmux-run --view-file /r/docker/abc/view.json"),
             "{r}"
         );
-        let s = scope_prefix(
-            &Limits {
-                memory: Some(1 << 30),
-                processes: Some(100),
-            },
-            Path::new("/home/ana/proj"),
-            "sandmux-docker-x.slice",
-        )
-        .join(" ");
+        let s = scope_prefix(Path::new("/home/ana/proj"), "sandmux-docker-x.slice").join(" ");
         assert!(
-            s.contains("--slice=sandmux-docker-x.slice -p Delegate=yes --")
-                && s.contains("TasksMax=100"),
+            s.contains("--slice=sandmux-docker-x.slice -p Delegate=yes --"),
             "{s}"
         );
     }

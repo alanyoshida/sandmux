@@ -39,6 +39,7 @@ The launcher reads the descriptor to the end, closes it and validates the conten
 | `landlock.write` | Paths with all access rights |
 | `seccomp.deny_syscalls` | System calls that return a permission error |
 | `seccomp.deny_ioctls` | `ioctl` commands that return a permission error (`TIOCSTI`, `TIOCLINUX`) |
+| `seccomp.enosys_syscalls` | Optional. System calls that return `ENOSYS`, as if the kernel did not have them. A name in this list and in `deny_syscalls` gets `ENOSYS`. Used in the Docker view for the kernel keyring, because `runc` only accepts that error |
 | `env` | The command's complete environment, as a list of `{name, value}`. Nothing is inherited |
 | `command` | Program and arguments |
 | `cwd` | Folder where the command starts, inside the sandbox |
@@ -58,6 +59,8 @@ In all of them, `dest` is the path inside the sandbox. `source`, `lower` and the
 | `symlink` | `dest`, `target` | Symbolic link created in the new root |
 | `proc` | `dest` | New `/proc`, from the sandbox's pid namespace |
 | `devpts` | `dest` | New pseudoterminal instance |
+| `sysfs` | `dest` | New read-only `/sys`, of the mounting process's network namespace (Docker view) |
+| `cgroup2` | `dest` | New writable cgroup2, whose root is the mounting process's cgroup namespace root. Only works inside its own cgroup namespace (Docker view) |
 
 The layer of an `overlay` is `{"kind": "persistent", "upper": ..., "work": ...}`, stored on the host and kept between runs, or `{"kind": "temporary"}`, kept in memory and discarded when the sandbox ends.
 

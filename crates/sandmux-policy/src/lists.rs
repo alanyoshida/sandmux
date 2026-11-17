@@ -130,6 +130,25 @@ pub const DENY_SYSCALLS: &[&str] = &[
     "io_uring_register",
 ];
 
+/// Chamadas de montagem: negadas no sandbox, liberadas na visão do Docker,
+/// porque o `dockerd` e o `runc` montam.
+pub const MOUNT_SYSCALLS: &[&str] = &[
+    "mount",
+    "umount2",
+    "pivot_root",
+    "move_mount",
+    "open_tree",
+    "fsopen",
+    "fsconfig",
+    "fsmount",
+    "fspick",
+    "mount_setattr",
+];
+
+/// Chamadas do chaveiro do kernel: na visão do Docker devolvem `ENOSYS`, o
+/// único erro que o `runc` aceita ao criar o chaveiro de um contêiner.
+pub const KEYRING_SYSCALLS: &[&str] = &["keyctl", "add_key", "request_key"];
+
 /// Comandos de `ioctl` negados: os que injetam teclas no terminal.
 pub const DENY_IOCTLS: &[&str] = &["TIOCSTI", "TIOCLINUX"];
 

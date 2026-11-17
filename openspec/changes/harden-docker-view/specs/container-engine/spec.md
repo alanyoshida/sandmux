@@ -35,7 +35,7 @@ A visão do Docker privado MUST ter um `/dev` próprio, com os nós `null`, `zer
 - **THEN** nenhum dispositivo de GPU aparece
 
 ### Requirement: Cgroups do Docker privado
-Um contêiner do Docker privado MUST enxergar só os cgroups do Docker da própria pasta. Ele MUST NOT conseguir ler nem alterar o cgroup que guarda os tetos da pasta, nem os cgroups de outras sessões, do daemon ou do resto do usuário. Numa máquina sem suporte aos tetos, o contêiner MUST NOT ter nenhum cgroup gravável.
+Um contêiner do Docker privado MUST enxergar só os cgroups do Docker da própria pasta. Ele MUST NOT conseguir ler nem alterar o cgroup que guarda os tetos da pasta, nem os cgroups de outras sessões, do daemon ou do resto do usuário. Numa máquina sem suporte aos tetos, o contêiner MUST enxergar só o cgroup em que o Docker da pasta roda e os abaixo dele, e o Docker MUST continuar funcionando.
 
 #### Scenario: Afrouxar o teto
 - **WHEN** o perfil da pasta tem `memory = "512M"` e o agente roda um contêiner com `-v /sys/fs/cgroup:/c` que procura o teto da pasta para aumentá-lo e depois aloca 2 GB
@@ -44,6 +44,10 @@ Um contêiner do Docker privado MUST enxergar só os cgroups do Docker da própr
 #### Scenario: Cgroups do usuário
 - **WHEN** o agente roda `docker run -v /sys/fs/cgroup:/c <imagem> ls /c`
 - **THEN** não aparecem `user.slice`, o cgroup do daemon nem os das outras sessões
+
+#### Scenario: Máquina sem os tetos
+- **WHEN** a máquina não tem suporte aos tetos e o agente roda `docker run -v /sys/fs/cgroup:/c <imagem> ls /c`
+- **THEN** o contêiner roda, e `user.slice` não aparece
 
 ### Requirement: Arquivos da pasta cobertos no Docker
 Quando o Docker privado de uma pasta sobe, os arquivos da pasta de trabalho que casam com a lista de segredos e os caminhos negados por `file-deny`, pela configuração da pasta, MUST chegar vazios e em somente leitura aos contêineres. Os segredos que o agente criou e os caminhos de `file-allow` MUST continuar visíveis. O arquivo no host MUST NOT ser alterado.
