@@ -132,6 +132,7 @@ pub fn base_spec(command: Vec<String>) -> LaunchSpec {
         cwd: "/tmp".into(),
         network: None,
         files: None,
+        bus_relay: None,
     }
 }
 

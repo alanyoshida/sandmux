@@ -126,6 +126,8 @@ pub struct Prepared {
     scope_name: String,
     /// Socket da janela da aba, que precisa viver enquanto ela vive.
     pub window: Option<crate::window::WindowSocket>,
+    /// Barramento do portal da aba, que também vive com ela.
+    pub portal: Option<crate::portal::PortalSocket>,
 }
 
 impl Prepared {
@@ -181,13 +183,23 @@ impl Prepared {
 /// vazio se não existir (a pergunta da importação é feita antes, por quem
 /// tem terminal).
 pub fn prepare(host: &Host, opts: &LaunchOptions) -> Result<Prepared> {
-    // O repassador do Wayland vive no daemon.
+    // O repassador do Wayland e o barramento do portal vivem no daemon.
     if effective(host, opts)?.window.value.is_on() {
         bail!(tr!(
             "a janela só funciona nas abas do daemon: rode num terminal ou abra pela TUI",
             "the window only works in daemon tabs: run it in a terminal or open it from the TUI"
         ));
     }
+    if opts.portal == Some(true) {
+        bail!(tr!(
+            "o portal só funciona nas abas do daemon: rode num terminal ou abra pela TUI",
+            "the portal only works in daemon tabs: run it in a terminal or open it from the TUI"
+        ));
+    }
+    // Sem o daemon, o padrão segue sem portal.
+    let mut opts = opts.clone();
+    opts.portal = Some(false);
+    let opts = &opts;
     prepare_with(
         host,
         opts,
@@ -373,6 +385,28 @@ pub fn prepare_with(
     run.ssh_servers = vault.ssh_servers;
     let window = crate::window::open(eff.window.value, &host.env, net_tag)?;
     run.window = window.as_ref().map(|w| w.mounts.clone());
+    // O portal: um barramento por aba no daemon. Se ele não sobe, a aba
+    // segue sem ele, com o aviso.
+    let portal = if eff.portal.value {
+        let tab = crate::portal::Tab {
+            label: crate::portal::label(&opts.harness, &opts.workdir),
+            tag: net_tag.to_string(),
+            workdir: std::fs::canonicalize(&opts.workdir).unwrap_or_else(|_| opts.workdir.clone()),
+            policy: eff.net_policy(),
+            policy_file: policy_file.map(Path::to_path_buf),
+            log_dir: crate::paths::state_dir().join("net"),
+        };
+        match crate::portal::open(net_tag, tab) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                warnings.push(crate::portal::warning(&e));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    run.portal = portal.as_ref().map(|p| p.mounts.clone());
     if let Some(sock) = vault.db_socket {
         // O repassador fica ao lado do `sandmux-run`.
         let bin = runner_path().with_file_name("sandmux-db-mcp");
@@ -464,6 +498,7 @@ pub fn prepare_with(
         processes_max: limits.and_then(|l| l.processes),
         network: eff.network.value.describe().into(),
         window: eff.window.value,
+        portal: portal.is_some(),
     };
     for d in &composed.dirs_to_create {
         if d.starts_with(&host.data_dir) {
@@ -498,6 +533,7 @@ pub fn prepare_with(
                 .unwrap_or_else(|| "/".into())
         ),
         window: window.and_then(|w| w.socket),
+        portal,
     })
 }
 
@@ -674,6 +710,7 @@ pub fn run_layer(opts: &LaunchOptions) -> Result<config::Layer> {
         kvm: opts.kvm,
         gpu: opts.gpu,
         clipboard: opts.allow_clipboard,
+        portal: opts.portal,
         memory,
         processes,
     })

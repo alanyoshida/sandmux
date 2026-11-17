@@ -2,7 +2,7 @@
 
 > Português: [window.md](../window.md)
 
-By default, nothing from the desktop gets into the sandbox: no Wayland, X11, PipeWire or D-Bus socket, and the graphical session variables are removed. The `window` option lets the agent open windows on your desktop (a browser to test a page, the app it built) and use audio.
+By default, nothing from the desktop gets into the sandbox: no Wayland, X11, PipeWire or your D-Bus socket, and the graphical session variables are removed. The `window` option lets the agent open windows on your desktop (a browser to test a page, the app it built) and use audio. The [desktop portal](#desktop-portal), on by default, gives the theme, notifications and link opening through a D-Bus of sandmux's own.
 
 ## Turning it on
 
@@ -64,8 +64,37 @@ google-chrome https://localhost:3000
 
 In `--headless` mode, the browser works without the window.
 
+## Desktop portal
+
+Every daemon tab gets, by default, a D-Bus of sandmux's own, which is not your session D-Bus. Through it, a confined program reads the theme, sends notifications and opens links in your browser. Any other D-Bus service gets an error, and no message from the sandbox reaches your D-Bus.
+
+```sh
+sandmux run opencode --no-portal        # without the portal
+sandmux config set --global portal false
+```
+
+The `portal` key accepts `true` or `false`, in the global section, in profiles and in projects ([config.md](config.md)). In the TUI, the "Portal" item is in the Sandbox section of the settings, and the protection panel shows its state. Without a terminal (script, pipe), `run` goes on without the portal, and an explicit `--portal` ends with an error.
+
+- **Appearance:** `org.freedesktop.portal.Settings` only answers `org.freedesktop.appearance` (`color-scheme`, `accent-color` and `contrast`), with the values from your desktop's portal. Without a portal on the desktop, the answer is "no preference".
+- **Notifications:** the portal (`org.freedesktop.portal.Notification`) and the direct `org.freedesktop.Notifications`, which `notify-send` uses.
+  - Notifications reach your desktop with the tab name in the title, such as `shell:app: Done`.
+  - The title and body are cut, and markup becomes text.
+  - Icons, actions, sounds and images from the sandbox do not pass.
+  - The limit is 5 notifications every 10 seconds per tab; the excess is dropped without an error.
+- **Opening links:** the portal's `OpenURI` opens an `http` or `https` link directly in your default browser, but only when the tab's network policy allows the domain ([network.md](network.md)).
+  - In inference-only mode, for example, only the model providers open.
+  - Each request, opened or refused, goes into the tab's network log (`sandmux net`), with the `open-uri` protocol.
+  - Files and folders (`OpenFile`, `OpenDirectory`) are refused.
+
+### How programs reach the portal
+
+- **Variables:** `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus` and `GIO_USE_PORTALS=1`, in an in-memory `XDG_RUNTIME_DIR` folder. With the window on, it is the same folder.
+- **`xdg-open`:** an empty `flatpak-info` in that folder makes `xdg-open` (and Node's `open` package, which ships a copy of it) open links through the portal.
+- **The socket:** the `bus` is created inside the sandbox by a relay of process 1, without capabilities and with seccomp. It connects each connection to the bus, which lives in the daemon. A socket mounted from outside would be denied by the AppArmor of programs with a profile, such as Ubuntu's `notify-send`.
+
 ## Limits
 
-- No D-Bus and no portals: an app that asks for a system dialog, the theme through the portal or a link opened in the host browser cannot get it. The portal with appearance, notifications and link opening filtered by the network policy is the next step.
+- **Only the three portal services:** an app that asks for a system dialog (the file chooser), screen capture, the keyring or another D-Bus service gets an error.
+- **GIO apps:** a GIO app prefers the program that handles `https`, and only uses the portal when it finds none. Without the window, that program's browser does not open. `xdg-open` and the programs that call it use the portal.
 - An app that needs a protocol outside the allowlist loses that feature, usually optional, or does not open.
 - After a daemon restart, the tab rebuilds the socket. If the compositor is not up yet, it comes back ended with the message, and Ctrl+b `r` tries again.

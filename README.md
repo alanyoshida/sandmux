@@ -104,6 +104,7 @@ Opções de `run`:
 | `--kvm`, `--no-kvm` | Libera (ou não) `/dev/kvm` |
 | `--gpu`, `--no-gpu` | Expõe (ou não) a GPU, exposta por padrão quando existe |
 | `--window`, `--window-direct`, `--no-window` | Deixa (ou não) o agente abrir janelas no desktop e usar o áudio: pelo socket restrito do compositor, com os protocolos privilegiados escondidos, ou pelo socket comum; nunca X11 ([docs/window.md](docs/window.md)) |
+| `--no-portal` | Tira o portal do desktop, ligado por padrão: tema, notificações e abrir link no seu navegador só para domínios que a rede da aba permite, por um D-Bus próprio do sandmux ([docs/window.md](docs/window.md#portal-do-desktop)) |
 | `--memory <teto>`, `--processes <teto>` | Muda o teto de memória (`50%`, `16G`, `max`) ou de processos (`512`, `max`) |
 | `--network <modo>` | `aberta` (padrão), `inferencia`, `custom` ou `sem-rede` |
 | `--deny <padrão>`, `--allow <padrão>` | Nega ou libera (no modo `custom`) um destino nesta aba: `exemplo.com`, `*.exemplo.com`, IPv4 ou CIDR |

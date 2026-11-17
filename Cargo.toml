@@ -66,7 +66,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time"
 # (zbus): compila para o musl estático da release, sem a libdbus em C.
 keyring = { version = "3", default-features = false, features = ["async-secret-service", "tokio", "crypto-rust"] }
 # Notificações do desktop; o mesmo zbus que o keyring já traz.
-zbus = { version = "4", default-features = false, features = ["tokio"] }
+zbus = { version = "4", default-features = false, features = ["tokio", "p2p"] }
+# O fim de uma conexão do barramento do portal (o fluxo de mensagens).
+futures-util = { version = "0.3", default-features = false }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

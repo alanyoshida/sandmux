@@ -81,6 +81,28 @@ pub fn window_runtime_dir(uid: u32) -> PathBuf {
     PathBuf::from(format!("/run/user/{uid}"))
 }
 
+/// O que a opção `portal` monta no `XDG_RUNTIME_DIR` do sandbox: o socket
+/// do barramento do sandmux e o `flatpak-info` vazio, que faz o `xdg-open`
+/// abrir links pelo portal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortalMounts {
+    pub bus: PathBuf,
+    pub marker: PathBuf,
+}
+
+/// Variáveis da opção `portal`.
+pub fn portal_env(uid: u32) -> Vec<(String, String)> {
+    let rt = window_runtime_dir(uid);
+    vec![
+        ("XDG_RUNTIME_DIR".into(), rt.to_string_lossy().into_owned()),
+        (
+            "DBUS_SESSION_BUS_ADDRESS".into(),
+            format!("unix:path={}", rt.join("bus").display()),
+        ),
+        ("GIO_USE_PORTALS".into(), "1".into()),
+    ]
+}
+
 /// Variáveis da opção `window`: o Wayland e as dicas para os toolkits o
 /// usarem. Nunca `DISPLAY`.
 pub fn window_env(uid: u32) -> Vec<(String, String)> {
@@ -105,6 +127,8 @@ pub fn window_env(uid: u32) -> Vec<(String, String)> {
 pub const SSH_AGENT_SOCKET: &str = "/run/sandmux/ssh-agent.sock";
 /// Socket do MCP de banco e o repassador, dentro do sandbox.
 pub const DB_SOCKET: &str = "/run/sandmux/db.sock";
+/// O socket do barramento do portal, dentro do sandbox.
+pub const PORTAL_SOCKET: &str = "/run/sandmux/portal.sock";
 pub const DB_MCP: &str = "/run/sandmux/bin/sandmux-db-mcp";
 /// Nome do MCP de banco no harness.
 pub const DB_MCP_NAME: &str = "sandmux-db";
@@ -149,6 +173,8 @@ pub struct RunOptions {
     pub ssh_servers: Vec<String>,
     /// Sockets do desktop (`window`), quando a opção está ligada.
     pub window: Option<WindowMounts>,
+    /// O portal do desktop (`portal`).
+    pub portal: Option<PortalMounts>,
     /// Pasta do registro de arquivos (`None`: sem registro).
     pub files_log: Option<PathBuf>,
     /// Política de arquivos compilada e o arquivo que o daemon regrava.
@@ -216,6 +242,7 @@ impl RunOptions {
             ssh_agent_socket: None,
             ssh_servers: Vec::new(),
             window: None,
+            portal: None,
             files_log: None,
             file_policy: Default::default(),
             file_policy_file: None,
@@ -943,11 +970,23 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     if let Some(sock) = &opts.docker_socket {
         b.bind(sock, Path::new(DOCKER_SOCKET), true);
     }
-    // Janela: uma pasta privada em memória como `XDG_RUNTIME_DIR`, com o
-    // socket do compositor e os do áudio.
+    // Janela e portal: uma pasta privada em memória como `XDG_RUNTIME_DIR`,
+    // com o socket do compositor e os do áudio, e o barramento do portal.
+    if opts.window.is_some() || opts.portal.is_some() {
+        b.tmpfs(&window_runtime_dir(host.uid).to_string_lossy(), 0o700);
+    }
+    // O socket do daemon fica em `/run/sandmux`; o `bus` do `XDG_RUNTIME_DIR`
+    // é criado lá dentro pelo repassador do processo 1.
+    if let Some(p) = &opts.portal {
+        b.bind(&p.bus, Path::new(PORTAL_SOCKET), true);
+        b.bind(
+            &p.marker,
+            &window_runtime_dir(host.uid).join("flatpak-info"),
+            false,
+        );
+    }
     if let Some(w) = &opts.window {
         let rt = window_runtime_dir(host.uid);
-        b.tmpfs(&rt.to_string_lossy(), 0o700);
         b.bind(&w.wayland, &rt.join("wayland-0"), true);
         if let Some(p) = &w.pipewire {
             b.bind(p, &rt.join("pipewire-0"), true);
@@ -1030,7 +1069,12 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     if opts.ssh_agent_socket.is_some() {
         env.push(("SSH_AUTH_SOCK".into(), SSH_AGENT_SOCKET.into()));
     }
+    if opts.portal.is_some() {
+        env.extend(portal_env(host.uid));
+    }
     if opts.window.is_some() {
+        // O `XDG_RUNTIME_DIR` é o mesmo dos dois.
+        env.retain(|(k, _)| k != "XDG_RUNTIME_DIR");
         env.extend(window_env(host.uid));
     }
     let db = opts.db_socket.is_some() && opts.db_mcp.is_some();
@@ -1184,6 +1228,10 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
             harness: opts.harness.clone(),
         }),
         files: files_spec,
+        bus_relay: opts.portal.as_ref().map(|_| sandmux_spec::BusRelay {
+            listen: window_runtime_dir(host.uid).join("bus"),
+            target: PORTAL_SOCKET.into(),
+        }),
     };
     spec.validate()
         .map_err(|e| PolicyError::Io(e.to_string()))?;
@@ -1416,6 +1464,7 @@ pub fn compose_docker_view(
         command,
         cwd: "/".into(),
         files: None,
+        bus_relay: None,
         // A visão cria o TUN e o manda ao daemon, que roda o gateway.
         network: tun_socket.map(|t| sandmux_spec::NetworkSpec {
             mode: sandmux_spec::NetMode::Open,
@@ -1893,6 +1942,80 @@ mod docker_view_tests {
                 .iter()
                 .any(|m| matches!(m, Mount::Tmpfs { dest, mode: 0o700 } if *dest == rt))
         );
+    }
+
+    #[test]
+    fn portal_monta_o_socket_o_marcador_e_o_repassador() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let (sys, home) = (base.join("sys"), base.join("home"));
+        std::fs::create_dir_all(sys.join("etc")).unwrap();
+        std::fs::create_dir_all(home.join("proj")).unwrap();
+        let h = rede_host(&sys, &home);
+        std::fs::create_dir_all(Layout::new(&h.data_dir).home("shell")).unwrap();
+        let mut o = RunOptions::new("shell");
+        o.layer = LayerMode::ReadOnlyFallback;
+        let rt = window_runtime_dir(h.uid);
+        let c = compose(&h, &o).unwrap();
+        assert_eq!(c.spec.env_value("DBUS_SESSION_BUS_ADDRESS"), None);
+        assert_eq!(c.spec.bus_relay, None);
+        o.portal = Some(PortalMounts {
+            bus: base.join("portal.sock"),
+            marker: base.join("flatpak-info"),
+        });
+        let c = compose(&h, &o).unwrap();
+        let bus = format!("unix:path={}", rt.join("bus").display());
+        assert_eq!(
+            c.spec.env_value("DBUS_SESSION_BUS_ADDRESS"),
+            Some(bus.as_str())
+        );
+        assert_eq!(c.spec.env_value("GIO_USE_PORTALS"), Some("1"));
+        assert_eq!(
+            c.spec.env_value("XDG_RUNTIME_DIR"),
+            Some(rt.to_str().unwrap())
+        );
+        // O socket do daemon fica em /run/sandmux; o `bus` é do repassador.
+        assert!(c.spec.mounts.iter().any(|m| matches!(
+            m,
+            Mount::Bind { source, dest, .. }
+                if *source == base.join("portal.sock") && dest == Path::new(PORTAL_SOCKET)
+        )));
+        assert!(c.spec.mounts.iter().any(|m| matches!(
+            m,
+            Mount::Bind { source, dest, .. }
+                if *source == base.join("flatpak-info") && *dest == rt.join("flatpak-info")
+        )));
+        assert_eq!(
+            c.spec.bus_relay,
+            Some(sandmux_spec::BusRelay {
+                listen: rt.join("bus"),
+                target: PORTAL_SOCKET.into(),
+            })
+        );
+        // Com a janela, a mesma pasta e um só `XDG_RUNTIME_DIR`.
+        o.window = Some(WindowMounts {
+            wayland: base.join("wl.sock"),
+            pipewire: None,
+            pulse: None,
+        });
+        let c = compose(&h, &o).unwrap();
+        assert_eq!(
+            c.spec
+                .mounts
+                .iter()
+                .filter(|m| matches!(m, Mount::Tmpfs { dest, .. } if *dest == rt))
+                .count(),
+            1
+        );
+        assert_eq!(
+            c.spec
+                .env
+                .iter()
+                .filter(|v| v.name == "XDG_RUNTIME_DIR")
+                .count(),
+            1
+        );
+        assert_eq!(c.spec.env_value("WAYLAND_DISPLAY"), Some("wayland-0"));
     }
 
     #[test]

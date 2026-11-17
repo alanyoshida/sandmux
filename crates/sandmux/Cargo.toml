@@ -66,6 +66,7 @@ bytes.workspace = true
 unicode-width.workspace = true
 keyring.workspace = true
 zbus.workspace = true
+futures-util.workspace = true
 
 [dev-dependencies]
 base64.workspace = true

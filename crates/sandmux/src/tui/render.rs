@@ -1908,6 +1908,7 @@ fn draw_panel(f: &mut Frame, r: Rect, app: &App) {
                         },
                         warn,
                     ));
+                    items.push((p.portal, "portal".into(), ok));
                     items.push((p.clipboard, "clipboard".into(), warn));
                     items.push((!p.pass_env.is_empty(), "pass-env".into(), warn));
                     for l in dots(&items) {

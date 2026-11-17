@@ -22,6 +22,7 @@ pub mod keyring;
 pub mod launch;
 pub mod login;
 pub mod paths;
+pub mod portal;
 pub mod secretdomains;
 pub mod sshagent;
 pub mod window;
