@@ -4,8 +4,10 @@
 #   sudo scripts/check-root.sh [filtro de teste]
 #
 # Só o auxiliar (`target/debug/sandmux-helper`) roda como root, num socket
-# temporário. Os testes (`crates/sandmux/tests/docker_ebpf.rs`) rodam como o
-# usuário que chamou o sudo, com o Docker sem root dele. Um arquivo
+# temporário, por `systemd-run` com as restrições da unidade do serviço
+# (`packaging/systemd/sandmux-helper.service.in`). Os testes
+# (`crates/sandmux/tests/docker_ebpf.rs`) rodam como o usuário que chamou o
+# sudo, com o Docker sem root dele. Um arquivo
 # `<socket>.restart` criado pelos testes reinicia o auxiliar.
 #
 # Atenção: o script roda binários compilados pelo usuário. Liberá-lo no
@@ -42,34 +44,70 @@ as_user cargo build -q -p sandmux --bin sandmux-helper
 [ -x "$helper" ] || { echo "check-root: falta $helper" >&2; exit 2; }
 
 tmp=$(mktemp -d /run/sandmux-check-root.XXXXXX)
-chown "$uid" "$tmp"
-chmod 0755 "$tmp"
+# Do root (o serviço não tem CAP_DAC_OVERRIDE), com o sticky bit: os testes
+# criam ali o arquivo que pede o reinício do auxiliar.
+chmod 1777 "$tmp"
 sock="$tmp/helper.sock"
+# O binário numa pasta do root, fora do HOME (a unidade tem ProtectHome=yes)
+# e de /run (noexec) e /var/tmp (PrivateTmp).
+bindir=$(mktemp -d /var/lib/sandmux-check-root.XXXXXX)
+chmod 0755 "$bindir"
+install -m 0755 "$helper" "$bindir/sandmux-helper"
+unit="sandmux-helper-check-$$"
+
+# As propriedades do [Service] da unidade instalada, menos o ExecStart: o
+# auxiliar roda com as mesmas restrições do serviço real. O socket é criado
+# pelo próprio auxiliar (--socket), e por isso a pasta dele fica gravável.
+props=$(sed -n '/^\[Service\]/,/^\[/p' packaging/systemd/sandmux-helper.service.in \
+    | grep -E '^[A-Za-z]+=' | grep -v '^ExecStart=')
+
+start_helper() {
+    rm -f "$sock"
+    set --
+    while IFS= read -r p; do
+        [ -n "$p" ] && set -- "$@" -p "$p"
+    done <<FIM
+$props
+FIM
+    systemd-run --quiet --unit="$unit" --collect "$@" \
+        -p ReadWritePaths="$tmp" \
+        "$bindir/sandmux-helper" --socket "$sock"
+}
+
+stop_helper() {
+    systemctl stop "$unit" 2>/dev/null || true
+    # O --collect apaga a unidade quando ela para.
+    i=0
+    while systemctl is-active --quiet "$unit" 2>/dev/null && [ "$i" -lt 50 ]; do
+        i=$((i + 1))
+        sleep 0.1
+    done
+}
 
 # O auxiliar, reiniciado quando os testes pedem, até o fim.
+start_helper
 (
-    while :; do
-        "$helper" --socket "$sock" 2>>"$tmp/helper.log" &
-        h=$!
-        while kill -0 "$h" 2>/dev/null && [ ! -e "$sock.restart" ] && [ ! -e "$tmp/fim" ]; do
-            sleep 0.2
-        done
-        kill "$h" 2>/dev/null || true
-        wait "$h" 2>/dev/null || true
-        rm -f "$sock.restart"
-        [ -e "$tmp/fim" ] && exit 0
-        sleep 1
+    while [ ! -e "$tmp/fim" ]; do
+        if [ -e "$sock.restart" ]; then
+            stop_helper
+            rm -f "$sock.restart"
+            sleep 1
+            start_helper
+        fi
+        sleep 0.2
     done
 ) &
 sup=$!
 fim() {
     touch "$tmp/fim"
     wait "$sup" 2>/dev/null || true
+    journalctl --quiet --no-pager -u "$unit" 2>/dev/null | tail -n 20 >"$tmp/helper.log" || true
+    stop_helper
     if [ -s "$tmp/helper.log" ]; then
         echo "== log do auxiliar"
         cat "$tmp/helper.log"
     fi
-    rm -rf "$tmp"
+    rm -rf "$tmp" "$bindir"
 }
 trap fim EXIT INT TERM
 

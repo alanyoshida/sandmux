@@ -6,8 +6,10 @@ After=sandmux-helper.socket
 
 [Service]
 ExecStart=@SANDMUX_HELPER@
-# Carregar e prender programas BPF LSM a um cgroup.
-CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_MAC_ADMIN CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_RESOURCE
+# Carregar e prender programas BPF LSM a um cgroup: o mínimo, medido com o
+# scripts/check-root.sh (sem CAP_SYS_ADMIN, CAP_NET_ADMIN, CAP_MAC_ADMIN nem
+# CAP_SYS_RESOURCE o confinamento liga do mesmo jeito).
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

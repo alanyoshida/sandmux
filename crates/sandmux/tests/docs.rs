@@ -812,7 +812,6 @@ fn auxiliar_root_documentado() {
         "## Confinamento por eBPF",
         "EPERM",
         "commondir",
-        "64 níveis",
         "(helper.md)",
     ] {
         assert!(docker.contains(c), "docs/docker.md não cita {c}");

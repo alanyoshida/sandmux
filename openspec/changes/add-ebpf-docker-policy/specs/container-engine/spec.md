@@ -23,11 +23,15 @@ As regras do confinamento por eBPF MUST valer antes de o socket do Docker ser en
 - **THEN** a leitura segue só as regras do Docker de `~/b`
 
 ### Requirement: Arquivos negados ao Docker
-Com o confinamento por eBPF, os arquivos e as pastas que a visão do Docker cobre MUST ser negados à leitura e à escrita para os processos do Docker da pasta. Isso inclui os segredos e o `file-deny` da pasta de trabalho, pela configuração da pasta, e as coberturas de `/etc`. Numa pasta negada, MUST ser negado também tudo o que está dentro dela, inclusive o que for criado depois.
+Com o confinamento por eBPF, os arquivos e as pastas que a visão do Docker cobre MUST ser negados à leitura e à escrita para os processos do Docker da pasta. Isso inclui os segredos e o `file-deny` da pasta de trabalho, pela configuração da pasta, e as coberturas de `/etc`. Numa pasta negada, MUST ser negado também tudo o que existe dentro dela quando o Docker sobe, e os processos do Docker MUST NOT criar, apagar nem renomear nada dentro dela.
 
 #### Scenario: Pasta negada, arquivo novo
-- **WHEN** o perfil da pasta tem `file-deny = ["~/proj/privado"]`, o confinamento vale, e o usuário cria `~/proj/privado/novo.txt` com o Docker já rodando
-- **THEN** um contêiner com `--privileged` e `~/proj` montado não abre `privado/novo.txt` nem depois de desmontar a cobertura
+- **WHEN** o perfil da pasta tem `file-deny = ["~/proj/privado"]`, o confinamento vale, e um contêiner com `--privileged` e `~/proj` montado desmonta a cobertura de `privado`, lê `privado/velho.txt` e cria `privado/novo.txt`
+- **THEN** a leitura e a criação falham com `EPERM`, e `novo.txt` não aparece no host
+
+#### Scenario: Criado no host depois
+- **WHEN** o usuário cria `~/proj/privado/outro.txt` no host com o Docker já rodando
+- **THEN** o arquivo fica fora do confinamento até o Docker da pasta subir de novo, como os segredos criados depois
 
 #### Scenario: Segredo criado pelo agente
 - **WHEN** o agente criou `chave.pem` numa sessão anterior e um contêiner com a pasta montada lê o arquivo

@@ -43,13 +43,13 @@ O `sandmux-helper` roda pelas unidades `sandmux-helper.socket` e `sandmux-helper
 - **Socket:** `/run/sandmux-helper.sock`, com o modo 0666. Quem pode pedir o quê é decidido pelo `SO_PEERCRED` de cada conexão.
 - **Unidade endurecida:**
   - `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=yes` e `PrivateTmp`;
-  - `CapabilityBoundingSet` só com o que carregar e prender programas LSM exige (`CAP_BPF`, `CAP_PERFMON`, `CAP_MAC_ADMIN`, `CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, `CAP_SYS_RESOURCE`). A lista exata sai da tarefa de verificação.
+  - `CapabilityBoundingSet=CAP_BPF CAP_PERFMON`. Medido em 2026-11-17 com o `scripts/check-root.sh`, tirando uma capacidade de cada vez de uma lista maior: sem `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, `CAP_MAC_ADMIN` ou `CAP_SYS_RESOURCE`, o confinamento liga do mesmo jeito; sem `CAP_BPF`, o `BTF_LOAD` falha; sem `CAP_PERFMON`, o `PROG_LOAD` falha. Sem `CAP_DAC_OVERRIDE`, o serviço também não grava em pastas de outros donos.
 - **Para os testes:** `--socket <caminho>` sobe o auxiliar sem o systemd. No daemon, a variável `SANDMUX_HELPER_SOCKET` troca o caminho.
 - **Alternativa descartada:** o auxiliar só no `sandmux setup`, prendendo programas e mapas no bpffs para o daemon escrever direto. Escrever num mapa preso pede só a permissão do arquivo no bpffs, mas aí um usuário marcaria regras no cgroup de outro, e criar mapas por usuário exige `CAP_BPF`.
 
 ### 2. Protocolo
 
-As mensagens são linhas JSON numa conexão `SOCK_STREAM`. Os descritores vão junto, por `SCM_RIGHTS`, na mesma mensagem da linha. Cada pedido recebe uma resposta `{"ok": true, ...}` ou `{"ok": false, "error": "..."}`.
+Cada mensagem é um pedido JSON numa conexão `SOCK_SEQPACKET`, que preserva o limite entre as mensagens. Os descritores vão junto, por `SCM_RIGHTS`, na mesma mensagem (mudado na implementação: o `SOCK_STREAM` previsto não garante que a linha e os descritores cheguem juntos). Cada pedido recebe uma resposta `{"ok": true, ...}` ou `{"ok": false, "error": "..."}`.
 
 - `{"op": "status"}` responde a versão do auxiliar e se o BPF LSM está ativo. Não precisa de descritor.
 - `{"op": "confine"}` traz um descritor do diretório do cgroup.
@@ -58,7 +58,7 @@ As mensagens são linhas JSON numa conexão `SOCK_STREAM`. Os descritores vão j
   - Vale um por conexão.
 - `{"op": "mark", "kind": "deny" | "protect" | "gitdir"}` traz até 200 descritores (`O_PATH`), e só vale depois do `confine`. Quem pede prova o acesso ao arquivo abrindo-o ele mesmo; o auxiliar nunca abre um caminho.
 
-As linhas têm teto de 4 KiB. Uma linha inválida recebe erro e não derruba a conexão; uma conexão que manda lixo demais é fechada.
+As mensagens têm teto de 4 KiB. Uma mensagem inválida recebe erro e não derruba a conexão; uma conexão com mais de 32 erros é fechada.
 
 ### 3. Programas presos ao cgroup (`BPF_LSM_CGROUP`)
 
@@ -80,24 +80,24 @@ Cada confinamento tem um mapa `BPF_MAP_TYPE_INODE_STORAGE` só dele. O valor é 
 
 ### 5. O que cada programa decide
 
-`deny(x)`, `protect(x)` e `gitdir(x)` dizem se o inode `x` tem a marca. `acima(x, M)` diz se `x` ou algum diretório acima dele, seguindo `d_parent` até a raiz do sistema de arquivos, tem a marca `M`.
+`marca(x, M)` diz se o inode `x` tem algum bit de `M`. O programa olha só ponteiros que o verificador aceita como confiáveis: os argumentos do gancho (o `file`, o `dir`, as `dentry`), o `f_inode` do `file` e o `d_inode` de uma `dentry` recebida.
 
-O `d_parent` segue a árvore real do sistema de arquivos, e não as montagens, por isso um bind ou uma cobertura desmontada não muda o resultado.
-
-O laço tem teto de 64 níveis. Um arquivo mais fundo que isso é negado, por segurança. Na prática, só um caminho absurdo passa de 64 componentes.
+Mudado na implementação (2026-11-17), pelo recuo previsto na decisão 6: o desenho original subia pela árvore (`d_parent`) até 64 níveis, mas o kernel 7.0 recusa no `bpf_inode_storage_get` o ponteiro obtido assim (`untrusted_ptr_inode`), e não há kfunc que suba pela árvore devolvendo ponteiros confiáveis. Por isso o daemon marca também tudo o que existe dentro das pastas negadas e de `hooks` (decisão 7), e o diretório de cada operação é conferido pelo argumento `dir` do gancho.
 
 | Gancho | Nega quando |
 |---|---|
-| `file_open` | `acima(arquivo, DENY)`; ou aberto com escrita e `acima(arquivo, PROTECT)` |
-| `inode_create`, `inode_mkdir`, `inode_mknod`, `inode_symlink` | `acima(dir, DENY)` ou `acima(dir, PROTECT)`; ou `gitdir(dir)` e o nome é `commondir`, `hooks`, `config` ou `config.worktree` |
-| `inode_link` | a origem tem `DENY` ou `PROTECT` por `acima`; ou o destino cai na regra de criação |
-| `inode_unlink`, `inode_rmdir` | `acima(alvo, DENY ou PROTECT)` |
-| `inode_rename` | a origem tem `acima(DENY ou PROTECT)`; o diretório de destino cai na regra de criação; ou o alvo substituído tem `acima(DENY ou PROTECT)` |
-| `inode_setattr` | `acima(alvo, DENY ou PROTECT)` |
+| `file_open` | `marca(arquivo, DENY)`; ou aberto com escrita e `marca(arquivo, PROTECT)` |
+| `inode_create`, `inode_mkdir`, `inode_mknod`, `inode_symlink` | `marca(dir, DENY ou PROTECT)`; ou `marca(dir, GITDIR)` e o nome é `commondir`, `hooks`, `config` ou `config.worktree` |
+| `inode_link` | `marca(origem, DENY, PROTECT ou GITDIR)`; ou o diretório de destino cai na regra de criação |
+| `inode_unlink`, `inode_rmdir` | `marca(dir, DENY ou PROTECT)` ou `marca(alvo, DENY, PROTECT ou GITDIR)` |
+| `inode_rename` | `marca(origem, DENY, PROTECT ou GITDIR)`; `marca(dir de origem, DENY ou PROTECT)`; o alvo substituído com `DENY`, `PROTECT` ou `GITDIR`; ou o diretório de destino cai na regra de criação |
+| `inode_setattr` | `marca(alvo, DENY, PROTECT ou GITDIR)` |
+
+Consequência: numa pasta negada, os contêineres não criam, apagam nem renomeiam nada, e o que existia quando o Docker subiu fica negado. Um arquivo que o usuário cria depois, no host, dentro da pasta negada, fica fora até o Docker subir de novo, como os segredos criados depois (change 71).
 
 Mais duas regras:
 
-- **Nomes:** o nome vem do `d_name` da `dentry` nova, comparado como bytes com os quatro nomes.
+- **Nomes:** o nome vem do `d_name` da `dentry` nova, lido com `bpf_probe_read_kernel` e comparado como bytes com os quatro nomes.
 - **Retorno:** no `BPF_LSM_CGROUP`, o programa devolve 1 para seguir e 0 para negar; o kernel transforma o 0 em `EPERM`.
 
 ### 6. Instruções montadas em Rust, com o BTF lido na carga
@@ -107,7 +107,8 @@ O crate novo `sandmux-ebpf` tem três partes:
 - **Leitor do BTF:** lê `/sys/kernel/btf/vmlinux` e acha:
   - o id de cada `bpf_lsm_<gancho>` (o `attach_btf_id`);
   - a posição de cada parâmetro pelo nome, no `FUNC_PROTO`;
-  - os deslocamentos dos campos usados (`file.f_inode`, `file.f_mode`, `file.f_path.dentry`, `dentry.d_parent`, `dentry.d_inode`, `dentry.d_name.name`, `dentry.d_name.len`).
+  - os deslocamentos dos campos usados (`file.f_inode`, `file.f_mode`, `dentry.d_inode`, `dentry.d_name.name`, `dentry.d_name.len`);
+  - os números da UAPI (tipos de mapa e de programa, anexos e auxiliares), pelos enums do próprio BTF.
 
   Cumpre o papel do CO-RE sem o `clang`.
 - **Montador:** escreve as instruções BPF (cerca de 15 opcodes e desvios com rótulos). Segue o mesmo estilo do filtro seccomp montado à mão em `sandmux-launcher/src/seccomp.rs`.
@@ -121,9 +122,9 @@ Alternativas descartadas:
 Os ponteiros lidos pela árvore (`d_parent`, `d_inode`) chegam ao `bpf_inode_storage_get`. Se o verificador recusar um ponteiro obtido assim, o recuo é este:
 
 - o daemon marca também cada arquivo e pasta que existe dentro das pastas negadas, pela varredura que ele já faz;
-- o `acima()` olha só o próprio inode e o diretório pai direto.
+- o programa olha só o próprio inode e o diretório que o gancho recebe.
 
-O recuo perde "arquivo criado depois numa pasta negada". Se ele for usado, o spec e o roadmap passam a registrar isso.
+O recuo perde "arquivo criado depois numa pasta negada". Aplicado em 2026-11-17 (decisão 5), registrado no spec e no roadmap.
 
 ### 7. O daemon
 
@@ -134,6 +135,7 @@ Depois que o socket do Docker responde, e antes de entregar o socket à sessão,
    - **`DENY`:** as coberturas (`Mount::Cover`) da visão cujo arquivo existe no host.
    - **`PROTECT`:** os binds em somente leitura da visão cuja origem fica dentro da pasta de trabalho. São os `hooks`, `config` e `config.worktree` de `git::protect`.
    - **`GITDIR`:** cada diretório git devolvido por `git::protect`.
+   - Depois, tudo o que existe dentro das pastas `DENY` e `PROTECT`, sem seguir links, com a mesma marca. Acima de 16384 marcas, o Docker sobe sem o confinamento, com o motivo.
 3. Guarda a conexão no `Engine`. Uma thread espera o fim da conexão; se ela fechar antes de o Docker parar, a thread para o Docker da pasta e grava o motivo no log.
 
 Se o `status` ou o `confine` falharem, o Docker segue sem o confinamento, e o motivo fica no `Engine`. Se um `mark` falhar depois do `confine`, o Docker é parado e a subida falha com o erro. Meia regra não vale como regra.
@@ -142,7 +144,7 @@ As marcas saem da especificação da visão, e não de uma segunda varredura. As
 
 ### 8. Onde o estado aparece
 
-- **`DockerStats`** ganha `ebpf: Option<String>`: `None` quando o confinamento vale, ou o motivo quando não vale. A versão do protocolo sobe.
+- **`DockerStats`** ganha `ebpf_off: Option<String>`: `None` quando o confinamento vale, ou o motivo quando não vale. A versão do protocolo sobe para 39, e o `DockerStats` passa a ir em caixa na mensagem de `stats`.
 - **`sandmux stats`** e a seção do Docker do painel da TUI mostram uma linha "Confinamento eBPF: ligado" ou "desligado: <motivo>".
 - **`sandmux doctor`** ganha a verificação "Confinamento do Docker por eBPF". Ela lê o `bpf` em `/sys/kernel/security/lsm`, pede o `status` ao auxiliar e diz como instalar o que falta: o `sandmux setup` com `sudo`, ou o parâmetro `lsm=` do kernel.
 
@@ -159,7 +161,7 @@ As marcas saem da especificação da visão, e não de uma segunda varredura. As
 `scripts/check-root.sh` é o único comando que o usuário libera no `sudoers`, de forma temporária.
 
 1. Confere que roda como root e que `SUDO_UID` existe.
-2. Sobe o `target/debug/sandmux-helper --socket <temporário>` como root.
+2. Sobe o `sandmux-helper` como root, por `systemd-run`, com as propriedades do `[Service]` da unidade instalada (as capacidades, o `ProtectSystem` e o `ProtectHome`), e o binário copiado para uma pasta do root em `/var/lib`, porque `/run` é `noexec` e o `ProtectHome` esconde o HOME. Um arquivo `<socket>.restart` criado pelos testes reinicia o auxiliar.
 3. Roda `cargo test -p sandmux --test docker_ebpf` como o usuário de `SUDO_UID` (`setpriv`), com `XDG_RUNTIME_DIR`, `HOME`, o barramento do usuário e `SANDMUX_HELPER_SOCKET`.
 4. Para o auxiliar e devolve o código dos testes.
 
@@ -175,15 +177,15 @@ O script inteiro roda dentro do vigia de memória.
 
 ## Risks / Trade-offs
 
-- **[Verificador recusa ponteiros da árvore no armazenamento por inode]** → recuo da decisão 6, registrado no spec.
+- **[Verificador recusa ponteiros da árvore no armazenamento por inode]** → aconteceu; recuo da decisão 6 aplicado (decisão 5).
 - **[O `BPF_LSM_CGROUP` sem algum gancho ou auxiliar]** → recuo da decisão 3, com o anexo global e o id do cgroup como constante.
 - **[Código root lendo pedidos de qualquer usuário]** → protocolo de três operações, teto de tamanho, nenhum caminho aberto pelo auxiliar, limites por usuário, unidade endurecida.
 - **[Um binário do usuário apontado pela unidade]** → o setup confere o dono e as permissões do caminho inteiro.
 - **[`sudo` sem senha para o script de testes]** → equivale a root para quem roda como o usuário, porque o script roda binários compilados por ele. O usuário escolheu assim, de forma temporária. O roadmap lembra de tirar a linha do `sudoers` quando o change acabar.
-- **[Custo em cada abertura dos processos do Docker]** → até 64 consultas ao mapa por abertura, só no cgroup do Docker. É medido numa tarefa com um `docker build` grande; se pesar, o teto de níveis cai.
+- **[Custo em cada abertura dos processos do Docker]** → uma consulta ao mapa por abertura, só no cgroup do Docker. Medido em 2026-11-17 (teste `custo_do_confinamento`, com aquecimento e a ordem alternada): ler 40 mil arquivos num contêiner levou de 907 a 933 ms com o confinamento e de 915 a 922 ms sem ele; o `docker build` ficou igual.
 - **[Descritores `O_PATH` mantidos pelo auxiliar]** → impedem desmontar o sistema de arquivos da pasta enquanto o Docker roda. O limite de 16384 marcas por confinamento segura o total.
 - **[Segredo criado com o Docker rodando]** → continua visível até o Docker subir de novo, como no change 69, até o change 71.
-- **[Arquivo a mais de 64 níveis de profundidade]** → negado ao Docker. Documentado.
+- **[Arquivo criado no host dentro de uma pasta negada com o Docker rodando]** → fora do confinamento até o Docker subir de novo. Documentado; o change 71 trata os arquivos criados depois.
 
 ## Migration Plan
 
@@ -191,6 +193,3 @@ O script inteiro roda dentro do vigia de memória.
 - O `sandmux setup` instala o auxiliar numa instalação existente com `sudo`. Sem ele, nada muda além do aviso.
 - Para voltar atrás: `systemctl disable --now sandmux-helper.socket`. O Docker volta ao nível do change 69 na subida seguinte.
 
-## Open Questions
-
-- A lista mínima de capacidades da unidade do serviço. Sai da verificação com root e não muda o comportamento.

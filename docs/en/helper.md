@@ -12,7 +12,7 @@ The daemon asks for the confinement when a folder's private Docker starts, and t
    - They apply to `dockerd`, `containerd`, `runc` and every container of the folder.
    - They do not apply to any other process on the machine, nor to the agent.
 2. Marks the files the daemon sends:
-   - **denied:** the folder's secrets and `file-deny` and the `/etc` covers;
+   - **denied:** the folder's secrets and `file-deny`, with everything inside the denied folders, and the `/etc` covers;
    - **write-protected:** `.git/hooks`, `.git/config` and `.git/config.worktree`;
    - **git directories:** `commondir`, `hooks`, `config` and `config.worktree` cannot be created in them.
 
@@ -75,7 +75,7 @@ Each folder's Docker goes back to the unprivileged protections the next time it 
 
 The service unit has these systemd restrictions:
 
-- **capabilities:** only those for loading and attaching BPF LSM programs (`CAP_BPF`, `CAP_PERFMON`, `CAP_MAC_ADMIN`, `CAP_NET_ADMIN`, `CAP_SYS_ADMIN` and `CAP_SYS_RESOURCE`);
+- **capabilities:** only `CAP_BPF` and `CAP_PERFMON`, which loading and attaching BPF LSM programs to a cgroup requires;
 - **file system:** `ProtectSystem=strict` and `ProtectHome=yes`;
 - **network:** none (`PrivateNetwork=yes`), and Unix sockets only.
 

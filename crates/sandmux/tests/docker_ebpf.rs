@@ -113,15 +113,13 @@ docker ps >/dev/null && echo DOCKER-OK"
     assert!(s.contains("BUILD-OK") && s.contains("DOCKER-OK"), "{s}");
     let st = stats(&e);
     assert!(st.contains("eBPF: ligado"), "{st}");
-    // Criado com o Docker já rodando, dentro da pasta negada.
-    std::fs::write(privado.join("novo.txt"), "novo\n").unwrap();
     let s = run_in(
         &mut t,
         &e.work,
         "P='docker run --rm --privileged -v '$PWD':/w sx sh -c'
 $P 'umount /w/.env; cat /w/.env && echo ENV-LIDO || echo ENV-NEGADO'
 $P 'ln /w/.env /w/l 2>/dev/null; cat /w/l 2>/dev/null && echo LINK-LIDO || echo LINK-NEGADO'
-$P 'umount /w/privado; cat /w/privado/novo.txt && echo NOVO-LIDO || echo NOVO-NEGADO'
+$P 'umount /w/privado; echo x > /w/privado/novo.txt && echo NOVO-CRIADO || echo NOVO-NEGADO'
 $P 'umount /w/privado; cat /w/privado/velho.txt && echo VELHO-LIDO || echo VELHO-NEGADO'
 $P 'cat /w/chave.pem'
 echo FIM",
@@ -133,6 +131,7 @@ echo FIM",
         s.contains("NOVO-NEGADO") && s.contains("VELHO-NEGADO"),
         "{s}"
     );
+    assert!(!privado.join("novo.txt").exists());
     assert!(s.contains("do-agente"), "{s}");
     assert_eq!(
         std::fs::read_to_string(e.work.join(".env")).unwrap(),
@@ -251,7 +250,7 @@ fn queda_do_auxiliar_para_o_docker() {
     // root ele não carrega programas: o confinamento falha e o Docker sobe
     // sem ele. Por isso o teste usa o auxiliar root do script e pede ao
     // script, pelo arquivo de controle, que o reinicie.
-    let ctl = sock.with_extension("restart");
+    let ctl = PathBuf::from(format!("{}.restart", sock.display()));
     let mut t = term(&e, &e.work);
     let s = run_in(
         &mut t,
@@ -278,4 +277,60 @@ fn queda_do_auxiliar_para_o_docker() {
     t.write(b"exit\r");
     t.wait_exit();
     limpar(&e);
+}
+
+/// Custo do confinamento: a mesma leitura em massa (os arquivos de
+/// `/usr/share`) e o mesmo `docker build`, com e sem o auxiliar. Só mede;
+/// roda com `sudo scripts/check-root.sh --ignored custo`.
+#[test]
+#[ignore]
+fn custo_do_confinamento() {
+    if helper().is_none() {
+        return;
+    }
+    let script = format!(
+        "{IMAGEM}
+docker run --rm -v /usr/share:/u:ro sx sh -c 'find /u -type f | head -40000 | xargs cat >/dev/null 2>&1'
+for i in 1 2 3; do
+  s=$(date +%s%N)
+  docker run --rm -v /usr/share:/u:ro sx sh -c 'find /u -type f | head -40000 | xargs cat >/dev/null 2>&1'
+  e=$(date +%s%N)
+  echo LER=$(( (e-s)/1000000 ))
+  s=$(date +%s%N)
+  DOCKER_BUILDKIT=0 docker build -q --no-cache -t sx2 img >/dev/null
+  e=$(date +%s%N)
+  echo BUILD=$(( (e-s)/1000000 ))
+done"
+    );
+    let mut out = Vec::new();
+    for com in [false, true, false, true] {
+        let e = Env::new();
+        let mut cmd = e.cmd(&e.work, &["run", "shell"]);
+        cmd.env("SHELL", "/bin/bash");
+        if !com {
+            cmd.env("SANDMUX_HELPER_SOCKET", "/nonexistent/sem-auxiliar");
+        }
+        let mut t = Term::spawn(cmd, 160, 40);
+        let s = run_in(&mut t, &e.work, &script);
+        assert!(s.contains("BUILD-OK"), "{s}");
+        assert_eq!(stats(&e).contains("eBPF: ligado"), com);
+        let med = |k: &str| {
+            let mut v: Vec<u64> = s
+                .lines()
+                .filter_map(|l| l.strip_prefix(k)?.parse().ok())
+                .collect();
+            v.sort();
+            v[v.len() / 2]
+        };
+        out.push((com, med("LER="), med("BUILD=")));
+        t.write(b"exit\r");
+        t.wait_exit();
+        limpar(&e);
+    }
+    for (com, ler, build) in out {
+        eprintln!(
+            "MEDIDA {}: leitura de 40 mil arquivos {ler} ms, docker build {build} ms",
+            if com { "com eBPF" } else { "sem eBPF" }
+        );
+    }
 }

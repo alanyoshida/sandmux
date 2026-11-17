@@ -1458,6 +1458,51 @@ impl DockerMarks {
         self.deny.len() + self.protect.len() + self.gitdir.len()
     }
 
+    /// Acrescenta às pastas negadas e protegidas tudo o que existe dentro
+    /// delas (sem seguir links simbólicos): o kernel decide pelo próprio inode
+    /// e pelo diretório de cada operação, sem subir pela árvore. Acima de
+    /// `max` marcas, devolve `Err` com a contagem.
+    pub fn expand(&mut self, max: usize) -> Result<(), usize> {
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>, max: usize) -> bool {
+            let mut stack = vec![dir.to_path_buf()];
+            while let Some(d) = stack.pop() {
+                let Ok(rd) = std::fs::read_dir(&d) else {
+                    continue;
+                };
+                for e in rd.flatten() {
+                    let Ok(t) = e.file_type() else { continue };
+                    let p = e.path();
+                    if t.is_dir() {
+                        stack.push(p.clone());
+                    }
+                    out.push(p);
+                    if out.len() > max {
+                        return false;
+                    }
+                }
+            }
+            true
+        }
+        let mut n = self.len();
+        for v in [&mut self.deny, &mut self.protect] {
+            let mut more = Vec::new();
+            for p in v.iter() {
+                let is_dir = std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
+                if is_dir && !walk(p, &mut more, max.saturating_sub(n)) {
+                    return Err(n + more.len());
+                }
+            }
+            n += more.len();
+            v.extend(more);
+            v.sort();
+            v.dedup();
+        }
+        if self.len() > max {
+            return Err(self.len());
+        }
+        Ok(())
+    }
+
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -1890,6 +1935,35 @@ mod docker_view_tests {
         .unwrap();
         let m = docker_marks(&spec, &outra);
         assert!(m.protect.is_empty() && m.gitdir.is_empty(), "{m:?}");
+    }
+
+    #[test]
+    fn marcas_descem_nas_pastas() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let privado = base.join("privado");
+        std::fs::create_dir_all(privado.join("sub")).unwrap();
+        std::fs::write(privado.join("a"), "").unwrap();
+        std::fs::write(privado.join("sub/b"), "").unwrap();
+        std::os::unix::fs::symlink("/etc", privado.join("link")).unwrap();
+        let hooks = base.join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        std::fs::write(hooks.join("pre-commit"), "").unwrap();
+        let mut m = DockerMarks {
+            deny: vec![privado.clone()],
+            protect: vec![hooks.clone()],
+            gitdir: vec![],
+        };
+        m.clone().expand(100).unwrap();
+        let mut x = m.clone();
+        x.expand(100).unwrap();
+        for p in ["a", "sub", "sub/b", "link"] {
+            assert!(x.deny.contains(&privado.join(p)), "{p}: {x:?}");
+        }
+        // O link é marcado, não o alvo dele.
+        assert!(!x.deny.iter().any(|p| p.starts_with("/etc")));
+        assert!(x.protect.contains(&hooks.join("pre-commit")));
+        assert_eq!(m.expand(4), Err(5));
     }
 
     #[test]

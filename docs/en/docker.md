@@ -42,7 +42,7 @@ With more than 4096 paths to cover, the private Docker does not start, and every
 
 The covers above are mounts, and a container with `--privileged` can undo them (see the limits). With the [root helper](helper.md) installed and the BPF LSM active in the kernel, each folder's Docker also starts with BPF LSM programs attached to its slice. They decide by file, not by path:
 
-- **Denied for reading and writing:** the covered paths (the folder's secrets and `file-deny` and the `/etc` covers). In a denied folder, everything inside it, including what is created later.
+- **Denied for reading and writing:** the covered paths (the folder's secrets and `file-deny` and the `/etc` covers). In a denied folder, everything that exists inside it when the Docker starts; containers also cannot create, delete or rename anything inside it.
 - **Write-protected:** `hooks`, `config` and `config.worktree` of each git directory in the folder, with the submodules. Opening for writing, deleting, renaming, changing attributes, linking and creating anything inside `hooks` are denied. Reading still works.
 - **Reserved names:** in the git directories, creating `commondir`, `hooks`, `config` or `config.worktree`. The git directory itself cannot be deleted or renamed.
 
@@ -139,6 +139,5 @@ Error response from daemon: the private Docker is not available on this machine:
 - `--privileged` gives no real privilege: the container's root is the user, mapped.
 - A container that needs a host device outside the list, such as a VPN with `/dev/net/tun` or a file system with `/dev/fuse`, does not work in the private Docker.
 - **Without the eBPF confinement, covers fall to a privileged container.** With `--privileged`, a container has `CAP_SYS_ADMIN` in the user namespace where the view was mounted, and can unmount a cover or remove the read-only flag from a bind. This applies to the covered secrets and denied paths and to the `.git` protection (hooks and config read-only). An ordinary container cannot. With the [eBPF confinement](#ebpf-confinement), the kernel denies by file, and undoing the mount does not help.
-- **Secrets created later are not covered.** A secret created in the folder with the Docker already running, or a change in the file policy, only applies when the folder's Docker starts again (after `sandmux daemon restart`, or when the folder's last session ends). The exception, with the eBPF confinement, is what is created inside a denied folder.
+- **Files created later are not covered.** A secret created in the folder with the Docker already running, a file you create inside a denied folder, or a change in the file policy, only applies when the folder's Docker starts again (after `sandmux daemon restart`, or when the folder's last session ends). With the eBPF confinement, containers themselves cannot create anything inside a denied folder.
 - **Without the rest of the file policy:** containers have no file log and no live policy. Without the eBPF confinement, they also have no `.git/commondir` refusal.
-- **Too deep:** with the eBPF confinement, a file more than 64 levels below the root of the file system is denied to containers, because the kernel walks up the tree at most 64 levels to decide.

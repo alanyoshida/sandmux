@@ -239,7 +239,14 @@ impl Engines {
     /// Consumo do Docker da pasta, quando ele está rodando.
     pub fn stats(&self, workdir: &Path) -> Option<DockerStats> {
         let slot = self.slot(&canon(workdir));
-        let g = slot.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = slot.lock().unwrap_or_else(|e| e.into_inner());
+        // Um Docker que terminou sozinho (por exemplo, parado pela queda do
+        // auxiliar root) conta como parado, e sai da lista.
+        if let Some(e) = g.as_mut()
+            && !matches!(e.child.try_wait(), Ok(None))
+        {
+            stop_engine(g.take().expect("engine"));
+        }
         let e = g.as_ref()?;
         let containers = count_containers(&e.dirs.socket()).unwrap_or(0);
         let c = e
@@ -565,6 +572,16 @@ fn confine(
             ));
         }
         Err(e) => return Err(Confine::Off(e)),
+    }
+    // Tudo o que está dentro das pastas negadas e protegidas, porque o kernel
+    // não sobe pela árvore.
+    let mut marks = marks.clone();
+    let max = crate::helper::MAX_MARKS;
+    if let Err(n) = marks.expand(max) {
+        return Err(Confine::Off(trf!(
+            "a pasta tem {n} arquivos a marcar, acima do teto de {max}; reduza o `file-deny`",
+            "the folder has {n} files to mark, above the cap of {max}; shorten `file-deny`"
+        )));
     }
     let path = socket_path();
     let c = Client::connect(&path).map_err(|e| {

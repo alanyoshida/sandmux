@@ -12,7 +12,7 @@ O daemon pede o confinamento quando o Docker privado de uma pasta sobe, e o auxi
    - Eles valem para o `dockerd`, o `containerd`, o `runc` e todo contêiner da pasta.
    - Não valem para nenhum outro processo da máquina, nem para o agente.
 2. Marca os arquivos que o daemon manda:
-   - **negados:** os segredos e o `file-deny` da pasta e as coberturas de `/etc`;
+   - **negados:** os segredos e o `file-deny` da pasta, com tudo o que existe dentro das pastas negadas, e as coberturas de `/etc`;
    - **protegidos contra escrita:** `.git/hooks`, `.git/config` e `.git/config.worktree`;
    - **diretórios git:** neles não dá para criar `commondir`, `hooks`, `config` nem `config.worktree`.
 
@@ -75,7 +75,7 @@ O Docker de cada pasta volta às proteções sem privilégio na próxima vez que
 
 A unidade do serviço tem as restrições do systemd:
 
-- **capacidades:** só as de carregar e prender programas BPF LSM (`CAP_BPF`, `CAP_PERFMON`, `CAP_MAC_ADMIN`, `CAP_NET_ADMIN`, `CAP_SYS_ADMIN` e `CAP_SYS_RESOURCE`);
+- **capacidades:** só `CAP_BPF` e `CAP_PERFMON`, as que carregar e prender programas BPF LSM a um cgroup exige;
 - **sistema de arquivos:** `ProtectSystem=strict` e `ProtectHome=yes`;
 - **rede:** nenhuma (`PrivateNetwork=yes`), e só sockets Unix.
 

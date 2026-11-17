@@ -2,9 +2,15 @@
 //!
 //! Cada confinamento tem um mapa de armazenamento por inode só dele, com um
 //! conjunto de bits por inode marcado ([`DENY`], [`PROTECT`], [`GITDIR`]), e
-//! um programa por gancho. A decisão segue a árvore real do sistema de
-//! arquivos (`d_parent`), e não as montagens: desmontar uma cobertura ou
-//! tirar um somente-leitura não muda o resultado.
+//! um programa por gancho. A decisão é pelo inode, e não pelo caminho:
+//! desmontar uma cobertura ou tirar um somente-leitura não muda o resultado.
+//!
+//! O verificador só aceita no `bpf_inode_storage_get` ponteiros confiáveis:
+//! os argumentos do gancho, o `f_inode` de um `file` e o `d_inode` de uma
+//! `dentry` recebida. Subir pela árvore (`d_parent`) dá ponteiros não
+//! confiáveis, recusados. Por isso cada programa olha o próprio inode e o
+//! diretório que o gancho recebe, e quem pede o confinamento marca também
+//! tudo o que existe dentro das pastas negadas e protegidas.
 
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 
@@ -15,9 +21,11 @@ use crate::asm::{Alu, Asm, Cond, Insn, Label, R0, R1, R2, R3, R4, R6, R7, R8, R9
 use crate::btf::Btf;
 use crate::sys;
 
-/// Negado à leitura e à escrita, com tudo o que está abaixo.
+/// Negado à leitura e à escrita; num diretório, nada é criado, apagado nem
+/// renomeado dentro dele.
 pub const DENY: u32 = 1;
-/// Protegido contra escrita, com tudo o que está abaixo.
+/// Protegido contra escrita; num diretório, nada é criado, apagado nem
+/// renomeado dentro dele.
 pub const PROTECT: u32 = 2;
 /// Diretório git: nomes reservados não podem ser criados nele, e ele mesmo
 /// não pode ser apagado nem renomeado.
@@ -25,9 +33,6 @@ pub const GITDIR: u32 = 4;
 
 /// Nomes que não podem ser criados num diretório git.
 pub const GIT_RESERVED: [&str; 4] = ["commondir", "hooks", "config", "config.worktree"];
-
-/// Teto de níveis da subida pela árvore; mais fundo que isso é negado.
-pub const MAX_DEPTH: usize = 64;
 
 const FMODE_WRITE: i32 = 0x2;
 
@@ -86,10 +91,9 @@ pub struct Layout {
     pub fn_inode_storage_get: i32,
     pub fn_probe_read_kernel: i32,
     pub fn_ancestor_cgroup_id: i32,
-    file_dentry: i16,
+    file_inode: i16,
     file_mode: i16,
     file_mode_size: Size,
-    d_parent: i16,
     d_inode: i16,
     d_name_name: i16,
     d_name_len: i16,
@@ -126,10 +130,9 @@ impl Layout {
             fn_inode_storage_get: uapi(b, "BPF_FUNC_inode_storage_get")? as i32,
             fn_probe_read_kernel: uapi(b, "BPF_FUNC_probe_read_kernel")? as i32,
             fn_ancestor_cgroup_id: uapi(b, "BPF_FUNC_get_current_ancestor_cgroup_id")? as i32,
-            file_dentry: off(b, "file", "f_path.dentry")?,
+            file_inode: off(b, "file", "f_inode")?,
             file_mode: off(b, "file", "f_mode")?,
             file_mode_size: Size::of(b.field_size("file", "f_mode")?)?,
-            d_parent: off(b, "dentry", "d_parent")?,
             d_inode: off(b, "dentry", "d_inode")?,
             d_name_name: off(b, "dentry", "d_name.name")?,
             d_name_len: off(b, "dentry", "d_name.len")?,
@@ -179,68 +182,59 @@ struct Gen<'a> {
     a: Asm,
     l: &'a Layout,
     map_fd: i32,
-    allow: Label,
     deny: Label,
 }
 
 impl Gen<'_> {
-    /// Marca de `inode` (registrador com o ponteiro, já sem nulo) em R0
-    /// (ponteiro para o valor, ou 0).
-    fn storage(&mut self, inode: Reg) {
+    /// Nega se o inode em `inode` (ponteiro confiável, talvez nulo) tem algum
+    /// bit de `mask`.
+    fn check(&mut self, inode: Reg, mask: u32) {
+        let next = self.a.label();
+        self.a.jmp_imm(Cond::Eq, inode, 0, next);
         self.a.mov(R2, inode);
         self.a.ld_map_fd(R1, self.map_fd);
         self.a.mov_imm(R3, 0);
         self.a.mov_imm(R4, 0);
         self.a.call(self.l.fn_inode_storage_get);
+        self.a.jmp_imm(Cond::Eq, R0, 0, next);
+        self.a.ldx(Size::W, R1, R0, 0);
+        self.a.alu_imm(Alu::And, R1, mask as i32);
+        self.a.jmp_imm(Cond::Ne, R1, 0, self.deny);
+        self.a.bind(next);
     }
 
-    /// Sobe de `dentry` (em R7, destruído) pela árvore. No próprio inode,
-    /// nega se a marca tem algum bit de `own`; nos de cima, de `above`.
-    fn walk(&mut self, own: u32, above: u32) {
-        let done = self.a.label();
-        for level in 0..MAX_DEPTH {
-            let mask = if level == 0 { own } else { above };
-            let next = self.a.label();
-            if mask != 0 {
-                self.a.ldx(Size::DW, R1, R7, self.l.d_inode);
-                self.a.jmp_imm(Cond::Eq, R1, 0, next);
-                self.storage(R1);
-                self.a.jmp_imm(Cond::Eq, R0, 0, next);
-                self.a.ldx(Size::W, R1, R0, 0);
-                self.a.alu_imm(Alu::And, R1, mask as i32);
-                self.a.jmp_imm(Cond::Ne, R1, 0, self.deny);
-            }
-            self.a.bind(next);
-            self.a.ldx(Size::DW, R1, R7, self.l.d_parent);
-            self.a.jmp_imm(Cond::Eq, R1, 0, done);
-            self.a.jmp_reg(Cond::Eq, R1, R7, done);
-            self.a.mov(R7, R1);
-        }
-        // Fundo demais: nega, por segurança.
-        self.a.ja(self.deny);
-        self.a.bind(done);
+    /// Carrega o argumento `name` do gancho (posição `off` no contexto em R6)
+    /// em `dst`.
+    fn arg(&mut self, dst: Reg, off: i16) {
+        self.a.ldx(Size::DW, dst, R6, off);
     }
 
-    /// Nega a criação de um nome reservado (`dentry` em R9) num diretório
-    /// git. Termina em `allow` quando não é o caso.
+    /// `d_inode` da dentry em `dentry`, em `dst`.
+    fn d_inode(&mut self, dst: Reg, dentry: Reg) {
+        self.a.ldx(Size::DW, dst, dentry, self.l.d_inode);
+    }
+
+    /// Nega a criação de um nome reservado (dentry em R9) num diretório git
+    /// (inode do diretório em R8, confiável).
     fn reserved_names(&mut self) {
-        let a = &mut self.a;
-        a.ldx(Size::DW, R1, R9, self.l.d_parent);
-        a.jmp_imm(Cond::Eq, R1, 0, self.allow);
-        a.ldx(Size::DW, R1, R1, self.l.d_inode);
-        a.jmp_imm(Cond::Eq, R1, 0, self.allow);
-        self.storage(R1);
-        let a = &mut self.a;
-        a.jmp_imm(Cond::Eq, R0, 0, self.allow);
-        a.ldx(Size::W, R1, R0, 0);
-        a.alu_imm(Alu::And, R1, GITDIR as i32);
-        a.jmp_imm(Cond::Eq, R1, 0, self.allow);
-        a.ldx(self.l.d_name_len_size, R6, R9, self.l.d_name_len);
+        let done = self.a.label();
+        self.a.jmp_imm(Cond::Eq, R8, 0, done);
+        self.a.mov(R2, R8);
+        self.a.ld_map_fd(R1, self.map_fd);
+        self.a.mov_imm(R3, 0);
+        self.a.mov_imm(R4, 0);
+        self.a.call(self.l.fn_inode_storage_get);
+        self.a.jmp_imm(Cond::Eq, R0, 0, done);
+        self.a.ldx(Size::W, R1, R0, 0);
+        self.a.alu_imm(Alu::And, R1, GITDIR as i32);
+        self.a.jmp_imm(Cond::Eq, R1, 0, done);
+        self.a
+            .ldx(self.l.d_name_len_size, R7, R9, self.l.d_name_len);
         for name in GIT_RESERVED {
             let b = name.as_bytes();
             let next = self.a.label();
             let a = &mut self.a;
-            a.jmp_imm(Cond::Ne, R6, b.len() as i32, next);
+            a.jmp_imm(Cond::Ne, R7, b.len() as i32, next);
             a.st(Size::DW, R10, -16, 0);
             a.st(Size::DW, R10, -8, 0);
             a.mov(R1, R10);
@@ -261,7 +255,7 @@ impl Gen<'_> {
             a.ja(self.deny);
             a.bind(next);
         }
-        self.a.ja(self.allow);
+        self.a.bind(done);
     }
 }
 
@@ -270,13 +264,7 @@ pub fn build(l: &Layout, h: Hook, map_fd: i32, attach: Attach) -> Result<Vec<Ins
     let mut a = Asm::new();
     let allow = a.label();
     let deny = a.label();
-    let mut g = Gen {
-        a,
-        l,
-        map_fd,
-        allow,
-        deny,
-    };
+    let mut g = Gen { a, l, map_fd, deny };
     // R6 = contexto (vetor de argumentos de 64 bits).
     g.a.mov(R6, R1);
     if let Attach::Global { level, cgroup_id } = attach {
@@ -285,54 +273,63 @@ pub fn build(l: &Layout, h: Hook, map_fd: i32, attach: Attach) -> Result<Vec<Ins
         g.a.ld_imm64(R1, cgroup_id);
         g.a.jmp_reg(Cond::Ne, R0, R1, allow);
     }
-    let all = DENY | PROTECT | GITDIR;
-    let tree = DENY | PROTECT;
+    // O próprio alvo: negado, protegido ou diretório git. O diretório: negado
+    // ou protegido (nada entra nem sai dele).
+    let own = DENY | PROTECT | GITDIR;
+    let dir = DENY | PROTECT;
     match h {
         Hook::FileOpen => {
             let file = l.arg(h, "file")?;
-            g.a.ldx(Size::DW, R8, R6, file);
-            g.a.ldx(Size::DW, R7, R8, l.file_dentry);
+            g.arg(R8, file);
+            g.a.ldx(Size::DW, R7, R8, l.file_inode);
             g.a.ldx(l.file_mode_size, R1, R8, l.file_mode);
             let write = g.a.label();
             g.a.jmp_imm(Cond::Set, R1, FMODE_WRITE, write);
-            g.walk(DENY, DENY);
+            g.check(R7, DENY);
             g.a.ja(allow);
             g.a.bind(write);
-            g.walk(tree, tree);
-            g.a.ja(allow);
+            g.check(R7, DENY | PROTECT);
         }
         Hook::InodeCreate | Hook::InodeMkdir | Hook::InodeMknod | Hook::InodeSymlink => {
-            let d = l.arg(h, "dentry")?;
-            g.a.ldx(Size::DW, R9, R6, d);
-            g.a.mov(R7, R9);
-            g.walk(all, tree);
+            g.arg(R8, l.arg(h, "dir")?);
+            g.check(R8, dir);
+            g.arg(R9, l.arg(h, "dentry")?);
             g.reserved_names();
         }
         Hook::InodeLink => {
-            let old = l.arg(h, "old_dentry")?;
-            let new = l.arg(h, "new_dentry")?;
-            g.a.ldx(Size::DW, R7, R6, old);
-            g.walk(all, tree);
-            g.a.ldx(Size::DW, R9, R6, new);
-            g.a.mov(R7, R9);
-            g.walk(all, tree);
+            g.arg(R1, l.arg(h, "old_dentry")?);
+            g.d_inode(R7, R1);
+            g.check(R7, own);
+            g.arg(R8, l.arg(h, "dir")?);
+            g.check(R8, dir);
+            g.arg(R9, l.arg(h, "new_dentry")?);
             g.reserved_names();
         }
         Hook::InodeRename => {
-            let old = l.arg(h, "old_dentry")?;
-            let new = l.arg(h, "new_dentry")?;
-            g.a.ldx(Size::DW, R7, R6, old);
-            g.walk(all, tree);
-            g.a.ldx(Size::DW, R9, R6, new);
-            g.a.mov(R7, R9);
-            g.walk(all, tree);
+            g.arg(R1, l.arg(h, "old_dentry")?);
+            g.d_inode(R7, R1);
+            g.check(R7, own);
+            g.arg(R7, l.arg(h, "old_dir")?);
+            g.check(R7, dir);
+            g.arg(R1, l.arg(h, "new_dentry")?);
+            g.d_inode(R7, R1);
+            g.check(R7, own);
+            g.arg(R8, l.arg(h, "new_dir")?);
+            g.check(R8, dir);
+            g.arg(R9, l.arg(h, "new_dentry")?);
             g.reserved_names();
         }
-        Hook::InodeUnlink | Hook::InodeRmdir | Hook::InodeSetattr => {
-            let d = l.arg(h, "dentry")?;
-            g.a.ldx(Size::DW, R7, R6, d);
-            g.walk(all, tree);
-            g.a.ja(allow);
+        Hook::InodeUnlink | Hook::InodeRmdir => {
+            g.arg(R7, l.arg(h, "dir")?);
+            g.check(R7, dir);
+            g.arg(R1, l.arg(h, "dentry")?);
+            g.d_inode(R7, R1);
+            g.check(R7, own);
+        }
+        Hook::InodeSetattr => {
+            g.arg(R1, l.arg(h, "dentry")?);
+            g.d_inode(R7, R1);
+            g.check(R7, own);
         }
     }
     let (ok, no) = match attach {

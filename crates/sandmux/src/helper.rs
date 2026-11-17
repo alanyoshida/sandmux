@@ -315,11 +315,20 @@ impl Server {
                 match self.backend.confine(&cg) {
                     Ok(x) => {
                         let attach = x.attach();
+                        eprintln!(
+                            "{}",
+                            trf!(
+                                "sandmux-helper: confinamento ligado para o uid {} (anexo {attach})",
+                                "sandmux-helper: confinement on for uid {} ({attach} attach)",
+                                c.uid
+                            )
+                        );
                         c.confined = Some(x);
                         json!({"ok": true, "attach": attach})
                     }
                     Err(e) => {
                         self.release(c.uid);
+                        eprintln!("sandmux-helper: uid {}: {e}", c.uid);
                         err(e)
                     }
                 }

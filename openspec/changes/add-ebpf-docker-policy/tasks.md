@@ -14,12 +14,12 @@ Os testes com o Docker real, o `./scripts/check.sh` e o `scripts/check-root.sh` 
 
 ## 3. Verificações com root (dependem do `sudoers`)
 
-- [ ] 3.1 Provar a carga e o anexo `BPF_LSM_CGROUP` de um programa de `file_open` com o armazenamento por inode e o laço por `d_parent`, num cgroup de teste. Se o verificador ou o kernel recusarem, aplicar o recuo da decisão 3 ou da 6 e anotar no design e no spec
-- [ ] 3.2 Descobrir a lista mínima de capacidades do serviço e escrevê-la nas unidades
-- [ ] 3.3 Teste com o Docker real e o auxiliar: um contêiner `--privileged` com a pasta montada desmonta a cobertura do `.env` e não o lê (`EPERM`); um hard link para o `.env` não é lido; um arquivo novo dentro de uma pasta de `file-deny` é negado; o agente continua lendo um segredo que ele criou
-- [ ] 3.4 Teste com o Docker real e o auxiliar: um contêiner `--privileged` tira o somente-leitura de `.git/hooks` e não grava `pre-commit`; `.git/commondir` não é criado; renomear `.git/hooks` falha; `git log` no contêiner funciona; `docker build`, `docker run` e `docker compose` dos testes atuais continuam passando
-- [ ] 3.5 Teste com root: o auxiliar recusa o `confine` num cgroup do root pedido por um usuário comum; parar o auxiliar com o Docker rodando para o Docker da pasta; matar o daemon solta os programas (o `bpftool cgroup tree` não mostra mais nada no cgroup)
-- [ ] 3.6 Medir um `docker build` grande e uma leitura em massa num contêiner, com e sem o confinamento, e anotar no roadmap
+- [x] 3.1 Provar a carga e o anexo `BPF_LSM_CGROUP` de um programa de `file_open` com o armazenamento por inode e o laço por `d_parent`, num cgroup de teste. Se o verificador ou o kernel recusarem, aplicar o recuo da decisão 3 ou da 6 e anotar no design e no spec. Feito: o verificador recusou o ponteiro da subida por `d_parent`; recuo da decisão 6 aplicado, e o anexo `BPF_LSM_CGROUP` vale
+- [x] 3.2 Descobrir a lista mínima de capacidades do serviço e escrevê-la nas unidades. Feito: `CAP_BPF` e `CAP_PERFMON`, com o `check-root.sh` rodando o auxiliar por `systemd-run` com as propriedades da unidade
+- [x] 3.3 Teste com o Docker real e o auxiliar: um contêiner `--privileged` com a pasta montada desmonta a cobertura do `.env` e não o lê (`EPERM`); um hard link para o `.env` não é lido; um arquivo criado pelo contêiner dentro de uma pasta de `file-deny` é negado (o criado depois no host fica fora, pelo recuo da decisão 6); o agente continua lendo um segredo que ele criou
+- [x] 3.4 Teste com o Docker real e o auxiliar: um contêiner `--privileged` tira o somente-leitura de `.git/hooks` e não grava `pre-commit`; `.git/commondir` não é criado; renomear `.git/hooks` falha; `git log` no contêiner funciona; `docker build`, `docker run` e `docker compose` dos testes atuais continuam passando
+- [x] 3.5 Teste com root: o auxiliar recusa o `confine` num cgroup do root pedido por um usuário comum; parar o auxiliar com o Docker rodando para o Docker da pasta; fechar a conexão solta os programas (o `bpftool` sem root não lista os programas no teste; a soltura vem de fechar os descritores dos links, como o `Drop` do confinamento)
+- [x] 3.6 Medir um `docker build` grande e uma leitura em massa num contêiner, com e sem o confinamento, e anotar no roadmap. Feito: sem diferença mensurável (teste `custo_do_confinamento`, ignorado por padrão)
 
 ## 4. Daemon, estado e diagnóstico
 
@@ -36,7 +36,7 @@ Os testes com o Docker real, o `./scripts/check.sh` e o `scripts/check-root.sh` 
 ## 6. Documentação
 
 - [x] 6.1 Escrever `docs/helper.md` (o que o auxiliar faz, a autorização, como instalar e desligar, os limites), atualizar `docs/docker.md` (confinamento por eBPF, recuo, limites revistos) e `docs/install.md`, com os pares em inglês e os testes de `docs.rs`
-- [ ] 6.2 Rodar `./scripts/check.sh` e `scripts/check-root.sh` inteiros sob o vigia
+- [x] 6.2 Rodar `./scripts/check.sh` e `scripts/check-root.sh` inteiros sob o vigia
 
 ## Workflow follow-up
 
