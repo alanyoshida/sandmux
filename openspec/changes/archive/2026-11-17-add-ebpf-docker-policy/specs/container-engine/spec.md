@@ -70,4 +70,4 @@ Se a conexão com o auxiliar root cair com o Docker privado de uma pasta rodando
 
 #### Scenario: Auxiliar para com o Docker rodando
 - **WHEN** o confinamento vale e o serviço `sandmux-helper` é parado
-- **THEN** o Docker privado da pasta para, e o próximo `docker` sobe outro, sem o confinamento e com o aviso
+- **THEN** o Docker privado da pasta para, e o próximo `docker` sobe outro, confinado de novo se o auxiliar voltar a responder (o socket do systemd o sobe na conexão seguinte), ou sem o confinamento e com o aviso
