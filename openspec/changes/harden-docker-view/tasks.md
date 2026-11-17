@@ -33,7 +33,7 @@ Os testes com o Docker real e o `./scripts/check.sh` rodam sob o vigia de memór
 ## 5. Integração
 
 - [x] 5.1 Rodar `./scripts/check.sh` inteiro e verificar que passa, inclusive a suíte de fuga
-- [ ] 5.2 Conferir à mão numa sessão real do daemon, numa pasta com um `.env` criado no host: o `.env` chega vazio a um contêiner, `ls /d/pts` de um contêiner com `-v /dev:/d` não mostra os terminais do usuário, e `docker compose up` de um projeto de exemplo funciona
+- [x] 5.2 Conferir à mão numa sessão real do daemon, numa pasta com um `.env` criado no host: o `.env` chega vazio a um contêiner, `ls /d/pts` de um contêiner com `-v /dev:/d` não mostra os terminais do usuário, e `docker compose up` de um projeto de exemplo funciona. Confirmado pelo usuário em 2026-11-17 no build local ("Testei, pode publicar")
 - [x] 5.3 Atualizar `openspec/roadmap.md`: a situação do change 69, os achados que passaram de inferidos a testados, e as verificações que ficarem pendentes
 
 ## Workflow follow-up

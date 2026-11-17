@@ -1,19 +1,18 @@
-sandmux 0.1.18, antes da v1: o portal do desktop e a troca de uma chave vencida.
+sandmux 0.1.19, antes da v1: o Docker privado de cada pasta mais fechado.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Portal do desktop:** toda aba ganha, por padrão, um D-Bus próprio do sandmux, que não é o seu.
-  - **Tema:** os programas de dentro leem o tema claro ou escuro do seu desktop.
-  - **Notificações:** o `notify-send` e o portal chegam ao seu desktop com o nome da aba no título, no máximo 5 a cada 10 segundos por aba.
-  - **Abrir link:** o `xdg-open` abre links no seu navegador, mas só para domínios que a política de rede da aba permite; cada pedido entra em `sandmux net`.
-  - Qualquer outro serviço do D-Bus recebe erro, e nada do sandbox chega ao seu D-Bus.
-  - Para desligar, use `--no-portal` ou `portal = false`. Detalhes em [docs/window.md](https://github.com/alanyoshida/sandmux/blob/main/docs/window.md#portal-do-desktop).
-- **Trocar uma chave que venceu:** `sandmux vault set <nome>`, ou a tecla `v` na seção Cofre da TUI, troca só o valor e mantém o falso e os domínios. Os arquivos do harness continuam valendo, e o valor novo vale na próxima conexão, sem reiniciar a aba. Detalhes em [docs/vault.md](https://github.com/alanyoshida/sandmux/blob/main/docs/vault.md#trocar-uma-chave-que-venceu).
-- **Teste mais estável:** um teste do Docker que falhava às vezes foi corrigido; a causa era o nome repetido de um arquivo de saída do próprio teste.
+- **Chamadas de sistema negadas no Docker privado:** o `dockerd` sobe com um filtro seccomp do sandmux, herdado por todo contêiner da pasta, também com `--privileged` e `--security-opt seccomp=unconfined`.
+  - Negadas: as mesmas do sandbox do agente (`bpf`, `perf_event_open`, módulos, `kexec`, `userfaultfd`, `io_uring` e os `ioctl`s que injetam teclas no terminal), menos as de montagem, que o Docker usa.
+  - O chaveiro do kernel responde como se não existisse. O `su` e o `sudo` das imagens continuam funcionando.
+- **`/dev` mínimo nos contêineres:** só `null`, `zero`, `full`, `random`, `urandom`, `tty`, pseudo-terminais e `/dev/shm` próprios. Os terminais do usuário, a câmera, o áudio e os outros dispositivos do host não entram; a GPU e o `/dev/kvm` seguem as chaves `gpu` e `kvm` da configuração da pasta.
+- **Segredos da pasta cobertos:** quando o Docker da pasta sobe, os arquivos com cara de segredo e os caminhos de `file-deny` chegam vazios e em somente leitura a um `-v $PWD:/w`, menos os que o próprio agente criou. Acima de 4096 caminhos, o Docker não sobe e o `docker` explica como reduzir a lista.
+- **cgroups próprios:** o Docker roda num cgroup namespace próprio, e um contêiner com `-v /sys/fs/cgroup:/c` só vê os cgroups do Docker da pasta, sem o teto, as sessões e o resto do usuário.
+- Limites, como o contêiner privilegiado que consegue tirar as coberturas, em [docs/docker.md](https://github.com/alanyoshida/sandmux/blob/main/docs/docker.md#limites).
 
-Esta versão muda o protocolo entre o cliente e o daemon (38). Depois de atualizar, rode `sandmux daemon restart` e abra a TUI de novo.
+Esta versão não muda o protocolo entre o cliente e o daemon. Depois de atualizar, rode `sandmux daemon restart` para o Docker de cada pasta subir com a visão nova.
 
 ## Instalar
 

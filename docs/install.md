@@ -55,8 +55,8 @@ O tarball também traz o `install.sh`: dentro da pasta extraída, `sh install.sh
 | Tarball | `sandmux-<versão>-x86_64-linux.tar.gz` | onde o `install.sh` mandar | o `install.sh` já roda o setup |
 
 ```sh
-sudo apt install ./sandmux_0.1.18_amd64.deb
-sudo dnf install ./sandmux-0.1.18-1.x86_64.rpm
+sudo apt install ./sandmux_0.1.19_amd64.deb
+sudo dnf install ./sandmux-0.1.19-1.x86_64.rpm
 ```
 
 ## Pelo código
