@@ -367,6 +367,15 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 }
                 reply_unit(&mut stream, r)?;
             }
+            Msg::VaultSetValue { name, mut value } => {
+                // Os domínios não mudam: a política de rede fica como está.
+                let r = shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .set_value(&name, std::mem::take(&mut value));
+                reply_unit(&mut stream, r)?;
+            }
             Msg::VaultSetDomains { name, domains } => {
                 let r = shared
                     .vault

@@ -927,6 +927,8 @@ pub enum FormKind {
     AddSsh,
     /// Trocar os domínios do segredo com este nome.
     Domains(String),
+    /// Trocar o valor do segredo com este nome, mantendo o falso.
+    Value(String),
     /// Guardar a senha do cofre no keyring.
     Keyring,
 }
@@ -963,6 +965,7 @@ impl FormKind {
                 (["Servidores (vírgula)", "Servers (comma)"], false),
             ],
             FormKind::Domains(_) => &[(["Domínios (vírgula)", "Domains (comma)"], false)],
+            FormKind::Value(_) => &[(["Valor novo", "New value"], true)],
         }
     }
 
@@ -974,6 +977,7 @@ impl FormKind {
             FormKind::Add => sandmux_spec::tr!("Novo segredo", "New secret").into(),
             FormKind::AddSsh => sandmux_spec::tr!("Nova chave SSH", "New SSH key").into(),
             FormKind::Domains(n) => sandmux_spec::trf!("Domínios de {n}", "Domains of {n}"),
+            FormKind::Value(n) => sandmux_spec::trf!("Valor novo de {n}", "New value of {n}"),
             FormKind::Keyring => sandmux_spec::tr!(
                 "Guardar a senha no keyring",
                 "Store the password in the keyring"
@@ -1536,7 +1540,7 @@ impl App {
                     s.vault.form = Some(VaultForm::new(FormKind::Passwd, String::new()));
                 }
             }
-            Key::Char('a') | Key::Char('s') | Key::Char('d') | Key::Char('x') => {
+            Key::Char('a') | Key::Char('s') | Key::Char('d') | Key::Char('x') | Key::Char('v') => {
                 if !need(
                     s,
                     unlocked,
@@ -1559,6 +1563,22 @@ impl App {
                         ))
                     }
                     (Key::Char('x'), Some(e)) => s.vault.confirm = Some(e.name.clone()),
+                    (Key::Char('v'), Some(e)) if e.kind.is_empty() => {
+                        s.vault.form = Some(VaultForm::new(
+                            FormKind::Value(e.name.clone()),
+                            String::new(),
+                        ))
+                    }
+                    (Key::Char('v'), Some(_)) => {
+                        s.note = Some((
+                            sandmux_spec::tr!(
+                                "uma chave SSH se troca gravando a chave nova (s)",
+                                "an SSH key is replaced by storing the new key (s)"
+                            )
+                            .into(),
+                            true,
+                        ))
+                    }
                     _ => {
                         s.note = Some((
                             sandmux_spec::tr!(
@@ -1655,6 +1675,17 @@ impl App {
                     servers: list(3, false),
                 }
             }
+            FormKind::Value(name) => {
+                if v(0).is_empty() {
+                    return Err(
+                        tr!("o valor não pode ser vazio", "the value cannot be empty").into(),
+                    );
+                }
+                Msg::VaultSetValue {
+                    name: name.clone(),
+                    value: v(0).to_string(),
+                }
+            }
             FormKind::Domains(name) => Msg::VaultSetDomains {
                 name: name.clone(),
                 domains: list(0, true),
@@ -1670,7 +1701,9 @@ impl App {
                 zeroize::Zeroize::zeroize(old);
                 zeroize::Zeroize::zeroize(new);
             }
-            Msg::VaultAdd { value, .. } => zeroize::Zeroize::zeroize(value),
+            Msg::VaultAdd { value, .. } | Msg::VaultSetValue { value, .. } => {
+                zeroize::Zeroize::zeroize(value)
+            }
             Msg::VaultAddSsh { key, .. } => zeroize::Zeroize::zeroize(key),
             _ => {}
         }
@@ -1687,6 +1720,10 @@ impl App {
                 )
             }
             FormKind::Domains(n) => trf!("domínios de {n} trocados", "domains of {n} changed"),
+            FormKind::Value(n) => trf!(
+                "valor de {n} trocado; o falso e os domínios continuam os mesmos",
+                "value of {n} replaced; the fake and the domains stay the same"
+            ),
             FormKind::Keyring => tr!(
                 "senha guardada no keyring: o daemon abre o cofre sozinho",
                 "password stored in the keyring: the daemon opens the vault by itself"

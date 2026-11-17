@@ -391,6 +391,35 @@ impl VaultState {
 
     /// Troca os domínios de um token, ou os servidores de uma chave SSH,
     /// validados como na criação; o valor não muda.
+    /// Troca o valor de um segredo de token, mantendo o falso, os domínios e
+    /// as ferramentas: os arquivos do harness com o falso continuam valendo.
+    pub fn set_value(&mut self, name: &str, value: String) -> Result<(), String> {
+        if value.is_empty() {
+            return Err(tr!("o valor não pode ser vazio", "the value cannot be empty").into());
+        }
+        let o = self.opened()?;
+        let Some(s) = o.contents.secrets.iter_mut().find(|s| s.name == name) else {
+            return Err(trf!(
+                "não existe o segredo {name:?} no cofre; para criar, use `sandmux vault add {name}`",
+                "secret {name:?} is not in the vault; to create it, use `sandmux vault add {name}`"
+            ));
+        };
+        if s.is_ssh() {
+            return Err(trf!(
+                "{name} é uma chave SSH: grave a chave nova com `sandmux vault add-ssh`",
+                "{name} is an SSH key: store the new key with `sandmux vault add-ssh`"
+            ));
+        }
+        if !s.is_token() {
+            return Err(trf!(
+                "{name} é uma conexão de banco: grave de novo com `sandmux db add`",
+                "{name} is a database connection: store it again with `sandmux db add`"
+            ));
+        }
+        s.value = value;
+        self.save()
+    }
+
     pub fn set_domains(&mut self, name: &str, domains: Vec<String>) -> Result<(), String> {
         let domains: Vec<String> = domains
             .into_iter()
@@ -721,6 +750,41 @@ mod tests {
         assert!(v.ssh_keys(&names(&["*"])).is_empty());
         assert!(v.ssh_servers(&names(&["*"])).is_empty());
         assert_eq!(v.unknown_ssh(&names(&["outra"])), None);
+    }
+
+    #[test]
+    fn troca_o_valor_e_mantem_o_falso() {
+        let d = tempfile::tempdir().unwrap();
+        let mut v = VaultState::new(d.path());
+        v.init("s").unwrap();
+        v.add(Secret {
+            name: "openrouter".into(),
+            value: "sk-or-VELHA".into(),
+            domains: vec!["openrouter.ai".into()],
+            fake: Some("sandmux-fake-abc".into()),
+            tools: Vec::new(),
+            kind: String::new(),
+        })
+        .unwrap();
+        v.set_value("openrouter", "sk-or-NOVA".into()).unwrap();
+        let inj = v.injections();
+        let a = inj.iter().find(|i| i.name == "openrouter").unwrap();
+        assert_eq!(a.value, "sk-or-NOVA");
+        assert_eq!(a.fake, "sandmux-fake-abc");
+        assert_eq!(a.domains, ["openrouter.ai"]);
+        // Nome que não existe e valor vazio.
+        let e = v.set_value("naoexiste", "x".into()).unwrap_err();
+        assert!(e.contains("sandmux vault add naoexiste"), "{e}");
+        assert!(v.set_value("openrouter", String::new()).is_err());
+        // Depois de trancar e abrir, o valor novo continua.
+        v.lock();
+        assert!(v.set_value("openrouter", "y".into()).is_err());
+        v.unlock("s").unwrap();
+        let inj = v.injections();
+        assert_eq!(
+            inj.iter().find(|i| i.name == "openrouter").unwrap().value,
+            "sk-or-NOVA"
+        );
     }
 
     #[test]

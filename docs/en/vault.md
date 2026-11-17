@@ -44,10 +44,17 @@ sandmux vault keyring off   # deletes the password from the keyring
 ```bash
 sandmux vault add openrouter --domain openrouter.ai   # asks for the value, without echo
 sandmux vault list                                    # names, domains and fake values
+sandmux vault set openrouter                          # replaces only the value (expired key)
 sandmux vault remove openrouter
 ```
 
 Each secret has a name, the value and, optionally, the owner domains (patterns like those of the [network](network.md)), which say where the value may go once the swap in the traffic exists. With the vault unlocked, the gateway [decrypts the TLS](network.md#tls-decryption) of those domains and logs the method and the path of each request. The value never goes in a command-line argument, because arguments are visible to other processes.
+
+### Replacing a key that expired
+
+`sandmux vault set <name>` asks only for the new value, without echo. The fake, the domains and the tools stay the same, so no file of the harness needs to change, including the ones the import or `doctor --fix` wrote with the fake. The gateway asks the daemon for the secrets on each connection, and the new value applies on the next connection, without restarting the tab (an already open connection keeps the old value until it closes; Ctrl+b `r` forces it).
+
+Storing again with `sandmux vault add` and the same name also replaces the value, but creates a new fake: a harness file with the old fake stops working. An SSH key is replaced by storing the new key (`sandmux vault add-ssh`), and a database connection, with `sandmux db add`.
 
 ## From the TUI
 
@@ -61,6 +68,7 @@ The Vault section of the settings page (Ctrl+b `e`) shows the vault state and th
 | `k` | Turns the [keyring](#keyring) on, asking for the password, or off |
 | `a` | Adds a secret: name, value and comma-separated domains (`localhost` becomes `host.sandmux.internal`) |
 | `s` | Adds an SSH key: name, file, passphrase (empty if none) and servers |
+| `v` | Replaces only the value of the chosen secret, keeping the fake and the domains (a key that expired) |
 | `d` | Changes the domains of the chosen secret, without asking for the value again |
 | `x` | Removes the chosen secret, after `y` to confirm |
 | `r` | Reloads the vault |
