@@ -703,7 +703,7 @@ fn documentacao_da_instalacao_acompanha_o_codigo() {
         assert!(doc.contains(c), "docs/install.md não cita {c}");
     }
     // Os binários da distribuição são os mesmos nos pacotes e no script.
-    let bins = "sandmux sandmuxd sandmux-run sandmux-chat sandmux-db-mcp";
+    let bins = "sandmux sandmuxd sandmux-run sandmux-chat sandmux-db-mcp sandmux-helper";
     for f in [
         "packaging/install.sh",
         "scripts/dist.sh",
@@ -716,6 +716,19 @@ fn documentacao_da_instalacao_acompanha_o_codigo() {
             assert!(t.contains(b), "{f} não cita {b}");
         }
     }
+    // As unidades do auxiliar root vão nos pacotes do sistema, e não no
+    // Homebrew, que não roda como root.
+    for f in [
+        "scripts/dist.sh",
+        "packaging/rpm/sandmux.spec",
+        "packaging/aur/PKGBUILD.in",
+    ] {
+        let t = std::fs::read_to_string(format!("{root}{f}")).unwrap();
+        assert!(t.contains("sandmux-helper.socket"), "{f} sem as unidades");
+    }
+    let brew = std::fs::read_to_string(format!("{root}packaging/homebrew/sandmux.rb.in")).unwrap();
+    assert!(!brew.contains("sandmux-helper.socket"));
+    assert!(!brew.contains("bin.install \"bin/sandmux-helper"));
 }
 
 #[test]
@@ -773,4 +786,40 @@ fn documentacao_em_ingles_acompanha_a_portuguesa() {
             }
         }
     }
+}
+
+#[test]
+fn auxiliar_root_documentado() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    let doc = std::fs::read_to_string(format!("{root}docs/helper.md")).unwrap();
+    for c in [
+        "/run/sandmux-helper.sock",
+        "SO_PEERCRED",
+        "sandmux-helper.socket",
+        "~/.local/bin",
+        "16384",
+        "scripts/check-root.sh",
+        "lsm=",
+        "sudo systemctl disable --now sandmux-helper.socket",
+    ] {
+        assert!(doc.contains(c), "docs/helper.md não cita {c}");
+    }
+    assert!(doc.contains(&sandmux::helper::MAX_MARKS.to_string()));
+    assert!(doc.contains(&sandmux::helper::MAX_CONFINE_PER_UID.to_string()));
+    assert_eq!(sandmux::helper::SOCKET, "/run/sandmux-helper.sock");
+    let docker = std::fs::read_to_string(format!("{root}docs/docker.md")).unwrap();
+    for c in [
+        "## Confinamento por eBPF",
+        "EPERM",
+        "commondir",
+        "(helper.md)",
+    ] {
+        assert!(docker.contains(c), "docs/docker.md não cita {c}");
+    }
+    let unit =
+        std::fs::read_to_string(format!("{root}packaging/systemd/sandmux-helper.socket")).unwrap();
+    assert!(unit.contains(&format!(
+        "ListenSequentialPacket={}",
+        sandmux::helper::SOCKET
+    )));
 }

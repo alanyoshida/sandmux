@@ -22,8 +22,8 @@ pub mod toolsecrets;
 use std::path::PathBuf;
 
 pub use compose::{
-    Composed, DockerView, LayerMode, MAX_DOCKER_COVERS, RunOptions, check_dangerous, compose,
-    compose_docker_view, docker_covers,
+    Composed, DockerMarks, DockerView, LayerMode, MAX_DOCKER_COVERS, RunOptions, check_dangerous,
+    compose, compose_docker_view, docker_covers, docker_marks,
 };
 pub use host::Host;
 pub use layout::Layout;

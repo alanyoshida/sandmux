@@ -178,7 +178,7 @@ Unix stream socket. Each frame has 4 bytes of length (big-endian, content only, 
 | 0 | Control message in JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Terminal bytes: client input or session output |
 
-The first message is the greeting (`hello`), with the protocol number, the version, the data directory, the configuration folder and the language of the client (the daemon answers in that language). This version uses protocol 38. Different numbers end the connection, and the client shows both versions and points to `sandmux daemon restart`. A different data directory or configuration folder is also refused, with both folders in the message.
+The first message is the greeting (`hello`), with the protocol number, the version, the data directory, the configuration folder and the language of the client (the daemon answers in that language). This version uses protocol 39. Different numbers end the connection, and the client shows both versions and points to `sandmux daemon restart`. A different data directory or configuration folder is also refused, with both folders in the message.
 
 Along with the session request, the client sends the daemon the options given to `run`, the named profile, the current folder, the variables of the safe list, `SHELL` and the `pass-env` values of the effective policy. The daemon resolves the configuration layers ([docs/config.md](config.md)) and composes the launch specification with the same function as the direct `run`.
 

@@ -133,7 +133,7 @@ sandmux config set kvm true --profile vm
 
 ### Docker privado
 
-Cada pasta de trabalho tem o próprio Docker sem root, que o agente usa de dentro da sessão com `docker` e `docker compose`. Os contêineres só enxergam o que o sandbox enxerga: a pasta de trabalho e o sistema, nunca o HOME. As portas publicadas ficam só no `127.0.0.1` do host, e de dentro do sandbox são alcançadas por `host.sandmux.internal`. O tráfego dos contêineres passa pelo mesmo gateway do sandbox, com o registro e a política mais restrita das abas da pasta. Com o pacote `docker-registry` instalado, as imagens do Docker Hub ficam num cache comum entre as pastas. O Docker sobe no primeiro `docker` e para com a última sessão da pasta. Imagens e volumes persistem por pasta. O socket do Docker do host nunca entra. Detalhes em [docs/docker.md](docs/docker.md).
+Cada pasta de trabalho tem o próprio Docker sem root, que o agente usa de dentro da sessão com `docker` e `docker compose`. Os contêineres só enxergam o que o sandbox enxerga: a pasta de trabalho e o sistema, nunca o HOME. As portas publicadas ficam só no `127.0.0.1` do host, e de dentro do sandbox são alcançadas por `host.sandmux.internal`. O tráfego dos contêineres passa pelo mesmo gateway do sandbox, com o registro e a política mais restrita das abas da pasta. Com o pacote `docker-registry` instalado, as imagens do Docker Hub ficam num cache comum entre as pastas. O Docker sobe no primeiro `docker` e para com a última sessão da pasta. Imagens e volumes persistem por pasta. O socket do Docker do host nunca entra. Com o auxiliar root instalado (`sandmux setup`) e o BPF LSM ativo no kernel, o próprio kernel nega aos contêineres os segredos da pasta e a escrita no `.git`, mesmo com `--privileged`. Detalhes em [docs/docker.md](docs/docker.md) e [docs/helper.md](docs/helper.md).
 
 ### Rede
 
@@ -285,6 +285,7 @@ O projeto usa [OpenSpec](https://github.com/Fission-AI/OpenSpec) para planejar c
 | [docs/config.md](docs/config.md) | O arquivo de configuração: seções, chaves, camadas, perfis e comandos |
 | [docs/tui.md](docs/tui.md) | Interface com abas: atalhos e `[tui]`, modais, aba encerrada, mouse, seleção e colagem de imagem |
 | [docs/docker.md](docs/docker.md) | Docker privado por pasta: visão de arquivos, socket, ciclo de vida, persistência, portas e tetos |
+| [docs/helper.md](docs/helper.md) | Auxiliar root (`sandmux-helper`): o confinamento do Docker por eBPF, quem pode pedir, instalação e testes com root |
 | [docs/limits.md](docs/limits.md) | Tetos de memória e de processos: padrões, ajuste, escopo do systemd e medição |
 | [docs/window.md](docs/window.md) | Janelas e áudio do desktop: modo restrito pelo security-context e o repassador do Wayland, modo direto, áudio e limites |
 | [docs/vault.md](docs/vault.md) | Cofre de segredos: criar, desbloquear, segredos, troca no tráfego, ferramentas (`gh`, `git`, `npm`, `pip`, `cargo`, `docker`), chaves SSH e o agente SSH, chaves da importação, `--pass-env` na restauração e como é guardado |

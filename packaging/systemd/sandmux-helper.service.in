@@ -1,0 +1,21 @@
+[Unit]
+Description=sandmux: auxiliar root (confinamento do Docker privado por eBPF)
+Documentation=https://github.com/alanyoshida/sandmux/blob/main/docs/helper.md
+Requires=sandmux-helper.socket
+After=sandmux-helper.socket
+
+[Service]
+ExecStart=@SANDMUX_HELPER@
+# Carregar e prender programas BPF LSM a um cgroup: o mínimo, medido com o
+# scripts/check-root.sh (sem CAP_SYS_ADMIN, CAP_NET_ADMIN, CAP_MAC_ADMIN nem
+# CAP_SYS_RESOURCE o confinamento liga do mesmo jeito).
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+# Cada arquivo marcado fica aberto enquanto a marca existir.
+LimitNOFILE=1048576

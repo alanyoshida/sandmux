@@ -121,6 +121,225 @@ fn installed_msg() -> String {
     )
 }
 
+/// As unidades do auxiliar root, instaladas pelo `sandmux setup`.
+pub const UNIT_DIR: &str = "/etc/systemd/system";
+/// Onde os pacotes põem as unidades.
+pub const PACKAGE_UNIT_DIR: &str = "/usr/lib/systemd/system";
+const HELPER_SOCKET_UNIT: &str = include_str!("../../../packaging/systemd/sandmux-helper.socket");
+const HELPER_SERVICE_UNIT: &str =
+    include_str!("../../../packaging/systemd/sandmux-helper.service.in");
+
+/// As duas unidades (socket e serviço), com o caminho do binário.
+pub fn helper_units(bin: &Path) -> (String, String) {
+    (
+        HELPER_SOCKET_UNIT.to_string(),
+        HELPER_SERVICE_UNIT.replace("@SANDMUX_HELPER@", &bin.display().to_string()),
+    )
+}
+
+/// O binário e cada pasta acima dele são do root e não podem ser alterados
+/// por outro usuário? Sem isso, a unidade daria root a quem altera o
+/// binário. `meta` devolve o dono e o modo de um caminho.
+pub fn helper_path_safe(
+    bin: &Path,
+    meta: impl Fn(&Path) -> Option<(u32, u32)>,
+) -> std::result::Result<(), String> {
+    let mut p = Some(bin);
+    while let Some(x) = p {
+        let Some((uid, mode)) = meta(x) else {
+            return Err(trf!(
+                "não foi possível ler {}",
+                "could not read {}",
+                x.display()
+            ));
+        };
+        if uid != 0 {
+            return Err(trf!(
+                "{} não é do root",
+                "{} is not owned by root",
+                x.display()
+            ));
+        }
+        if mode & 0o022 != 0 {
+            return Err(trf!(
+                "{} pode ser alterado por outros usuários",
+                "{} can be changed by other users",
+                x.display()
+            ));
+        }
+        p = x.parent();
+    }
+    Ok(())
+}
+
+fn real_meta(p: &Path) -> Option<(u32, u32)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(p).ok().map(|m| (m.uid(), m.mode()))
+}
+
+/// O que fazer com o auxiliar root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HelperStep {
+    /// Não há `sandmux-helper` ao lado do `sandmux`.
+    NoBinary,
+    /// O binário fica num caminho que o usuário pode alterar.
+    Unsafe(String),
+    /// As unidades já estão instaladas (pelo setup ou por um pacote).
+    UpToDate,
+    /// Gravar as unidades e ligar o socket.
+    Install(PathBuf),
+}
+
+pub fn helper_step(
+    bin: Option<PathBuf>,
+    meta: impl Fn(&Path) -> Option<(u32, u32)>,
+    installed: Option<&str>,
+    package: bool,
+) -> HelperStep {
+    let Some(bin) = bin else {
+        return HelperStep::NoBinary;
+    };
+    if package {
+        return HelperStep::UpToDate;
+    }
+    if let Err(e) = helper_path_safe(&bin, meta) {
+        return HelperStep::Unsafe(e);
+    }
+    if installed == Some(helper_units(&bin).1.as_str()) {
+        return HelperStep::UpToDate;
+    }
+    HelperStep::Install(bin)
+}
+
+/// Os comandos que instalam o auxiliar, para quem roda como root.
+pub fn helper_manual_commands(bin: &Path) -> String {
+    let (sock, svc) = helper_units(bin);
+    format!(
+        "sudo tee {UNIT_DIR}/sandmux-helper.socket >/dev/null <<'EOF'\n{sock}EOF\nsudo tee {UNIT_DIR}/sandmux-helper.service >/dev/null <<'EOF'\n{svc}EOF\nsudo systemctl daemon-reload\nsudo systemctl enable --now sandmux-helper.socket\n"
+    )
+}
+
+fn install_helper(bin: &Path, sudo: bool) -> Result<()> {
+    let (sock, svc) = helper_units(bin);
+    let run = |args: &[&str], input: Option<&str>| -> Result<()> {
+        let mut c = if sudo {
+            let mut c = Command::new("sudo");
+            c.args(args);
+            c
+        } else {
+            let mut c = Command::new(args[0]);
+            c.args(&args[1..]);
+            c
+        };
+        c.stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::inherit()
+        })
+        .stdout(Stdio::null());
+        let mut child = c
+            .spawn()
+            .with_context(|| trf!("executar {}", "run {}", args[0]))?;
+        if let Some(i) = input {
+            child
+                .stdin
+                .take()
+                .context(tr!("entrada do processo", "process input"))?
+                .write_all(i.as_bytes())?;
+        }
+        if !child.wait()?.success() {
+            bail!(trf!("`{}` falhou", "`{}` failed", args.join(" ")));
+        }
+        Ok(())
+    };
+    let sock_path = format!("{UNIT_DIR}/sandmux-helper.socket");
+    let svc_path = format!("{UNIT_DIR}/sandmux-helper.service");
+    run(&["tee", &sock_path], Some(&sock))?;
+    run(&["tee", &svc_path], Some(&svc))?;
+    run(&["systemctl", "daemon-reload"], None)?;
+    run(
+        &["systemctl", "enable", "--now", "sandmux-helper.socket"],
+        None,
+    )?;
+    // Um serviço de uma versão anterior que ainda roda pega o binário novo.
+    let _ = run(
+        &["systemctl", "try-restart", "sandmux-helper.service"],
+        None,
+    );
+    Ok(())
+}
+
+/// O `sandmux-helper` ao lado do `sandmux` em execução.
+fn helper_binary() -> Option<PathBuf> {
+    let me = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let h = me.parent()?.join("sandmux-helper");
+    h.is_file().then_some(h)
+}
+
+fn setup_helper(root: bool, no_sudo: bool) -> Result<()> {
+    let installed =
+        std::fs::read_to_string(Path::new(UNIT_DIR).join("sandmux-helper.service")).ok();
+    let package = Path::new(PACKAGE_UNIT_DIR)
+        .join("sandmux-helper.service")
+        .exists();
+    match helper_step(helper_binary(), real_meta, installed.as_deref(), package) {
+        HelperStep::NoBinary => println!(
+            "{}",
+            tr!(
+                "Auxiliar root: o sandmux-helper não está ao lado do sandmux; o Docker privado sobe sem o confinamento por eBPF.",
+                "Root helper: sandmux-helper is not next to sandmux; the private Docker starts without the eBPF confinement."
+            )
+        ),
+        HelperStep::Unsafe(why) => println!(
+            "{}",
+            trf!(
+                "Auxiliar root: não instalado, porque {why}. O serviço roda como root, então o binário precisa estar numa pasta do root (como /usr/local/bin, pelo install.sh com sudo). O Docker privado sobe sem o confinamento por eBPF.",
+                "Root helper: not installed, because {why}. The service runs as root, so the binary must be in a root-owned folder (such as /usr/local/bin, through install.sh with sudo). The private Docker starts without the eBPF confinement."
+            )
+        ),
+        HelperStep::UpToDate => println!(
+            "{}",
+            tr!(
+                "Auxiliar root: as unidades do sandmux-helper já estão instaladas.",
+                "Root helper: the sandmux-helper units are already installed."
+            )
+        ),
+        HelperStep::Install(bin) => {
+            let interactive = std::io::stdin().is_terminal();
+            if root {
+                install_helper(&bin, false)?;
+            } else if !no_sudo
+                && interactive
+                && has_sudo()
+                && ask(tr!(
+                    "O confinamento do Docker privado por eBPF usa um auxiliar root (sandmux-helper), ativado por socket. Instalar as unidades do systemd com sudo?",
+                    "The private Docker's eBPF confinement uses a root helper (sandmux-helper), socket-activated. Install the systemd units with sudo?"
+                ))?
+            {
+                install_helper(&bin, true)?;
+            } else {
+                println!(
+                    "{}",
+                    trf!(
+                        "Auxiliar root: para ligar o confinamento do Docker por eBPF, rode como root:\n\n{}\nSem ele, o Docker privado sobe só com as proteções sem privilégio.",
+                        "Root helper: to turn on the Docker eBPF confinement, run as root:\n\n{}\nWithout it, the private Docker starts with the unprivileged protections only.",
+                        helper_manual_commands(&bin)
+                    )
+                );
+                return Ok(());
+            }
+            println!(
+                "{}",
+                trf!(
+                    "Auxiliar root: unidades gravadas em {UNIT_DIR} e socket ligado.",
+                    "Root helper: units written to {UNIT_DIR} and socket enabled."
+                )
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn run(no_sudo: bool, no_daemon: bool) -> Result<i32> {
     let root = is_root();
     let want = crate::doctor::apparmor_profile();
@@ -188,6 +407,7 @@ pub fn run(no_sudo: bool, no_daemon: bool) -> Result<i32> {
             }
         }
     }
+    setup_helper(root, no_sudo)?;
     if root || no_daemon {
         println!(
             "{}",
@@ -225,5 +445,64 @@ mod tests {
         let m = manual_commands("PERFIL\n");
         assert!(m.starts_with("sudo tee /etc/apparmor.d/sandmux-run"));
         assert!(m.contains("\nPERFIL\nEOF\nsudo apparmor_parser -r"));
+    }
+
+    fn meta_de<'a>(tab: &'a [(&'a str, u32, u32)]) -> impl Fn(&Path) -> Option<(u32, u32)> + 'a {
+        move |p: &Path| tab.iter().find(|x| Path::new(x.0) == p).map(|x| (x.1, x.2))
+    }
+
+    #[test]
+    fn auxiliar_so_num_caminho_do_root() {
+        let root_tab = [
+            ("/", 0, 0o40755),
+            ("/usr", 0, 0o40755),
+            ("/usr/local", 0, 0o40755),
+            ("/usr/local/bin", 0, 0o40755),
+            ("/usr/local/bin/sandmux-helper", 0, 0o100755),
+        ];
+        let bin = PathBuf::from("/usr/local/bin/sandmux-helper");
+        assert_eq!(
+            helper_step(Some(bin.clone()), meta_de(&root_tab), None, false),
+            HelperStep::Install(bin.clone())
+        );
+        let (_, svc) = helper_units(&bin);
+        assert!(svc.contains("ExecStart=/usr/local/bin/sandmux-helper\n"));
+        assert_eq!(
+            helper_step(Some(bin.clone()), meta_de(&root_tab), Some(&svc), false),
+            HelperStep::UpToDate
+        );
+        // No HOME: do usuário.
+        let home_tab = [
+            ("/", 0, 0o40755),
+            ("/home", 0, 0o40755),
+            ("/home/u", 1000, 0o40750),
+            ("/home/u/.local", 1000, 0o40755),
+            ("/home/u/.local/bin", 1000, 0o40755),
+            ("/home/u/.local/bin/sandmux-helper", 1000, 0o100755),
+        ];
+        let hb = PathBuf::from("/home/u/.local/bin/sandmux-helper");
+        match helper_step(Some(hb), meta_de(&home_tab), None, false) {
+            HelperStep::Unsafe(why) => assert!(why.contains("sandmux-helper"), "{why}"),
+            x => panic!("{x:?}"),
+        }
+        // Pasta do root, mas gravável por todos.
+        let mut tab = root_tab;
+        tab[3].2 = 0o40777;
+        assert!(matches!(
+            helper_step(Some(bin.clone()), meta_de(&tab), None, false),
+            HelperStep::Unsafe(_)
+        ));
+        assert_eq!(
+            helper_step(None, meta_de(&root_tab), None, false),
+            HelperStep::NoBinary
+        );
+        // Instalado por pacote: não mexe.
+        assert_eq!(
+            helper_step(Some(bin.clone()), meta_de(&tab), None, true),
+            HelperStep::UpToDate
+        );
+        let m = helper_manual_commands(&bin);
+        assert!(m.contains("sudo systemctl enable --now sandmux-helper.socket"));
+        assert!(m.contains("ListenSequentialPacket=/run/sandmux-helper.sock"));
     }
 }

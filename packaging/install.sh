@@ -13,11 +13,13 @@
 #   --from ORIGEM      pasta extraída ou tarball local, no lugar do download
 #   --version vX.Y.Z   versão da release (padrão: a mais nova)
 #   --no-setup         não roda `sandmux setup`
-#   --uninstall        remove os binários, o perfil e a unidade do daemon
+#   --uninstall        remove os binários, o perfil, a unidade do daemon e as
+#                      do auxiliar root
 set -eu
 
 REPO="alanyoshida/sandmux"
-BINS="sandmux sandmuxd sandmux-run sandmux-chat sandmux-db-mcp"
+BINS="sandmux sandmuxd sandmux-run sandmux-chat sandmux-db-mcp sandmux-helper"
+UNITS="/etc/systemd/system/sandmux-helper.socket /etc/systemd/system/sandmux-helper.service"
 PROFILE=/etc/apparmor.d/sandmux-run
 
 say() { printf 'sandmux: %s\n' "$*" >&2; }
@@ -37,7 +39,7 @@ while [ $# -gt 0 ]; do
         --version) [ $# -ge 2 ] || die "falta a versão de --version"; version=$2; shift ;;
         --no-setup) setup=0 ;;
         --uninstall) uninstall=1 ;;
-        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "opção desconhecida: $1" ;;
     esac
     shift
@@ -77,6 +79,17 @@ as_dest() {
 if [ "$uninstall" -eq 1 ]; then
     if [ -x "$prefix/sandmux" ] && [ "$(id -u)" -ne 0 ]; then
         "$prefix/sandmux" daemon disable >/dev/null 2>&1 || true
+    fi
+    # O auxiliar root para antes de o binário sumir.
+    if [ -e /etc/systemd/system/sandmux-helper.socket ]; then
+        if [ "$priv" -eq 1 ]; then
+            $SUDO systemctl disable --now sandmux-helper.socket 2>/dev/null || true
+            $SUDO systemctl stop sandmux-helper.service 2>/dev/null || true
+            $SUDO rm -f $UNITS
+            $SUDO systemctl daemon-reload 2>/dev/null || true
+        else
+            say "as unidades do sandmux-helper em /etc/systemd/system ficam: remova como root"
+        fi
     fi
     for b in $BINS; do
         [ -e "$prefix/$b" ] && as_dest rm -f "$prefix/$b"
@@ -138,7 +151,11 @@ fi
 
 as_dest mkdir -p "$prefix"
 for b in $BINS; do
-    [ -f "$src/bin/$b" ] || die "falta $b em $src/bin"
+    if [ ! -f "$src/bin/$b" ]; then
+        # Releases anteriores à 0.1.20 não têm o auxiliar root.
+        [ "$b" = sandmux-helper ] && continue
+        die "falta $b em $src/bin"
+    fi
     as_dest install -m 0755 "$src/bin/$b" "$prefix/$b"
 done
 say "binários instalados em $prefix"

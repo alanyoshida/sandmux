@@ -25,6 +25,10 @@ name = "sandmux-chat"
 path = "src/bin/sandmux-chat.rs"
 
 [[bin]]
+name = "sandmux-helper"
+path = "src/bin/sandmux-helper.rs"
+
+[[bin]]
 name = "sandmux-probe"
 path = "src/bin/sandmux-probe.rs"
 
@@ -38,6 +42,7 @@ sandmux-vault.workspace = true
 zeroize.workspace = true
 sandmux-import.workspace = true
 sandmux-proto.workspace = true
+sandmux-ebpf.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 libc.workspace = true

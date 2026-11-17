@@ -1,6 +1,17 @@
 post_install() {
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload || true
+        systemctl enable --now sandmux-helper.socket || true
+        systemctl try-restart sandmux-helper.service || true
+    fi
     echo "sandmux: rode \`sandmux setup\` como o seu usuário para subir o daemon e conferir o suporte."
 }
 post_upgrade() {
     post_install
+}
+pre_remove() {
+    if [ -d /run/systemd/system ]; then
+        systemctl disable --now sandmux-helper.socket || true
+        systemctl stop sandmux-helper.service || true
+    fi
 }

@@ -331,13 +331,17 @@ pub struct PolicySummary {
 }
 
 /// Consumo do Docker privado da pasta de uma sessão.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DockerStats {
     pub memory: u64,
     pub memory_max: Option<u64>,
     pub processes: u64,
     pub processes_max: Option<u64>,
     pub containers: u64,
+    /// Por que o confinamento por eBPF não vale; `None` quando vale
+    /// (protocolo 39).
+    #[serde(default)]
+    pub ebpf_off: Option<String>,
 }
 
 /// Uma porta publicada no `127.0.0.1` do host: a do sandbox (ou do
@@ -733,9 +737,10 @@ pub enum Msg {
         stats: Option<Stats>,
         oom_kills: u64,
         fork_refusals: u64,
-        /// Docker privado da pasta, quando está rodando.
+        /// Docker privado da pasta, quando está rodando (em caixa, pelo
+        /// tamanho da mensagem).
         #[serde(default)]
-        docker: Option<DockerStats>,
+        docker: Option<Box<DockerStats>>,
         /// Proteção aplicada no último lançamento (em caixa: é a maior
         /// parte da mensagem).
         #[serde(default)]
@@ -1008,13 +1013,14 @@ mod tests {
             }),
             oom_kills: 1,
             fork_refusals: 2,
-            docker: Some(DockerStats {
+            docker: Some(Box::new(DockerStats {
+                ebpf_off: None,
                 memory: 1,
                 memory_max: None,
                 processes: 2,
                 processes_max: Some(10),
                 containers: 3,
-            }),
+            })),
             ports: vec![PortInfo {
                 guest: 3000,
                 host: 3001,

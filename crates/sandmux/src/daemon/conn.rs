@@ -180,7 +180,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                             stats,
                             oom_kills,
                             fork_refusals,
-                            docker: shared.docker.stats(&w),
+                            docker: shared.docker.stats(&w).map(Box::new),
                             policy,
                             ports,
                         }

@@ -7,4 +7,7 @@ case "$1" in
         fi
         ;;
 esac
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload 2>/dev/null || true
+fi
 exit 0

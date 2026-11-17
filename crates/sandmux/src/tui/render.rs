@@ -2072,6 +2072,14 @@ fn draw_panel(f: &mut Frame, r: Rect, app: &App) {
                         ),
                         plain,
                     ));
+                    match &d.ebpf_off {
+                        None => rows.extend(row("eBPF", tr!("ligado", "on").into(), plain)),
+                        Some(_) => rows.extend(row(
+                            "eBPF",
+                            tr!("desligado (sandmux stats)", "off (sandmux stats)").into(),
+                            Style::default().fg(warn),
+                        )),
+                    }
                 }
                 None => rows.extend(row("Docker", tr!("parado", "stopped").into(), muted)),
             }

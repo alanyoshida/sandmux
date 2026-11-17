@@ -36,6 +36,18 @@ Um caminho coberto chega vazio e em somente leitura ao contêiner, e o arquivo d
 
 Com mais de 4096 caminhos a cobrir, o Docker privado não sobe, e todo `docker` mostra a contagem e o teto. Reduza a lista com `secret-files-off` ou `file-allow` na configuração da pasta.
 
+## Confinamento por eBPF
+
+As coberturas acima são montagens, e um contêiner com `--privileged` consegue desfazê-las (veja os limites). Com o [auxiliar root](helper.md) instalado e o BPF LSM ativo no kernel, o Docker de cada pasta sobe também com programas BPF LSM presos à slice dele. Eles decidem pelo arquivo, e não pelo caminho:
+
+- **Negados à leitura e à escrita:** os caminhos cobertos (os segredos e o `file-deny` da pasta e as coberturas de `/etc`). Numa pasta negada, tudo o que existe dentro dela quando o Docker sobe; os contêineres também não criam, apagam nem renomeiam nada dentro dela.
+- **Protegidos contra escrita:** `hooks`, `config` e `config.worktree` de cada diretório git da pasta, com os submódulos. Ficam negados abrir com escrita, apagar, renomear, mudar atributos, fazer link e criar algo dentro de `hooks`. A leitura continua.
+- **Nomes reservados:** nos diretórios git, criar `commondir`, `hooks`, `config` ou `config.worktree`. O próprio diretório git não pode ser apagado nem renomeado.
+
+Desmontar uma cobertura, tirar o somente-leitura, renomear, criar um hard link ou montar a pasta noutro lugar não mudam a decisão, que segue o inode. A operação negada falha com `EPERM`. As regras valem antes de o socket chegar à sessão e só para os processos do Docker da pasta: o agente, o host e o Docker de outra pasta não são afetados.
+
+Sem o auxiliar, sem o `bpf` na lista de LSMs do kernel ou sem a slice dos tetos, o Docker sobe só com as proteções sem privilégio. `sandmux stats <id>` mostra a linha "confinamento eBPF" com o motivo, e o `sandmux doctor` mostra como ligar. Se o auxiliar parar com o Docker rodando, o Docker da pasta para, e o próximo `docker` sobe outro.
+
 ## Quando sobe e quando para
 
 - **Sobe** na primeira conexão ao socket. Uma sessão que nunca roda `docker` não sobe Docker nenhum. A primeira chamada espera de 1 a 3 segundos.
@@ -124,6 +136,6 @@ O `dockerd` nasce com um filtro seccomp do sandmux, e todo processo do Docker da
 - Um contêiner roda no user namespace do `rootlesskit`, sem o Landlock e sem o supervisor de aberturas do sandmux. O que o limita é a visão de arquivos, o filtro seccomp acima e o user namespace sem privilégio, que impede módulos e montagens no host.
 - `--privileged` não dá privilégio real: o root do contêiner é o usuário, mapeado.
 - Um contêiner que precisa de um dispositivo do host fora da lista, como uma VPN com `/dev/net/tun` ou um sistema de arquivos com `/dev/fuse`, não funciona no Docker privado.
-- **As coberturas caem para um contêiner privilegiado.** Com `--privileged`, um contêiner tem `CAP_SYS_ADMIN` no user namespace em que a visão foi montada, e consegue desmontar uma cobertura ou tirar o somente-leitura de um bind. Isso vale para os segredos e os caminhos negados cobertos e para a proteção do `.git` (hooks e config em somente leitura). Um contêiner comum não consegue.
-- **Arquivos criados depois não são cobertos.** Um segredo criado na pasta com o Docker já rodando, ou uma mudança na política de arquivos, só vale quando o Docker da pasta sobe de novo (depois de `sandmux daemon restart`, ou quando a última sessão da pasta termina).
-- **Sem o resto da política de arquivos:** os contêineres não têm o registro de arquivos, a política ao vivo nem a recusa do `.git/commondir`.
+- **Sem o confinamento por eBPF, as coberturas caem para um contêiner privilegiado.** Com `--privileged`, um contêiner tem `CAP_SYS_ADMIN` no user namespace em que a visão foi montada, e consegue desmontar uma cobertura ou tirar o somente-leitura de um bind. Isso vale para os segredos e os caminhos negados cobertos e para a proteção do `.git` (hooks e config em somente leitura). Um contêiner comum não consegue. Com o [confinamento por eBPF](#confinamento-por-ebpf), o kernel nega pelo arquivo, e desfazer a montagem não adianta.
+- **Arquivos criados depois não são cobertos.** Um segredo criado na pasta com o Docker já rodando, um arquivo que você cria dentro de uma pasta negada, ou uma mudança na política de arquivos, só vale quando o Docker da pasta sobe de novo (depois de `sandmux daemon restart`, ou quando a última sessão da pasta termina). Com o confinamento por eBPF, os próprios contêineres não criam nada dentro de uma pasta negada.
+- **Sem o resto da política de arquivos:** os contêineres não têm o registro de arquivos nem a política ao vivo. Sem o confinamento por eBPF, também não têm a recusa do `.git/commondir`.

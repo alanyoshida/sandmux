@@ -14,11 +14,14 @@ install=sandmux.install
 
 package() {
     cd "sandmux-${pkgver}-x86_64-linux"
-    for b in sandmux sandmuxd sandmux-run sandmux-chat sandmux-db-mcp; do
+    for b in sandmux sandmuxd sandmux-run sandmux-chat sandmux-db-mcp sandmux-helper; do
         install -Dm0755 "bin/$b" "$pkgdir/usr/bin/$b"
     done
     install -Dm0644 /dev/stdin "$pkgdir/etc/apparmor.d/sandmux-run" \
         < <(sed 's|@SANDMUX_RUN@|/usr/bin/sandmux-run|' apparmor/sandmux-run)
+    install -Dm0644 systemd/sandmux-helper.socket "$pkgdir/usr/lib/systemd/system/sandmux-helper.socket"
+    install -Dm0644 /dev/stdin "$pkgdir/usr/lib/systemd/system/sandmux-helper.service" \
+        < <(sed 's|@SANDMUX_HELPER@|/usr/bin/sandmux-helper|' systemd/sandmux-helper.service.in)
     install -Dm0644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
     install -Dm0644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
 }

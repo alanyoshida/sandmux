@@ -587,6 +587,10 @@ docker run --rm sx echo RODOU"
     assert!(s.contains("RODOU"), "{s}");
     let st = stdout(&e.run(&e.work, &["stats", "1"]));
     assert!(st.contains("Docker privado da pasta: rodando"), "{st}");
+    assert!(
+        st.contains("confinamento eBPF: desligado: o Docker roda sem a slice"),
+        "{st}"
+    );
     t.write(b"exit\r");
     t.wait_exit();
     limpar(&e);
@@ -635,6 +639,9 @@ sleep 1; wget -q -O /dev/null http://host.sandmux.internal:{port}/ ; echo WGET=$
         "{st}"
     );
     assert!(st.contains(&format!("80 → 127.0.0.1:{port} (web)")), "{st}");
+    // Sem o auxiliar root (o teste aponta para um socket que não existe), o
+    // Docker sobe sem o confinamento por eBPF e diz por quê.
+    assert!(st.contains("confinamento eBPF: desligado: "), "{st}");
 
     // O contêiner só vê os cgroups do Docker da pasta: nem o teto (na slice,
     // acima do escopo) nem os cgroups do usuário.

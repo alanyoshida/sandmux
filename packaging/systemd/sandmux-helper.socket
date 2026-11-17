@@ -1,0 +1,11 @@
+[Unit]
+Description=sandmux: socket do auxiliar root (confinamento do Docker privado por eBPF)
+Documentation=https://github.com/alanyoshida/sandmux/blob/main/docs/helper.md
+
+[Socket]
+ListenSequentialPacket=/run/sandmux-helper.sock
+# Qualquer usuário conecta; o auxiliar decide pelo SO_PEERCRED de cada um.
+SocketMode=0666
+
+[Install]
+WantedBy=sockets.target

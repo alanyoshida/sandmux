@@ -19,6 +19,7 @@ sandmux-import = { path = "crates/sandmux-import" }
 sandmux-proto = { path = "crates/sandmux-proto" }
 sandmux-net = { path = "crates/sandmux-net" }
 sandmux-vault = { path = "crates/sandmux-vault" }
+sandmux-ebpf = { path = "crates/sandmux-ebpf" }
 
 anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }

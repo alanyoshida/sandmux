@@ -1,0 +1,8 @@
+#!/bin/sh
+# Para o auxiliar root antes de remover o binário.
+set -e
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+    systemctl disable --now sandmux-helper.socket 2>/dev/null || true
+    systemctl stop sandmux-helper.service 2>/dev/null || true
+fi
+exit 0
