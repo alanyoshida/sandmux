@@ -1248,6 +1248,25 @@ fn cofre_gerenciado_pela_pagina() {
         list.contains("lmstudio") && list.contains("host.sandmux.internal"),
         "{list}"
     );
+    // Troca só o valor: o falso continua o mesmo, e o valor nunca aparece.
+    let fake = |l: &str| {
+        l.lines()
+            .find(|x| x.contains("lmstudio"))
+            .and_then(|x| x.split("falso: ").nth(1))
+            .map(|f| f.trim().to_string())
+            .unwrap_or_default()
+    };
+    let before = fake(&list);
+    assert!(before.starts_with("sandmux-fake-"), "{list}");
+    t.wait_text("v troca o valor");
+    t.write(b"v");
+    t.wait_text("Valor novo de lmstudio");
+    t.write(b"valor-novo-456");
+    t.with_screen(|s| assert!(!s.contents().contains("valor-novo"), "{}", s.contents()));
+    t.write(b"\r");
+    t.wait_text("valor de lmstudio trocado");
+    let list = stdout(&e.run(&e.work, &["vault", "list"]));
+    assert_eq!(fake(&list), before, "{list}");
     // Edita os domínios.
     t.write(b"d");
     t.wait_text("Domínios de lmstudio");

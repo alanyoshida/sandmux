@@ -634,6 +634,12 @@ pub enum Msg {
         name: String,
         domains: Vec<String>,
     },
+    /// Troca o valor de um segredo de token, mantendo o falso, os domínios e
+    /// as ferramentas (protocolo 38).
+    VaultSetValue {
+        name: String,
+        value: String,
+    },
     VaultList,
     /// Os modelos dos provedores do assistente (protocolo 25).
     ListModels,

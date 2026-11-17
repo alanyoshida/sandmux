@@ -1110,6 +1110,60 @@ fn chave_trocada_na_porta_do_host_em_http() {
     t.wait_exit();
 }
 
+#[test]
+fn vault_set_troca_o_valor_e_mantem_o_falso() {
+    let e = Env::new();
+    let port = echo_http();
+    let fake = "sandmux-fake-chave0vencida000000000000000";
+    let name = "opencode:.config/opencode/opencode.json:Authorization";
+    let dir = e.data_dir().join("manifests");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("opencode.json"),
+        format!(
+            r#"{{"harness":"opencode","entries":[{{"file":".config/opencode/opencode.json","key":"Authorization","line":10,"fake":"{fake}"}}]}}"#
+        ),
+    )
+    .unwrap();
+    assert!(vault(&e, &["init"], "s\n").status.success());
+    let o = vault(&e, &["import"], "REAL-velha\nhost.sandmux.internal\n");
+    assert!(stderr(&o).contains("1 de 1"), "{}", stderr(&o));
+    let p = port.to_string();
+    let mut cmd = e.cmd(&e.work, &["run", "shell", "--host-port", &p]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut t = Term::spawn(cmd, 200, 30);
+    let curl = format!("curl -s -H 'Authorization: Bearer {fake}' http://127.0.0.1:{p}/v1/x");
+    t.write(format!("sleep 1.5; {curl}; echo FIM-$((1+1))\r").as_bytes());
+    t.wait_text("FIM-2");
+    t.wait_text("auth=Bearer REAL-velha");
+    // A chave venceu: só o valor muda, sem reiniciar a aba.
+    let o = vault(&e, &["set", name], "REAL-nova\n");
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("falso e os domínios continuam"),
+        "{}",
+        stderr(&o)
+    );
+    let list = stdout(&vault(&e, &["list"], ""));
+    assert!(
+        list.contains(fake) && list.contains("host.sandmux.internal"),
+        "{list}"
+    );
+    t.write(format!("clear; {curl}; echo FIM-$((2+2))\r").as_bytes());
+    t.wait_text("FIM-4");
+    t.wait_text("auth=Bearer REAL-nova");
+    // Nome que não existe: aponta o `vault add`.
+    let o = vault(&e, &["set", "naoexiste"], "x\n");
+    assert!(!o.status.success());
+    assert!(
+        stderr(&o).contains("sandmux vault add naoexiste"),
+        "{}",
+        stderr(&o)
+    );
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
 /// Servidor `/v1/models` no 127.0.0.1 do host: a lista só com a chave real.
 fn models_server(real: &'static str) -> u16 {
     use std::io::Read;

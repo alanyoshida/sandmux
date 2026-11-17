@@ -42,10 +42,17 @@ sandmux vault keyring off   # apaga a senha do keyring
 ```bash
 sandmux vault add openrouter --domain openrouter.ai   # pede o valor, sem eco
 sandmux vault list                                    # nomes, domínios e valores falsos
+sandmux vault set openrouter                          # troca só o valor (chave vencida)
 sandmux vault remove openrouter
 ```
 
 Cada segredo tem um nome, o valor e, se quiser, os domínios donos (padrões como os da [rede](network.md)), que dizem para onde o valor pode ir quando a troca no tráfego existir. Com o cofre desbloqueado, o gateway [decifra o TLS](network.md#decifração-do-tls) desses domínios e registra o método e o caminho de cada pedido. O valor nunca vai num argumento da linha de comando, porque argumentos ficam visíveis para outros processos.
+
+### Trocar uma chave que venceu
+
+`sandmux vault set <nome>` pede só o valor novo, sem eco. O falso, os domínios e as ferramentas continuam os mesmos, então nenhum arquivo do harness precisa mudar, nem os que a importação ou o `doctor --fix` gravaram com o falso. O gateway pede os segredos ao daemon a cada conexão, e o valor novo vale na próxima conexão, sem reiniciar a aba (uma conexão já aberta segue com o valor antigo até fechar; Ctrl+b `r` força).
+
+Gravar de novo com `sandmux vault add` e o mesmo nome também troca o valor, mas gera um falso novo: um arquivo do harness com o falso antigo deixa de funcionar. Uma chave SSH se troca gravando a chave nova (`sandmux vault add-ssh`), e uma conexão de banco, com `sandmux db add`.
 
 ## Pela TUI
 
@@ -59,6 +66,7 @@ A seção Cofre da página de configurações (Ctrl+b `e`) mostra o estado do co
 | `k` | Liga o [keyring](#keyring), pedindo a senha, ou desliga |
 | `a` | Acrescenta um segredo: nome, valor e domínios separados por vírgula (`localhost` vira `host.sandmux.internal`) |
 | `s` | Acrescenta uma chave SSH: nome, arquivo, passphrase (vazia se não tem) e servidores |
+| `v` | Troca só o valor do segredo escolhido, mantendo o falso e os domínios (uma chave que venceu) |
 | `d` | Troca os domínios do segredo escolhido, sem pedir o valor de novo |
 | `x` | Apaga o segredo escolhido, depois de `s` para confirmar |
 | `r` | Relê o cofre |

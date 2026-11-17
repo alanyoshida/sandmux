@@ -792,6 +792,9 @@ pub(super) fn settings_footer(s: &super::settings::Settings) -> String {
             k.push(t("a segredo", "a secret"));
             k.push(t("s chave SSH", "s SSH key"));
             if !v.entries.is_empty() {
+                if v.entries.get(v.sel).is_some_and(|e| e.kind.is_empty()) {
+                    k.push(t("v troca o valor", "v replaces the value"));
+                }
                 k.push(t("d domínios", "d domains"));
                 k.push(t("x apaga", "x removes"));
             }
@@ -1472,8 +1475,8 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
                     )
                 }
                 _ => tr!(
-                    "a segredo · s chave SSH · d domínios · x apaga · l tranca · p senha · k keyring · r relê",
-                    "a secret · s SSH key · d domains · x removes · l locks · p password · k keyring · r reloads"
+                    "a segredo · s chave SSH · v valor · d domínios · x apaga · l tranca · p senha · k keyring · r relê",
+                    "a secret · s SSH key · v value · d domains · x removes · l locks · p password · k keyring · r reloads"
                 ),
             };
             put(f, x0, y, w, Line::styled(keys, base.fg(muted)), base);

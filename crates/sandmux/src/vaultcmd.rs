@@ -49,6 +49,8 @@ pub enum VaultCmd {
     List,
     /// Apaga um segredo.
     Remove { nome: String },
+    /// Troca só o valor de um segredo (uma chave que venceu), mantendo o falso e os domínios.
+    Set { nome: String },
     /// Troca a senha do cofre.
     Passwd,
     /// Pede os valores reais das chaves que a importação trocou por valores falsos.
@@ -677,6 +679,29 @@ pub fn run(c: VaultCmd) -> Result<i32> {
                     )
                 );
             }
+        }
+        VaultCmd::Set { nome } => {
+            let v = input.secret(&trf!(
+                "Valor novo de {nome} (não aparece na tela: cada caractere vira •): ",
+                "New value of {nome} (not shown on screen: each character becomes •): "
+            ))?;
+            if v.is_empty() {
+                bail!(tr!(
+                    "o valor não pode ser vazio",
+                    "the value cannot be empty"
+                ));
+            }
+            call(&Msg::VaultSetValue {
+                name: nome.clone(),
+                value: v.to_string(),
+            })?;
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmux: valor de {nome} trocado; o falso e os domínios continuam os mesmos, e o valor novo vale na próxima conexão",
+                    "sandmux: value of {nome} replaced; the fake and the domains stay the same, and the new value applies on the next connection"
+                )
+            );
         }
         VaultCmd::Remove { nome } => {
             call(&Msg::VaultRemove { name: nome.clone() })?;

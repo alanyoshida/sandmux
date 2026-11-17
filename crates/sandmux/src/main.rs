@@ -1047,6 +1047,10 @@ const HELP_EN: &[(&str, &str)] = &[
         "Pede os valores reais das chaves que a importação trocou por valores falsos.",
         "Asks for the real values of the keys that the import replaced with fake values.",
     ),
+    (
+        "Troca só o valor de um segredo (uma chave que venceu), mantendo o falso e os domínios.",
+        "Replaces only the value of a secret (a key that expired), keeping the fake and the domains.",
+    ),
 ];
 
 fn dispatch(cmd: Cmd) -> Result<i32> {
