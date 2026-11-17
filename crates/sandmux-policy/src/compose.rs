@@ -671,6 +671,52 @@ fn gpu_devices(host: &Host) -> Vec<PathBuf> {
     out
 }
 
+/// O `/dev` do sandbox e da visão do Docker: um tmpfs novo com os seis nós
+/// básicos do host, pseudoterminais novos, `/dev/shm` próprio e os links de
+/// `fd`; a GPU e o `/dev/kvm` quando pedidos. Nenhum outro dispositivo do
+/// host. Devolve falso quando o KVM foi pedido e a máquina não o tem.
+fn minimal_dev(b: &mut Builder, gpu: bool, kvm: bool) -> bool {
+    let host = b.host;
+    b.tmpfs("/dev", 0o755);
+    for d in ["null", "zero", "full", "random", "urandom", "tty"] {
+        let p = PathBuf::from("/dev").join(d);
+        if host.sys(&p).exists() {
+            b.mounts.push(Mount::Device {
+                source: p.clone(),
+                dest: p,
+            });
+        }
+    }
+    b.mounts.push(Mount::Devpts {
+        dest: "/dev/pts".into(),
+    });
+    b.symlink("/dev/ptmx", "pts/ptmx");
+    b.tmpfs("/dev/shm", 0o1777);
+    b.symlink("/dev/fd", "/proc/self/fd");
+    b.symlink("/dev/stdin", "/proc/self/fd/0");
+    b.symlink("/dev/stdout", "/proc/self/fd/1");
+    b.symlink("/dev/stderr", "/proc/self/fd/2");
+    if gpu {
+        for dev in gpu_devices(host) {
+            b.mounts.push(Mount::Device {
+                source: dev.clone(),
+                dest: dev,
+            });
+        }
+    }
+    if !kvm {
+        return true;
+    }
+    if !host.sys("/dev/kvm").exists() {
+        return false;
+    }
+    b.mounts.push(Mount::Device {
+        source: "/dev/kvm".into(),
+        dest: "/dev/kvm".into(),
+    });
+    true
+}
+
 /// Compõe a especificação. O HOME sintético do harness precisa existir.
 pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> {
     if !presets::exists(&opts.harness) && opts.harness != crate::assistant::HARNESS {
@@ -767,48 +813,14 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     b.mounts.push(Mount::Proc {
         dest: "/proc".into(),
     });
-    b.tmpfs("/dev", 0o755);
-    for d in ["null", "zero", "full", "random", "urandom", "tty"] {
-        let p = PathBuf::from("/dev").join(d);
-        if host.sys(&p).exists() {
-            b.mounts.push(Mount::Device {
-                source: p.clone(),
-                dest: p,
-            });
-        }
-    }
-    b.mounts.push(Mount::Devpts {
-        dest: "/dev/pts".into(),
-    });
-    b.symlink("/dev/ptmx", "pts/ptmx");
-    b.tmpfs("/dev/shm", 0o1777);
-    b.symlink("/dev/fd", "/proc/self/fd");
-    b.symlink("/dev/stdin", "/proc/self/fd/0");
-    b.symlink("/dev/stdout", "/proc/self/fd/1");
-    b.symlink("/dev/stderr", "/proc/self/fd/2");
-    if !opts.no_gpu {
-        for dev in gpu_devices(host) {
-            b.mounts.push(Mount::Device {
-                source: dev.clone(),
-                dest: dev,
-            });
-        }
-    }
-    if opts.kvm {
-        if host.sys("/dev/kvm").exists() {
-            b.mounts.push(Mount::Device {
-                source: "/dev/kvm".into(),
-                dest: "/dev/kvm".into(),
-            });
-        } else {
-            warnings.push(
-                tr!(
-                    "--kvm pedido, mas a máquina não tem /dev/kvm",
-                    "--kvm requested, but the machine has no /dev/kvm"
-                )
-                .into(),
-            );
-        }
+    if !minimal_dev(&mut b, !opts.no_gpu, opts.kvm) {
+        warnings.push(
+            tr!(
+                "--kvm pedido, mas a máquina não tem /dev/kvm",
+                "--kvm requested, but the machine has no /dev/kvm"
+            )
+            .into(),
+        );
     }
     b.tmpfs("/tmp", 0o1777);
     b.tmpfs("/run", 0o755);
@@ -1206,6 +1218,7 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         seccomp: SeccompRules {
             deny_syscalls: lists::DENY_SYSCALLS.iter().map(|s| s.to_string()).collect(),
             deny_ioctls: lists::DENY_IOCTLS.iter().map(|s| s.to_string()).collect(),
+            enosys_syscalls: Vec::new(),
         },
         env: dedup,
         command: plan.command.clone(),
@@ -1369,15 +1382,77 @@ fn resolv(b: &mut Builder<'_>, host: &Host, gateway: bool) {
     }
 }
 
+/// O que a visão do Docker de uma pasta recebe da configuração dela.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DockerView {
+    /// Dispositivos de GPU (chave `gpu` da pasta).
+    pub gpu: bool,
+    /// `/dev/kvm` (chave `kvm` da pasta).
+    pub kvm: bool,
+    /// O Docker roda num cgroup namespace próprio (o do `rootlesskit`): a
+    /// visão monta um cgroup2 novo, cuja raiz é o cgroup do Docker. Falso só
+    /// nos testes do modo de visão, que rodam sem cgroup namespace.
+    pub cgroup: bool,
+    /// Arquivos e pastas da pasta de trabalho cobertos na visão: vazios e em
+    /// somente leitura ([`docker_covers`]).
+    pub covers: Vec<PathBuf>,
+}
+
+/// Teto de coberturas da visão do Docker: cada uma é uma montagem, copiada a
+/// cada contêiner criado.
+pub const MAX_DOCKER_COVERS: usize = 4096;
+
+/// As coberturas da visão do Docker de uma pasta: cada arquivo da pasta de
+/// trabalho com veredito de segredo ou de negação pela política de arquivos
+/// (a mesma decisão do supervisor), e cada pasta negada, sem descer nela. Os
+/// links simbólicos são pulados: não dá para montar por cima de um link, e o
+/// alvo, se estiver na pasta, é decidido pelo próprio caminho. Acima de
+/// [`MAX_DOCKER_COVERS`], devolve `Err` com a contagem.
+pub fn docker_covers(
+    policy: &sandmux_spec::files::FilePolicy,
+    created: &std::collections::HashSet<PathBuf>,
+    workdir: &Path,
+) -> Result<Vec<PathBuf>, usize> {
+    use sandmux_spec::files::FileVerdict;
+    let mut covers = Vec::new();
+    let mut stack = vec![workdir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let Ok(t) = e.file_type() else { continue };
+            if t.is_symlink() {
+                continue;
+            }
+            let path = e.path();
+            match policy.decide(&path, |q| created.contains(q)) {
+                FileVerdict::Deny(_) | FileVerdict::Secret => covers.push(path),
+                FileVerdict::Pass if t.is_dir() => stack.push(path),
+                FileVerdict::Pass => {}
+            }
+        }
+    }
+    if covers.len() > MAX_DOCKER_COVERS {
+        return Err(covers.len());
+    }
+    covers.sort();
+    Ok(covers)
+}
+
 /// Visão de arquivos do Docker privado de uma pasta: sistema em somente
 /// leitura com as coberturas de `/etc`, a pasta de trabalho com a proteção do
-/// `.git`, a pasta de entrada, `/dev` e o cgroup do host, `/proc` novo, áreas
-/// temporárias e as pastas do próprio Docker (`docker_dirs`), com escrita.
-/// Sem HOME, caches, toolchains nem as pastas extras das sessões: um `-v` do
-/// Docker só alcança o que está aqui. Só as montagens importam: quem aplica é
-/// o `sandmux-run --view-fd`, sem Landlock nem seccomp.
+/// `.git`, a pasta de entrada, o `/dev` mínimo do sandbox, `/proc` novo,
+/// áreas temporárias e as pastas do próprio Docker (`docker_dirs`), com
+/// escrita. Sem HOME, caches, toolchains nem as pastas extras das sessões: um
+/// `-v` do Docker só alcança o que está aqui. Quem aplica é o `sandmux-run
+/// --view-fd`, sem Landlock, com o filtro seccomp herdado
+/// ([`docker_view_seccomp`]).
 /// Com `ca_pem` (a CA do gateway do Docker), o pacote de CAs do sistema
 /// ganha a CA, para o `dockerd` confiar na decifração.
+#[allow(clippy::too_many_arguments)]
 pub fn compose_docker_view(
     host: &Host,
     workdir: &Path,
@@ -1386,6 +1461,7 @@ pub fn compose_docker_view(
     env: Vec<(String, String)>,
     tun_socket: Option<&Path>,
     ca_pem: Option<&str>,
+    view: &DockerView,
 ) -> Result<LaunchSpec, PolicyError> {
     let workdir = canonical(workdir, &host.cwd)?;
     check_dangerous(host, &workdir, true)?;
@@ -1403,8 +1479,10 @@ pub fn compose_docker_view(
     b.mounts.push(Mount::Proc {
         dest: "/proc".into(),
     });
-    // O runc cria os nós dos contêineres a partir do /dev desta visão.
-    b.bind(Path::new("/dev"), Path::new("/dev"), true);
+    // O runc monta nos contêineres os nós que acha no /dev desta visão (sem
+    // root real, ele não cria nós): só os do sandbox. O TUN já foi criado
+    // pelo `exec_view`, com o /dev do host, antes da raiz nova.
+    minimal_dev(&mut b, view.gpu, view.kvm);
     // Um /sys novo, com a rede do namespace do Docker e sem o securityfs do
     // host (com ele, o dockerd tenta carregar perfis do AppArmor e falha).
     if tun_socket.is_some() {
@@ -1412,12 +1490,14 @@ pub fn compose_docker_view(
             dest: "/sys".into(),
         });
     }
-    if host.sys("/sys/fs/cgroup").is_dir() {
-        b.bind(
-            Path::new("/sys/fs/cgroup"),
-            Path::new("/sys/fs/cgroup"),
-            true,
-        );
+    // O cgroup do Docker: um cgroup2 novo, cuja raiz é a do cgroup namespace
+    // do `rootlesskit` (o escopo da pasta, quando há tetos), e não o do host.
+    // A slice com o teto fica acima, fora do alcance. O runc não cria
+    // contêiner sem um cgroup montado.
+    if view.cgroup {
+        b.mounts.push(Mount::Cgroup2 {
+            dest: "/sys/fs/cgroup".into(),
+        });
     }
     b.tmpfs("/tmp", 0o1777);
     b.tmpfs("/run", 0o755);
@@ -1445,6 +1525,12 @@ pub fn compose_docker_view(
     }
     let mut warnings = Vec::new();
     b.workdir(&workdir, false, &mut warnings)?;
+    // Os segredos e os caminhos negados da pasta, que o agente não abre:
+    // vazios e em somente leitura para os contêineres. Um contêiner com
+    // `--privileged` consegue desmontar uma cobertura (limite documentado).
+    for c in &view.covers {
+        b.mounts.push(Mount::Cover { dest: c.clone() });
+    }
     let inbox = layout.inbox();
     if inbox.is_dir() {
         b.bind(&inbox, &inbox, false);
@@ -1456,7 +1542,7 @@ pub fn compose_docker_view(
         version: SPEC_VERSION,
         mounts: b.mounts,
         landlock: LandlockRules::default(),
-        seccomp: SeccompRules::default(),
+        seccomp: docker_view_seccomp(),
         env: env
             .into_iter()
             .map(|(name, value)| EnvVar { name, value })
@@ -1484,6 +1570,22 @@ pub fn compose_docker_view(
     spec.validate()
         .map_err(|e| PolicyError::Io(e.to_string()))?;
     Ok(spec)
+}
+
+/// O filtro seccomp da visão do Docker, herdado pelo `dockerd` e por todo
+/// contêiner: o do sandbox sem as chamadas de montagem, com o chaveiro em
+/// `ENOSYS`.
+fn docker_view_seccomp() -> SeccompRules {
+    let names = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    SeccompRules {
+        deny_syscalls: lists::DENY_SYSCALLS
+            .iter()
+            .filter(|s| !lists::MOUNT_SYSCALLS.contains(s) && !lists::KEYRING_SYSCALLS.contains(s))
+            .map(|s| s.to_string())
+            .collect(),
+        deny_ioctls: names(lists::DENY_IOCTLS),
+        enosys_syscalls: names(lists::KEYRING_SYSCALLS),
+    }
 }
 
 #[cfg(test)]
@@ -1519,6 +1621,7 @@ mod docker_view_tests {
             vec![("XDG_RUNTIME_DIR".into(), "/x".into())],
             Some(Path::new("/r/tun.sock")),
             None,
+            &DockerView::default(),
         )
         .unwrap();
         let n = spec.network.as_ref().unwrap();
@@ -1532,8 +1635,21 @@ mod docker_view_tests {
         };
         assert!(bind(&home.join("proj"), true));
         assert!(bind(&home.join("dados"), true) && bind(&home.join("estado"), true));
-        assert!(bind(Path::new("/dev"), true));
+        // O /dev mínimo, e não o do host.
+        assert!(!bind(Path::new("/dev"), true));
+        assert!(
+            spec.mounts
+                .iter()
+                .any(|m| matches!(m, Mount::Tmpfs { dest, .. } if dest == Path::new("/dev")))
+        );
+        assert!(
+            spec.mounts
+                .iter()
+                .any(|m| matches!(m, Mount::Devpts { dest } if dest == Path::new("/dev/pts")))
+        );
         assert!(bind(Path::new("/usr"), false));
+        // Nada do cgroup do host; sem o namespace, nenhum cgroup.
+        assert!(!dests.contains(&Path::new("/sys/fs/cgroup")));
         assert!(dests.contains(&Path::new("/proc")));
         assert!(dests.contains(&Path::new("/etc/shadow")) || !Path::new("/etc/shadow").exists());
         // Proteção do .git.
@@ -1546,8 +1662,169 @@ mod docker_view_tests {
         for p in [home.clone(), home.join(".ssh"), home.join(".cache/pip")] {
             assert!(!dests.contains(&p.as_path()), "{} na visão", p.display());
         }
-        assert!(spec.landlock.write.is_empty() && spec.seccomp.deny_syscalls.is_empty());
+        assert!(spec.landlock.write.is_empty());
+        // O filtro herdado: o do sandbox, sem as chamadas de montagem e com o
+        // chaveiro em ENOSYS.
+        let s = &spec.seccomp;
+        for c in [
+            "bpf",
+            "perf_event_open",
+            "userfaultfd",
+            "io_uring_setup",
+            "kexec_load",
+        ] {
+            assert!(s.deny_syscalls.iter().any(|x| x == c), "{c}");
+        }
+        for c in lists::MOUNT_SYSCALLS.iter().chain(lists::KEYRING_SYSCALLS) {
+            assert!(!s.deny_syscalls.iter().any(|x| x == c), "{c}");
+        }
+        assert_eq!(s.enosys_syscalls, ["keyctl", "add_key", "request_key"]);
+        assert_eq!(s.deny_ioctls, ["TIOCSTI", "TIOCLINUX"]);
         assert_eq!(spec.command, vec!["dockerd"]);
+    }
+
+    #[test]
+    fn coberturas_pela_politica_de_arquivos() {
+        use sandmux_spec::files::{FilePattern, FilePolicy, default_secrets};
+        let d = tempfile::tempdir().unwrap();
+        let w = d.path().canonicalize().unwrap();
+        for p in ["privado/fundo", "src", "cfg"] {
+            std::fs::create_dir_all(w.join(p)).unwrap();
+        }
+        for f in [
+            ".env",
+            ".env.example",
+            "chave.pem",
+            "cfg/liberado.key",
+            "src/main.rs",
+            "privado/fundo/x.pem",
+            "privado/a.txt",
+        ] {
+            std::fs::write(w.join(f), "x").unwrap();
+        }
+        std::os::unix::fs::symlink("/etc/passwd", w.join("link.pem")).unwrap();
+        let (secrets, secret_exceptions) = default_secrets();
+        let pat = |s: &str| FilePattern::parse(s, None).unwrap();
+        let policy = FilePolicy {
+            deny: vec![pat(&format!("{}/privado", w.display()))],
+            allow: vec![pat(&format!("{}/cfg/liberado.key", w.display()))],
+            secrets,
+            secret_exceptions,
+            workdir: w.clone(),
+        };
+        let created: std::collections::HashSet<PathBuf> = [w.join("chave.pem")].into();
+        let covers = docker_covers(&policy, &created, &w).unwrap();
+        // O .env do usuário e a pasta negada inteira, sem descer nela; o
+        // exemplo, o segredo do agente, o file-allow e o link ficam de fora.
+        assert_eq!(covers, [w.join(".env"), w.join("privado")]);
+
+        // Acima do teto, a contagem: os dois de antes e mais 4095.
+        let muitos = w.join("muitos");
+        std::fs::create_dir_all(&muitos).unwrap();
+        for i in 0..MAX_DOCKER_COVERS - 2 {
+            std::fs::write(muitos.join(format!("{i}.pem")), "").unwrap();
+        }
+        assert_eq!(
+            docker_covers(&policy, &created, &w).map(|c| c.len()),
+            Ok(MAX_DOCKER_COVERS)
+        );
+        std::fs::write(muitos.join("mais.pem"), "").unwrap();
+        assert_eq!(
+            docker_covers(&policy, &created, &w),
+            Err(MAX_DOCKER_COVERS + 1)
+        );
+    }
+
+    #[test]
+    fn visao_com_coberturas() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let (sys, home) = (base.join("sys"), base.join("home"));
+        std::fs::create_dir_all(sys.join("etc")).unwrap();
+        std::fs::create_dir_all(home.join("proj")).unwrap();
+        let h = rede_host(&sys, &home);
+        let spec = compose_docker_view(
+            &h,
+            &home.join("proj"),
+            &[],
+            vec!["dockerd".into()],
+            Vec::new(),
+            None,
+            None,
+            &DockerView {
+                covers: vec![home.join("proj/.env")],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let w = spec
+            .mounts
+            .iter()
+            .position(|m| matches!(m, Mount::Bind { dest, .. } if *dest == home.join("proj")))
+            .unwrap();
+        let c = spec
+            .mounts
+            .iter()
+            .position(|m| matches!(m, Mount::Cover { dest } if *dest == home.join("proj/.env")))
+            .unwrap();
+        assert!(c > w, "a cobertura vem depois da pasta de trabalho");
+    }
+
+    #[test]
+    fn dispositivos_da_visao_seguem_a_pasta() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let (sys, home) = (base.join("sys"), base.join("home"));
+        for p in ["etc", "dev/dri"] {
+            std::fs::create_dir_all(sys.join(p)).unwrap();
+        }
+        for p in [
+            "dev/null",
+            "dev/tty",
+            "dev/dri/renderD128",
+            "dev/kvm",
+            "dev/video0",
+            "dev/fuse",
+        ] {
+            std::fs::write(sys.join(p), "").unwrap();
+        }
+        std::fs::create_dir_all(home.join("proj")).unwrap();
+        let h = rede_host(&sys, &home);
+        let devices = |gpu: bool, kvm: bool| -> Vec<PathBuf> {
+            compose_docker_view(
+                &h,
+                &home.join("proj"),
+                &[],
+                vec!["dockerd".into()],
+                Vec::new(),
+                None,
+                None,
+                &DockerView {
+                    gpu,
+                    kvm,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .mounts
+            .into_iter()
+            .filter_map(|m| match m {
+                Mount::Device { dest, .. } => Some(dest),
+                _ => None,
+            })
+            .collect()
+        };
+        let p = |s: &str| PathBuf::from(s);
+        assert_eq!(devices(false, false), [p("/dev/null"), p("/dev/tty")]);
+        assert_eq!(
+            devices(true, true),
+            [
+                p("/dev/null"),
+                p("/dev/tty"),
+                p("/dev/dri/renderD128"),
+                p("/dev/kvm")
+            ]
+        );
     }
 
     fn rede_host(sys: &Path, home: &Path) -> Host {
@@ -1624,6 +1901,7 @@ mod docker_view_tests {
                 Vec::new(),
                 Some(Path::new("/r/tun.sock")),
                 ca,
+                &DockerView::default(),
             )
             .unwrap()
         };

@@ -213,10 +213,11 @@ fn status_field(field: &str) -> String {
 
 fn identity() -> Result<String, std::io::Error> {
     // SAFETY: consultas sem efeito colateral.
-    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+    let (uid, gid, euid) = unsafe { (libc::getuid(), libc::getgid(), libc::geteuid()) };
     Ok(json!({
         "uid": uid,
         "gid": gid,
+        "euid": euid,
         "cap_eff": status_field("CapEff"),
         "cap_bnd": status_field("CapBnd"),
         "no_new_privs": status_field("NoNewPrivs"),

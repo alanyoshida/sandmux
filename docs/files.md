@@ -61,6 +61,7 @@ Na pasta de trabalho, estes arquivos não abrem para o agente: `.env` e `.env.*`
 - **Criados pelo agente:** um arquivo assim que o próprio agente criar (abrindo, renomeando ou ligando) continua aberto para ele, também nos lançamentos seguintes. A lista fica em `$XDG_STATE_HOME/sandmux/files/created/`, fora do alcance do agente. Se você preencher depois um arquivo criado pelo agente com um segredo real, negue-o com `sandmux files deny`.
 - **Certificados:** um certificado público em `.pem` na pasta de trabalho também fica escondido; libere com `file-allow` ou `secret-files-off`.
 - **Renomear e ligar:** renomear ou ligar um segredo para outro nome é negado, para ele não aparecer com outro nome.
+- **No Docker privado:** os contêineres não passam pelo supervisor. Os segredos e os caminhos de `file-deny` que existem quando o Docker da pasta sobe chegam vazios a eles, com limites que o supervisor não tem: veja [docker.md](docker.md#segredos-e-caminhos-negados).
 
 ### `.git/commondir` e as chamadas de nome
 

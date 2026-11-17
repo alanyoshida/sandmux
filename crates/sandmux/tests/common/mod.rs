@@ -50,6 +50,7 @@ pub fn default_seccomp() -> SeccompRules {
         .map(|s| s.to_string())
         .collect(),
         deny_ioctls: vec!["TIOCSTI".into(), "TIOCLINUX".into()],
+        enosys_syscalls: vec![],
     }
 }
 

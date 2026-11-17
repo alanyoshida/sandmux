@@ -41,7 +41,9 @@ Consequência do último ponto: neste change, só é garantia o que não depende
 
 ### 2. Chaveiro com `ENOSYS`
 
-O `runc` cria um chaveiro de sessão novo por contêiner. Pelo que o agente conhece do código do `runc`, ele trata só o `ENOSYS` como "o kernel não tem chaveiro", e qualquer outro erro derruba a criação do contêiner; isso não foi conferido na versão instalada (1.5.3) e é verificado na tarefa 1.4. Por isso `keyctl`, `add_key` e `request_key` devolvem `ENOSYS` na visão do Docker, e as outras chamadas, `EPERM`.
+O `runc` cria um chaveiro de sessão novo por contêiner. Pelo que o agente conhece do código do `runc`, ele trata só o `ENOSYS` como "o kernel não tem chaveiro", e qualquer outro erro derruba a criação do contêiner. Por isso `keyctl`, `add_key` e `request_key` devolvem `ENOSYS` na visão do Docker, e as outras chamadas, `EPERM`.
+
+Conferido na tarefa 1.4 (2026-11-17), com o `runc` 1.5.3 e o Docker 29.9.3: os contêineres sobem com o chaveiro em `ENOSYS`, e o recuo não foi preciso. Na mesma prova, sem o filtro, um processo da visão lia o identificador do chaveiro de sessão.
 
 - `SeccompRules` ganha uma lista `enosys_syscalls`, com valor padrão vazio; o sandbox do agente não muda.
 - **Recuo, se o `runc` instalado não tolerar o `ENOSYS`:** o `runc` da visão (o wrapper que já existe em `/run/sandmux/bin`) passa `--no-new-keyring` ao `create` e ao `run`, e as três chamadas voltam para `EPERM`.
@@ -58,9 +60,11 @@ O trecho de `compose` que monta o `/dev` do sandbox (tmpfs, os seis nós, `devpt
 
 O `rootlesskit` ganha `--cgroupns` (existe na versão 3.3 da máquina de referência). A visão troca o bind de `/sys/fs/cgroup` por um cgroup2 novo, montado pelo `exec_view` (tipo de montagem novo `cgroup2` na especificação). A raiz visível é o escopo do Docker; a slice com o teto fica acima dela.
 
-- **Processos fora da raiz do escopo:** com `--evacuate-cgroup2`, o `rootlesskit` leva os processos para um subgrupo, e o `dockerd` passa a usar `--cgroup-parent /conteineres`, ao lado dele. A raiz fica sem processos, como o cgroup v2 pede para delegar controladores.
-- **Sem escopo** (máquina sem os tetos): a visão não monta cgroup nenhum. Sem `--cgroupns`, o kernel recusa montar um cgroup2 de dentro do user namespace, então um contêiner não consegue montar um por conta própria.
-- **Recuo, se o `runc` não criar os cgroups dos contêineres dentro do namespace:** a visão fica sem cgroup também com escopo. Os contêineres ficam no cgroup do `dockerd`, ainda sob o teto da slice; perde-se o consumo por contêiner do `docker stats`. O `sandmux stats` não muda, porque lê a slice de fora.
+- **Processos fora da raiz do escopo:** com `--evacuate-cgroup2=motor`, o `rootlesskit` leva os processos para um subgrupo. A raiz fica sem processos, como o cgroup v2 pede para delegar controladores.
+- **Onde ficam os contêineres (medido em 2026-11-17):** o `dockerd` sem root fica com o driver de cgroup `none`, e o `--cgroup-parent` não tem efeito. O `runc` cria cada contêiner na raiz do namespace, que é o escopo, ao lado de `motor`. O `--cgroup-parent conteineres` antigo ficou como estava.
+- **O escopo sem teto próprio:** o escopo recebia o mesmo teto da slice. Como ele é a raiz que os contêineres enxergam, um contêiner via o `memory.max` de 512M e podia afrouxá-lo (a slice ainda seguraria). O teto passa a ficar só na slice, e o escopo do Docker sobe sem `MemoryMax` nem `TasksMax`.
+- **Sem escopo** (máquina sem os tetos), mudado na implementação: o desenho previa a visão sem cgroup nenhum, mas o `runc` não cria contêiner sem um cgroup montado ("no cgroup mount found in mountinfo"), e o Docker inteiro deixaria de funcionar nessas máquinas. O `--cgroupns` passa a valer sempre, e o cgroup2 da visão também; só o `--evacuate-cgroup2` depende do escopo, porque mover processos exige escrever no cgroup. A raiz que os contêineres enxergam é o cgroup em que o `rootlesskit` sobe (o do daemon), nunca a árvore do usuário. Numa máquina sem o systemd de usuário, esse cgroup não é delegado ao usuário, e nada nele é gravável; isso não foi testado numa máquina assim. O teste simula a falta dos tetos tirando o `systemd-run` do `PATH` do daemon, e confere que o Docker funciona e que a árvore do usuário não aparece.
+- **Recuo, se o `runc` não criar os cgroups dos contêineres dentro do namespace:** não foi preciso.
 - **Alternativa descartada:** manter o bind do host em somente leitura. O `runc` precisa escrever, e o somente-leitura é uma cobertura.
 
 ### 5. Coberturas pela política de arquivos da pasta

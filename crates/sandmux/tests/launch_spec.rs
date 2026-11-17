@@ -55,6 +55,21 @@ fn campo_desconhecido_nao_executa() {
 }
 
 #[test]
+fn chamada_enosys_desconhecida_nao_executa() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = marker_spec(dir.path());
+    s.seccomp.enosys_syscalls.push("nao_existe".into());
+    let out = run_spec(&s);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("nao_existe"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!dir.path().join("executou").exists());
+}
+
+#[test]
 fn json_malformado_nao_executa() {
     let dir = tempfile::tempdir().unwrap();
     let mut json = marker_spec(dir.path()).to_json();

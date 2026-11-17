@@ -88,20 +88,31 @@ fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
 }
 
 fn deny() -> libc::sock_filter {
-    stmt(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32)
+    deny_with(libc::EPERM)
+}
+
+fn deny_with(errno: i32) -> libc::sock_filter {
+    stmt(BPF_RET_K, SECCOMP_RET_ERRNO | errno as u32)
 }
 
 /// Monta o programa BPF. Erra se algum nome for desconhecido.
 pub fn build(rules: &SeccompRules) -> Result<Vec<libc::sock_filter>, String> {
-    let mut syscalls = Vec::new();
-    for name in &rules.deny_syscalls {
-        let n = syscall_number(name).ok_or_else(|| {
+    let number = |name: &String| {
+        syscall_number(name).map(|n| n as u32).ok_or_else(|| {
             sandmux_spec::trf!(
                 "chamada de sistema desconhecida: {name}",
                 "unknown system call: {name}"
             )
-        })?;
-        syscalls.push(n as u32);
+        })
+    };
+    // Cada chamada com o erro que devolve: as de `ENOSYS` primeiro, para que
+    // um nome nas duas listas fique com `ENOSYS`.
+    let mut syscalls = Vec::new();
+    for name in &rules.enosys_syscalls {
+        syscalls.push((number(name)?, libc::ENOSYS));
+    }
+    for name in &rules.deny_syscalls {
+        syscalls.push((number(name)?, libc::EPERM));
     }
     let mut ioctls = Vec::new();
     for name in &rules.deny_ioctls {
@@ -124,9 +135,9 @@ pub fn build(rules: &SeccompRules) -> Result<Vec<libc::sock_filter>, String> {
         p.push(jump(BPF_JGE_K, X32_SYSCALL_BIT, 0, 1));
         p.push(deny());
     }
-    for n in syscalls {
+    for (n, errno) in syscalls {
         p.push(jump(BPF_JEQ_K, n, 0, 1));
-        p.push(deny());
+        p.push(deny_with(errno));
     }
     if !ioctls.is_empty() {
         // Se não for ioctl, pula o bloco inteiro: carga + 2 por comando + retorno.
@@ -146,7 +157,8 @@ pub fn build(rules: &SeccompRules) -> Result<Vec<libc::sock_filter>, String> {
     Ok(p)
 }
 
-/// Instala o filtro no processo atual. Exige `no_new_privs` já ligado.
+/// Instala o filtro no processo atual. Exige `no_new_privs` já ligado, ou
+/// `CAP_SYS_ADMIN` no user namespace do processo (modo de visão).
 pub fn install(rules: &SeccompRules) -> io::Result<()> {
     let prog = build(rules).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     let fprog = libc::sock_fprog {
@@ -262,6 +274,9 @@ mod tests {
                 BPF_JEQ_K => {
                     pc += if acc == i.k { i.jt } else { i.jf } as usize;
                 }
+                BPF_JGE_K => {
+                    pc += if acc >= i.k { i.jt } else { i.jf } as usize;
+                }
                 BPF_RET_K => return i.k,
                 _ => panic!("instrução inesperada"),
             }
@@ -286,9 +301,46 @@ mod tests {
     fn nome_desconhecido_e_recusado() {
         let r = SeccompRules {
             deny_syscalls: vec!["nao_existe".into()],
-            deny_ioctls: vec![],
+            ..Default::default()
         };
         assert!(build(&r).unwrap_err().contains("nao_existe"));
+        let r = SeccompRules {
+            enosys_syscalls: vec!["outro".into()],
+            ..Default::default()
+        };
+        assert!(build(&r).unwrap_err().contains("outro"));
+    }
+
+    #[test]
+    fn erro_certo_por_chamada() {
+        let r = SeccompRules {
+            deny_syscalls: vec!["bpf".into(), "keyctl".into()],
+            enosys_syscalls: vec!["keyctl".into(), "add_key".into()],
+            ..Default::default()
+        };
+        let p = build(&r).unwrap();
+        let eperm = SECCOMP_RET_ERRNO | libc::EPERM as u32;
+        let enosys = SECCOMP_RET_ERRNO | libc::ENOSYS as u32;
+        let nr = |n: i64| n as u32;
+        assert_eq!(eval(&p, nr(libc::SYS_bpf), AUDIT_ARCH), eperm);
+        // Nas duas listas, vale o ENOSYS.
+        assert_eq!(eval(&p, nr(libc::SYS_keyctl), AUDIT_ARCH), enosys);
+        assert_eq!(eval(&p, nr(libc::SYS_add_key), AUDIT_ARCH), enosys);
+        assert_eq!(eval(&p, nr(libc::SYS_read), AUDIT_ARCH), SECCOMP_RET_ALLOW);
+        // Outra arquitetura: tudo negado.
+        assert_eq!(eval(&p, nr(libc::SYS_read), 1), eperm);
+        #[cfg(target_arch = "x86_64")]
+        {
+            // O número x32 da mesma chamada também é negado.
+            assert_eq!(
+                eval(&p, nr(libc::SYS_keyctl) | X32_SYSCALL_BIT, AUDIT_ARCH),
+                eperm
+            );
+            assert_eq!(
+                eval(&p, nr(libc::SYS_read) | X32_SYSCALL_BIT, AUDIT_ARCH),
+                eperm
+            );
+        }
     }
 
     #[test]
@@ -296,6 +348,7 @@ mod tests {
         let r = SeccompRules {
             deny_syscalls: vec!["mount".into()],
             deny_ioctls: vec!["TIOCSTI".into(), "TIOCLINUX".into()],
+            enosys_syscalls: vec!["keyctl".into()],
         };
         let p = build(&r).unwrap();
         let i = p

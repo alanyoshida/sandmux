@@ -190,6 +190,36 @@ impl FilePolicy {
     }
 }
 
+/// Hash estável de uma pasta de trabalho, para os arquivos por pasta.
+pub fn dir_hash(p: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in p.as_os_str().as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+/// Arquivo com os segredos que o agente criou numa pasta de trabalho, dentro
+/// da pasta de estado do registro de arquivos.
+pub fn created_file(state_dir: &Path, workdir: &Path) -> PathBuf {
+    state_dir
+        .join("created")
+        .join(format!("{}.json", dir_hash(workdir)))
+}
+
+/// Os segredos que o agente criou numa pasta de trabalho; vazio se não há
+/// lista.
+pub fn read_created(state_dir: &Path, workdir: &Path) -> std::collections::HashSet<PathBuf> {
+    std::fs::read(created_file(state_dir, workdir))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Vec<PathBuf>>(&b).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
 /// Os padrões da lista padrão e das exceções fixas.
 pub fn default_secrets() -> (Vec<FilePattern>, Vec<FilePattern>) {
     let p = |v: &[&str]| v.iter().map(|s| FilePattern::Name((*s).into())).collect();

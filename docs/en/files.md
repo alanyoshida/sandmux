@@ -63,6 +63,7 @@ In the work folder, these files do not open for the agent: `.env` and `.env.*` (
 - **Created by the agent:** a file like this that the agent itself creates (by opening, renaming or linking) stays open to it, also in the following launches. The list stays in `$XDG_STATE_HOME/sandmux/files/created/`, out of the agent's reach. If you later fill a file created by the agent with a real secret, deny it with `sandmux files deny`.
 - **Certificates:** a public certificate in `.pem` in the work folder is also hidden; allow it with `file-allow` or `secret-files-off`.
 - **Renaming and linking:** renaming or linking a secret to another name is denied, so it does not show up under another name.
+- **In the private Docker:** containers do not go through the supervisor. The secrets and `file-deny` paths that exist when the folder's Docker starts reach them empty, with limits the supervisor does not have: see [docker.md](docker.md#secrets-and-denied-paths).
 
 ### `.git/commondir` and the name calls
 

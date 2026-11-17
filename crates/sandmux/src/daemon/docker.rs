@@ -280,6 +280,47 @@ fn start(
     tun_listener
         .set_nonblocking(true)
         .map_err(|e| io(tr!("socket do TUN do Docker", "Docker TUN socket"), e))?;
+    // A configuração efetiva da pasta, sem opções de run nem camada de aba:
+    // os tetos e os dispositivos da visão.
+    let mut opts = LaunchOptions::new("shell");
+    opts.workdir = workdir.to_path_buf();
+    let eff = launch::effective(&host, &opts).ok();
+    let lim = limits::support().ok().map(|_| {
+        eff.as_ref()
+            .map(|e| e.limits(limits::mem_total().unwrap_or(0)))
+            .unwrap_or_default()
+    });
+    // Os segredos e os caminhos negados da pasta, pela mesma decisão do
+    // supervisor: os criados pelo agente ficam visíveis.
+    let policy = match &eff {
+        Some(e) => e.file_policy(&host.home, workdir),
+        None => {
+            let (secrets, secret_exceptions) = sandmux_spec::files::default_secrets();
+            sandmux_spec::files::FilePolicy {
+                secrets,
+                secret_exceptions,
+                workdir: workdir.to_path_buf(),
+                ..Default::default()
+            }
+        }
+    };
+    let created = sandmux_spec::files::read_created(&paths::state_dir().join("files"), workdir);
+    let covers = sandmux_policy::docker_covers(&policy, &created, workdir).map_err(|n| {
+        let max = sandmux_policy::MAX_DOCKER_COVERS;
+        trf!(
+            "o Docker privado não sobe: a pasta tem {n} arquivos e pastas a cobrir (segredos e `file-deny`), acima do teto de {max}; reduza a lista com `secret-files-off` ou `file-allow` na configuração da pasta",
+            "the private Docker does not start: the folder has {n} files and folders to cover (secrets and `file-deny`), above the cap of {max}; shorten the list with `secret-files-off` or `file-allow` in the folder's configuration"
+        )
+    })?;
+    let view = sandmux_policy::DockerView {
+        gpu: eff.as_ref().is_none_or(|e| e.gpu.value),
+        kvm: eff.as_ref().is_some_and(|e| e.kvm.value),
+        // O Docker roda num cgroup namespace próprio, com raiz no escopo dos
+        // tetos quando há.
+        cgroup: true,
+        covers,
+    };
+
     // A CA do gateway do Docker: decifra os registries dos segredos `docker`.
     let tls = launch::launch_ca();
     let spec = sandmux_policy::compose_docker_view(
@@ -290,24 +331,16 @@ fn start(
         docker::dockerd_env(&dirs),
         Some(&tun_sock),
         tls.as_ref().map(|t| t.ca_cert_pem.as_str()),
+        &view,
     )
     .map_err(|e| trf!("visão do Docker: {e}", "Docker view: {e}"))?;
     std::fs::write(dirs.view_file(), spec.to_json())
         .map_err(|e| io(tr!("gravar a visão", "write the view"), e))?;
     let _ = std::fs::set_permissions(dirs.view_file(), std::fs::Permissions::from_mode(0o600));
 
-    // Tetos da pasta, pela configuração (sem opções de run).
-    let mut opts = LaunchOptions::new("shell");
-    opts.workdir = workdir.to_path_buf();
-    let lim = limits::support().ok().map(|_| {
-        launch::effective(&host, &opts)
-            .map(|e| e.limits(limits::mem_total().unwrap_or(0)))
-            .unwrap_or_default()
-    });
-
     let runner = launch::runner_path();
     let _ = sup;
-    let rk = docker::rootlesskit_args(&dirs, &runner);
+    let rk = docker::rootlesskit_args(&dirs, &runner, lim.is_some());
     let mut cmd = match &lim {
         Some(l) => {
             let mut c = limits::systemd_run();
@@ -332,7 +365,7 @@ fn start(
                     return Err(format!("systemctl: {e}"));
                 }
             }
-            c.args(docker::scope_prefix(l, workdir, &slice))
+            c.args(docker::scope_prefix(workdir, &slice))
                 .arg("rootlesskit")
                 .args(&rk);
             c
@@ -425,12 +458,16 @@ fn start(
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    // O cgroup da slice: o consumo e o fim contam os contêineres.
+    // O cgroup da slice: o consumo e o fim contam os contêineres. O
+    // `rootlesskit` pode estar no escopo ou num subgrupo dele.
     let slice = docker::slice_name(&id);
     let cgroup = lim
         .and_then(|_| limits::cgroup_of(child.id()))
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .filter(|p| p.file_name().is_some_and(|n| n == slice.as_str()));
+        .and_then(|p| {
+            p.ancestors()
+                .find(|a| a.file_name().is_some_and(|n| n == slice.as_str()))
+                .map(Path::to_path_buf)
+        });
     Ok(Engine {
         dirs,
         child,

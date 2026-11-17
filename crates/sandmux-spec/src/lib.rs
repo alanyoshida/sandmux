@@ -271,6 +271,9 @@ pub enum Mount {
     Devpts { dest: PathBuf },
     /// `/sys` novo, do namespace de rede de quem monta (visão do Docker).
     Sysfs { dest: PathBuf },
+    /// cgroup2 novo, com escrita, cuja raiz é a do cgroup namespace de quem
+    /// monta (visão do Docker, dentro do escopo da pasta).
+    Cgroup2 { dest: PathBuf },
 }
 
 /// Onde fica a camada de escrita de um overlay.
@@ -302,6 +305,11 @@ pub struct SeccompRules {
     pub deny_syscalls: Vec<String>,
     /// Nomes de comandos de `ioctl` negados.
     pub deny_ioctls: Vec<String>,
+    /// Nomes de chamadas negadas com `ENOSYS` ("o kernel não tem"), e não com
+    /// `EPERM`: para programas que só toleram a falta da chamada, como o
+    /// `runc` com o chaveiro do kernel (visão do Docker).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enosys_syscalls: Vec<String>,
 }
 
 /// Erros de leitura e validação.
@@ -437,7 +445,8 @@ impl Mount {
             | Mount::Symlink { dest, .. }
             | Mount::Proc { dest }
             | Mount::Devpts { dest }
-            | Mount::Sysfs { dest } => dest,
+            | Mount::Sysfs { dest }
+            | Mount::Cgroup2 { dest } => dest,
         }
     }
 
@@ -536,6 +545,9 @@ mod tests {
                 Mount::Devpts {
                     dest: "/dev/pts".into(),
                 },
+                Mount::Cgroup2 {
+                    dest: "/sys/fs/cgroup".into(),
+                },
             ],
             landlock: LandlockRules {
                 read: vec!["/".into()],
@@ -544,6 +556,7 @@ mod tests {
             seccomp: SeccompRules {
                 deny_syscalls: vec!["mount".into()],
                 deny_ioctls: vec!["TIOCSTI".into()],
+                enosys_syscalls: vec!["keyctl".into()],
             },
             env: vec![EnvVar {
                 name: "PATH".into(),
@@ -591,6 +604,17 @@ mod tests {
             LaunchSpec::from_json(v.to_string().as_bytes()),
             Err(SpecError::Malformed(_))
         ));
+    }
+
+    #[test]
+    fn cgroup2_com_caminho_relativo_e_recusado() {
+        let mut s = sample();
+        s.mounts.push(Mount::Cgroup2 {
+            dest: "sys/fs/cgroup".into(),
+        });
+        assert!(matches!(s.validate(), Err(SpecError::Invalid(_))));
+        let json = sample().to_json();
+        assert!(json.contains(r#""type":"cgroup2""#), "{json}");
     }
 
     #[test]

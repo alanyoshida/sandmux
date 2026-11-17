@@ -14,14 +14,27 @@ O `dockerd` roda no user namespace do `rootlesskit`, numa raiz montada pela mesm
 
 - o sistema em somente leitura, com os arquivos sensíveis de `/etc` cobertos;
 - a pasta de trabalho, com escrita e com a proteção do `.git` (hooks e config em somente leitura);
-- a pasta de entrada, em somente leitura.
+- a pasta de entrada, em somente leitura;
+- o `/dev` do sandbox: os nós `null`, `zero`, `full`, `random`, `urandom` e `tty`, pseudoterminais próprios e um `/dev/shm` próprio. A GPU e o `/dev/kvm` entram conforme as chaves `gpu` e `kvm` da [configuração](config.md) da pasta, sem as opções de `run` das sessões.
 
 Não entram:
 
 - o HOME, nem o real nem o sintético, e portanto `~/.ssh`, `~/.aws` e `~/.cache`;
-- as pastas extras de `--ro` e `--rw` das sessões, porque o Docker é da pasta e cada sessão pode ter opções diferentes.
+- as pastas extras de `--ro` e `--rw` das sessões, porque o Docker é da pasta e cada sessão pode ter opções diferentes;
+- os outros dispositivos do host: os terminais do usuário, a câmera, o áudio, `/dev/net/tun` e `/dev/fuse`. Um `--device` de um deles falha, porque o dispositivo não existe na visão, e um `-v /dev:/d` mostra só o `/dev` acima.
 
 Um caminho fora da visão falha ou chega vazio ao contêiner, inclusive quando alcançado por um link simbólico plantado na pasta de trabalho. Para dar a um contêiner um arquivo de fora, coloque-o dentro da pasta de trabalho.
+
+## Segredos e caminhos negados
+
+Os contêineres não passam pelo supervisor de aberturas do sandbox ([files.md](files.md)). Para que um `-v $PWD:/w` não leia o que o agente não lê, o Docker da pasta, quando sobe, percorre a pasta de trabalho com a mesma política de arquivos e cobre:
+
+- os arquivos com cara de segredo, menos os que o próprio agente criou;
+- os arquivos e as pastas de `file-deny`; uma pasta negada é coberta inteira.
+
+Um caminho coberto chega vazio e em somente leitura ao contêiner, e o arquivo do host não muda. `file-allow` e `secret-files-off` valem como para o agente. A política usada é a da configuração da pasta, sem a camada de aba das sessões, como os tetos e os dispositivos.
+
+Com mais de 4096 caminhos a cobrir, o Docker privado não sobe, e todo `docker` mostra a contagem e o teto. Reduza a lista com `secret-files-off` ou `file-allow` na configuração da pasta.
 
 ## Quando sobe e quando para
 
@@ -75,7 +88,8 @@ sudo apt install docker-registry
 
 O Docker de cada pasta, com todos os contêineres, roda numa slice própria do systemd (`sandmux-docker-<id>.slice`) com os tetos de memória e de processos daquela pasta, resolvidos pela [configuração](config.md) e separados dos tetos de cada sessão. Um contêiner que passa do teto é morto, e o Docker continua.
 
-- **Por que uma slice:** o `dockerd` sem root roda sem gerenciar cgroups (`Cgroup Driver: none`). O runc põe cada contêiner num cgroup ao lado do escopo do Docker, no pai dele. Um teto só no escopo deixaria os contêineres de fora; na slice, o escopo e os contêineres ficam dentro.
+- **Por que uma slice:** o teto fica acima de tudo o que os contêineres enxergam. O Docker roda num cgroup namespace próprio, cuja raiz é o escopo dele (`sandmux: docker <pasta>`), dentro da slice: o `dockerd` e os outros processos ficam no subgrupo `motor`, e o runc cria cada contêiner ao lado dele. Um contêiner com `-v /sys/fs/cgroup:/c` vê só o escopo e os cgroups do Docker da pasta; não vê a slice com o teto, nem `user.slice`, nem os cgroups das sessões e do daemon. O escopo não tem teto próprio, porque os contêineres o alcançam.
+- **Sem os tetos:** numa máquina sem o systemd de usuário, o Docker roda no mesmo cgroup namespace, com raiz no cgroup em que ele sobe, e os contêineres não veem o resto da árvore.
 - **Quem morre no teto:** os processos dos contêineres ficam com `oom_score_adj` 900, e o `dockerd`, o `containerd` e os shims ficam com o valor da sessão. Assim, quando a pasta passa do teto, o kernel mata um contêiner, e não o Docker. Quem faz isso é um `runc` próprio da visão do Docker, na frente do `PATH`: ele sobe o valor antes de criar o contêiner e o põe no `config.json` dele, porque o `dockerd` sem root escreve ali o valor da sessão. Um contêiner pode ser levado junto quando o teto estoura.
 - **`docker run -m`:** não limita um contêiner sozinho; o teto que vale é o da pasta.
 - **Fim:** a slice é parada junto com o Docker da pasta. As que ficarem vazias, de um daemon derrubado, são paradas quando o daemon sobe de novo.
@@ -96,7 +110,20 @@ Sem isso, a sessão sobe normalmente, e todo `docker` mostra:
 Error response from daemon: o Docker privado não está disponível nesta máquina: <o que falta>; veja `sandmux doctor`
 ```
 
+## Chamadas de sistema negadas
+
+O `dockerd` nasce com um filtro seccomp do sandmux, e todo processo do Docker da pasta o herda: o `containerd`, o `runc` e cada contêiner. Um filtro herdado não pode ser removido, então ele vale também com `--privileged` e com `--security-opt seccomp=unconfined`, que só deixam de acrescentar o filtro do Docker.
+
+- **Negadas, com `EPERM`:** as mesmas que o sandbox do agente nega, menos as de montagem: `bpf`, `perf_event_open`, a carga de módulos, `kexec`, `userfaultfd`, `io_uring` e os `ioctl` `TIOCSTI` e `TIOCLINUX`, que injetam teclas no terminal.
+- **Chaveiro do kernel, com `ENOSYS`:** `keyctl`, `add_key` e `request_key` respondem como se o kernel não tivesse chaveiro. É o único erro que o `runc` aceita ao criar um contêiner; com outro, nenhum contêiner sobe.
+- **Liberadas:** as chamadas de montagem, porque o `dockerd` e o `runc` montam a raiz de cada contêiner.
+- **Setuid:** o filtro não liga o `no_new_privs`, e o `su` e o `sudo` das imagens funcionam.
+
 ## Limites
 
-- Um contêiner roda com o seccomp do Docker e no user namespace do `rootlesskit`, não com o Landlock e o seccomp do sandmux. A visão de arquivos é a mesma do sandbox, e o user namespace sem privilégio impede `bpf`, módulos e montagens no host.
+- Um contêiner roda no user namespace do `rootlesskit`, sem o Landlock e sem o supervisor de aberturas do sandmux. O que o limita é a visão de arquivos, o filtro seccomp acima e o user namespace sem privilégio, que impede módulos e montagens no host.
 - `--privileged` não dá privilégio real: o root do contêiner é o usuário, mapeado.
+- Um contêiner que precisa de um dispositivo do host fora da lista, como uma VPN com `/dev/net/tun` ou um sistema de arquivos com `/dev/fuse`, não funciona no Docker privado.
+- **As coberturas caem para um contêiner privilegiado.** Com `--privileged`, um contêiner tem `CAP_SYS_ADMIN` no user namespace em que a visão foi montada, e consegue desmontar uma cobertura ou tirar o somente-leitura de um bind. Isso vale para os segredos e os caminhos negados cobertos e para a proteção do `.git` (hooks e config em somente leitura). Um contêiner comum não consegue.
+- **Arquivos criados depois não são cobertos.** Um segredo criado na pasta com o Docker já rodando, ou uma mudança na política de arquivos, só vale quando o Docker da pasta sobe de novo (depois de `sandmux daemon restart`, ou quando a última sessão da pasta termina).
+- **Sem o resto da política de arquivos:** os contêineres não têm o registro de arquivos, a política ao vivo nem a recusa do `.git/commondir`.
