@@ -460,6 +460,8 @@ Release `v0.1.16` (2026-11-16), com os changes 63, 64 e 65. Decisão do usuário
 
 Release `v0.1.17` (2026-11-16), com os changes 66 e 67 e o ajuste do rodapé das configurações. Decisão do usuário (2026-11-16): publicar depois de testar o build local ("instalei, ficou certo").
 
+Release `v0.1.18` (2026-11-16), com os changes 62 e 68 e a correção do teste instável do Docker. Decisão do usuário (2026-11-16): publicar depois de testar o build local ("instalei, ficou certo").
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
@@ -576,7 +578,7 @@ Os changes abaixo foram arquivados em 2026-11-15 por decisão do usuário, antes
 | 63 `add-agy-preset` | O `agy` real responde pela chave do Gemini do cofre, e o `--settings` do lançamento mescla com o `settings.json` importado em vez de substituí-lo (o modelo escolhido continua valendo). A cópia isolada, sem rede, só mostrou o login por chave e o pedido a `generativelanguage.googleapis.com` |
 | 66 `add-agy-login` | `sandmux import agy` com o cofre aberto leva o login do host ao cofre, o `agy` confinado abre já logado e responde; `sandmux vault list` mostra `agy:access` e `agy:refresh`; o registro de rede mostra o host do modelo (um host fora do catálogo de inferência entra nele). O caminho completo pelo DNS real de `oauth2.googleapis.com` só é coberto por esta verificação |
 | 67 `add-doctor-screen` | Parte confirmada pelo usuário em 2026-11-16 no build local: o Diagnóstico com as verificações, a hora e o rodapé com as teclas que valem. Falta: na TUI instalada, Ctrl+b `D` abre o Diagnóstico com as mesmas verificações do `sandmux doctor` e a contagem de falhas na lateral; a linha escolhida mostra a causa e a correção; com uma chave real de teste no HOME sintético, `f` a leva ao cofre com o domínio confirmado no campo |
-| 62 `add-desktop-portal` | Na TUI instalada, numa aba de shell: `notify-send oi` aparece no desktop com o nome da aba; `xdg-open https://openrouter.ai` abre o navegador do host; no modo só inferência, `xdg-open https://exemplo.com` não abre, e `sandmux net` mostra a recusa; um app GTK ou Qt segue o tema escuro do desktop |
+| 62 `add-desktop-portal` | Confirmado pelo usuário em 2026-11-16 no build local ("instalei, ficou certo"). Era: na TUI instalada, numa aba de shell: `notify-send oi` aparece no desktop com o nome da aba; `xdg-open https://openrouter.ai` abre o navegador do host; no modo só inferência, `xdg-open https://exemplo.com` não abre, e `sandmux net` mostra a recusa; um app GTK ou Qt segue o tema escuro do desktop |
 
 ### Decisões ainda não tomadas
 
