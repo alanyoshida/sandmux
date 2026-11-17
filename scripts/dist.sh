@@ -8,7 +8,7 @@ set -eu
 
 cd "$(dirname "$0")/.."
 TARGET=x86_64-unknown-linux-musl
-BINS="sandmux sandmuxd sandmux-run sandmux-chat sandmux-db-mcp"
+BINS="sandmux sandmuxd sandmux-run sandmux-chat sandmux-db-mcp sandmux-helper"
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 [ -n "$VERSION" ] || { echo "versão não encontrada no Cargo.toml" >&2; exit 1; }
 NAME="sandmux-$VERSION-x86_64-linux"
@@ -19,17 +19,19 @@ if [ -z "${SANDMUX_DIST_NO_BUILD:-}" ]; then
     # O C do ring compila com o gcc do sistema, sem o musl-gcc.
     CC_x86_64_unknown_linux_musl=${CC_x86_64_unknown_linux_musl:-gcc} \
         cargo build --release --locked --target "$TARGET" -p sandmux \
-        --bin sandmux --bin sandmuxd --bin sandmux-run --bin sandmux-chat --bin sandmux-db-mcp
+        --bin sandmux --bin sandmuxd --bin sandmux-run --bin sandmux-chat --bin sandmux-db-mcp \
+        --bin sandmux-helper
 fi
 
 rm -rf "$OUT"
-mkdir -p "$OUT/$NAME/bin" "$OUT/$NAME/apparmor"
+mkdir -p "$OUT/$NAME/bin" "$OUT/$NAME/apparmor" "$OUT/$NAME/systemd"
 for b in $BINS; do
     cp "target/$TARGET/release/$b" "$OUT/$NAME/bin/$b"
     strip "$OUT/$NAME/bin/$b"
 done
 cp packaging/install.sh "$OUT/$NAME/install.sh"
 cp packaging/apparmor/sandmux-run "$OUT/$NAME/apparmor/sandmux-run"
+cp packaging/systemd/sandmux-helper.socket packaging/systemd/sandmux-helper.service.in "$OUT/$NAME/systemd/"
 cp LICENSE-MIT LICENSE-APACHE README.md "$OUT/$NAME/"
 chmod 0755 "$OUT/$NAME/install.sh"
 
@@ -44,16 +46,20 @@ SHA=$(cut -d' ' -f1 <"$OUT/$NAME.tar.gz.sha256")
 
 echo "== .deb"
 DEB="$OUT/deb/sandmux_${VERSION}_amd64"
-mkdir -p "$DEB/DEBIAN" "$DEB/usr/bin" "$DEB/etc/apparmor.d" "$DEB/usr/share/doc/sandmux"
+mkdir -p "$DEB/DEBIAN" "$DEB/usr/bin" "$DEB/etc/apparmor.d" "$DEB/usr/share/doc/sandmux" "$DEB/usr/lib/systemd/system"
 for b in $BINS; do
     install -m 0755 "$OUT/$NAME/bin/$b" "$DEB/usr/bin/$b"
 done
 sed 's|@SANDMUX_RUN@|/usr/bin/sandmux-run|' packaging/apparmor/sandmux-run >"$DEB/etc/apparmor.d/sandmux-run"
+install -m 0644 packaging/systemd/sandmux-helper.socket "$DEB/usr/lib/systemd/system/"
+sed 's|@SANDMUX_HELPER@|/usr/bin/sandmux-helper|' packaging/systemd/sandmux-helper.service.in >"$DEB/usr/lib/systemd/system/sandmux-helper.service"
+chmod 0644 "$DEB/usr/lib/systemd/system/sandmux-helper.service"
 cp LICENSE-MIT LICENSE-APACHE "$DEB/usr/share/doc/sandmux/"
 sed "s/@VERSION@/$VERSION/" packaging/deb/control.in >"$DEB/DEBIAN/control"
 echo "/etc/apparmor.d/sandmux-run" >"$DEB/DEBIAN/conffiles"
 install -m 0755 packaging/deb/postinst "$DEB/DEBIAN/postinst"
 install -m 0755 packaging/deb/postrm "$DEB/DEBIAN/postrm"
+install -m 0755 packaging/deb/prerm "$DEB/DEBIAN/prerm"
 dpkg-deb --root-owner-group --build "$DEB" "$OUT/sandmux_${VERSION}_amd64.deb" >/dev/null
 rm -rf "$OUT/deb"
 (cd "$OUT" && sha256sum "sandmux_${VERSION}_amd64.deb" >"sandmux_${VERSION}_amd64.deb.sha256")

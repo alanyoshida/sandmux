@@ -1442,6 +1442,68 @@ pub fn docker_covers(
     Ok(covers)
 }
 
+/// O que o confinamento do Docker por eBPF marca, tirado da mesma fonte das
+/// montagens da visão: as coberturas (negadas) e a proteção do `.git` de
+/// `git::protect` (os binds em somente leitura, protegidos contra escrita, e
+/// os diretórios git).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DockerMarks {
+    pub deny: Vec<PathBuf>,
+    pub protect: Vec<PathBuf>,
+    pub gitdir: Vec<PathBuf>,
+}
+
+impl DockerMarks {
+    pub fn len(&self) -> usize {
+        self.deny.len() + self.protect.len() + self.gitdir.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// As marcas do confinamento para a visão `spec` do Docker da pasta
+/// `workdir` (já canônica).
+pub fn docker_marks(spec: &LaunchSpec, workdir: &Path) -> DockerMarks {
+    let mut m = DockerMarks::default();
+    for x in &spec.mounts {
+        if let Mount::Cover { dest } = x {
+            m.deny.push(dest.clone());
+        }
+    }
+    let git_dir = match git::detect(workdir) {
+        GitLayout::Repo { git_dir } => Some(git_dir),
+        GitLayout::Worktree {
+            git_file,
+            common_dir,
+        } => {
+            m.protect.push(git_file);
+            Some(common_dir)
+        }
+        GitLayout::None | GitLayout::Subfolder { .. } => None,
+    };
+    if let Some(g) = git_dir {
+        for x in git::protect(&g).0 {
+            if let Mount::Bind {
+                source, writable, ..
+            } = x
+            {
+                if writable {
+                    m.gitdir.push(source);
+                } else {
+                    m.protect.push(source);
+                }
+            }
+        }
+    }
+    for v in [&mut m.deny, &mut m.protect, &mut m.gitdir] {
+        v.sort();
+        v.dedup();
+    }
+    m
+}
+
 /// Visão de arquivos do Docker privado de uma pasta: sistema em somente
 /// leitura com as coberturas de `/etc`, a pasta de trabalho com a proteção do
 /// `.git`, a pasta de entrada, o `/dev` mínimo do sandbox, `/proc` novo,
@@ -1768,6 +1830,66 @@ mod docker_view_tests {
             .position(|m| matches!(m, Mount::Cover { dest } if *dest == home.join("proj/.env")))
             .unwrap();
         assert!(c > w, "a cobertura vem depois da pasta de trabalho");
+    }
+
+    #[test]
+    fn marcas_da_visao_do_docker() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let (sys, home) = (base.join("sys"), base.join("home"));
+        std::fs::create_dir_all(sys.join("etc")).unwrap();
+        let proj = home.join("proj");
+        let git = proj.join(".git");
+        let sub = git.join("modules/lib");
+        for p in [&git.join("hooks"), &sub.join("hooks")] {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        for p in [&git, &sub] {
+            std::fs::write(p.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            std::fs::write(p.join("config"), "").unwrap();
+        }
+        std::fs::write(proj.join(".env"), "").unwrap();
+        let h = rede_host(&sys, &home);
+        let spec = compose_docker_view(
+            &h,
+            &proj,
+            &[],
+            vec!["dockerd".into()],
+            Vec::new(),
+            None,
+            None,
+            &DockerView {
+                covers: vec![proj.join(".env")],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let m = docker_marks(&spec, &proj);
+        assert!(m.deny.contains(&proj.join(".env")), "{m:?}");
+        for g in [&git, &sub] {
+            assert!(m.gitdir.contains(g), "{m:?}");
+            assert!(m.protect.contains(&g.join("hooks")), "{m:?}");
+            assert!(m.protect.contains(&g.join("config")), "{m:?}");
+        }
+        // Nada do sistema nem da pasta inteira como protegido.
+        assert!(m.protect.iter().all(|p| p.starts_with(&git)), "{m:?}");
+        assert!(!m.gitdir.contains(&proj));
+        // Sem git, só as coberturas.
+        let outra = home.join("outra");
+        std::fs::create_dir_all(&outra).unwrap();
+        let spec = compose_docker_view(
+            &h,
+            &outra,
+            &[],
+            vec!["dockerd".into()],
+            Vec::new(),
+            None,
+            None,
+            &DockerView::default(),
+        )
+        .unwrap();
+        let m = docker_marks(&spec, &outra);
+        assert!(m.protect.is_empty() && m.gitdir.is_empty(), "{m:?}");
     }
 
     #[test]

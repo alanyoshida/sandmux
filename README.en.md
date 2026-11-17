@@ -133,7 +133,7 @@ sandmux config set kvm true --profile vm
 
 ### Private Docker
 
-Each work folder has its own rootless Docker, which the agent uses from inside the session with `docker` and `docker compose`. The containers only see what the sandbox sees: the work folder and the system, never the HOME. Published ports stay only on the host's `127.0.0.1`, and from inside the sandbox they are reached through `host.sandmux.internal`. The containers' traffic goes through the same gateway as the sandbox, with the log and the most restrictive policy among the folder's tabs. With the `docker-registry` package installed, Docker Hub images go into a cache shared across folders. The Docker starts on the first `docker` and stops with the folder's last session. Images and volumes persist per folder. The host's Docker socket never enters. Details in [docs/en/docker.md](docs/en/docker.md).
+Each work folder has its own rootless Docker, which the agent uses from inside the session with `docker` and `docker compose`. The containers only see what the sandbox sees: the work folder and the system, never the HOME. Published ports stay only on the host's `127.0.0.1`, and from inside the sandbox they are reached through `host.sandmux.internal`. The containers' traffic goes through the same gateway as the sandbox, with the log and the most restrictive policy among the folder's tabs. With the `docker-registry` package installed, Docker Hub images go into a cache shared across folders. The Docker starts on the first `docker` and stops with the folder's last session. Images and volumes persist per folder. The host's Docker socket never enters. With the root helper installed (`sandmux setup`) and the BPF LSM active in the kernel, the kernel itself denies containers the folder's secrets and writing to `.git`, even with `--privileged`. Details in [docs/en/docker.md](docs/en/docker.md) and [docs/en/helper.md](docs/en/helper.md).
 
 ### Network
 
@@ -285,6 +285,7 @@ The project uses [OpenSpec](https://github.com/Fission-AI/OpenSpec) to plan each
 | [docs/en/config.md](docs/en/config.md) | The configuration file: sections, keys, layers, profiles and commands |
 | [docs/en/tui.md](docs/en/tui.md) | Interface with tabs: shortcuts and `[tui]`, modals, ended tab, mouse, selection and image paste |
 | [docs/en/docker.md](docs/en/docker.md) | Private Docker per folder: file view, socket, lifecycle, persistence, ports and caps |
+| [docs/en/helper.md](docs/en/helper.md) | Root helper (`sandmux-helper`): the Docker eBPF confinement, who can ask, installation and root tests |
 | [docs/en/limits.md](docs/en/limits.md) | Memory and process caps: defaults, tuning, systemd scope and measurement |
 | [docs/en/window.md](docs/en/window.md) | Desktop windows and audio: restricted mode through the security-context and the Wayland relay, direct mode, audio and limits |
 | [docs/en/vault.md](docs/en/vault.md) | Secret vault: creating, unlocking, secrets, swapping in the traffic, tools (`gh`, `git`, `npm`, `pip`, `cargo`, `docker`), SSH keys and the SSH agent, import keys, `--pass-env` on restore and how it is stored |

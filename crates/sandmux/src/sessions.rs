@@ -446,6 +446,19 @@ pub fn stats(id: u32) -> Result<i32> {
                     teto(d.processes_max, &|n| n.to_string())
                 )
             );
+            match &d.ebpf_off {
+                None => println!(
+                    "{}",
+                    tr!("  confinamento eBPF: ligado", "  eBPF confinement: on")
+                ),
+                Some(why) => println!(
+                    "{}",
+                    trf!(
+                        "  confinamento eBPF: desligado: {why}",
+                        "  eBPF confinement: off: {why}"
+                    )
+                ),
+            }
         }
         None => println!(
             "{}",

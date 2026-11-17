@@ -10,6 +10,8 @@ class Sandmux < Formula
   depends_on :linux
   depends_on arch: :x86_64
 
+  # O sandmux-helper (auxiliar root) fica de fora: o Homebrew não roda como
+  # root, e o serviço não pode apontar para um binário do usuário.
   def install
     %w[sandmux sandmuxd sandmux-run sandmux-chat sandmux-db-mcp].each { |b| bin.install "bin/#{b}" }
     pkgshare.install "apparmor"

@@ -43,17 +43,18 @@ It is the configuration step for every channel: script, packages, Homebrew and `
    - uses `sudo` after asking.
 
    With `--no-sudo`, without `sudo` or without a terminal, it shows the two commands to run as root. The profile applies to one path: if the binaries move, run `sandmux setup` again.
-2. **Daemon.** Installs and enables the systemd user unit `sandmuxd.service`, which starts the daemon at login ([sessions.md](sessions.md)). To have it start at boot, without a login, run `sandmux daemon boot on` ([sessions.md](sessions.md#start-at-boot)). `--no-daemon` skips this step, and as root it never runs, because the daemon is per user.
-3. **Diagnostics.** Ends with `sandmux doctor`.
+2. **Root helper.** When `sandmux-helper` sits next to `sandmux`, in a root-owned folder, it writes the `sandmux-helper.socket` and `sandmux-helper.service` units to `/etc/systemd/system` and enables the socket, with the same `sudo`. This is what turns on the private Docker's eBPF confinement ([helper.md](helper.md)). For a binary the user can change, as in `~/.local/bin`, it refuses and says why. With `--no-sudo`, it shows the commands.
+3. **Daemon.** Installs and enables the systemd user unit `sandmuxd.service`, which starts the daemon at login ([sessions.md](sessions.md)). To have it start at boot, without a login, run `sandmux daemon boot on` ([sessions.md](sessions.md#start-at-boot)). `--no-daemon` skips this step, and as root it never runs, because the daemon is per user.
+4. **Diagnostics.** Ends with `sandmux doctor`.
 
 ## Packages
 
 | Channel | File | Installs into | Afterwards |
 |---|---|---|---|
-| Debian and Ubuntu | `sandmux_<version>_amd64.deb` | `/usr/bin`, profile in `/etc/apparmor.d/sandmux-run`, loaded on install | `sandmux setup` as the user |
-| Fedora | `sandmux-<version>-1.x86_64.rpm` | `/usr/bin`, profile in `/etc/apparmor.d/sandmux-run` | `sandmux setup` as the user |
-| Arch (AUR) | `sandmux-bin` (`PKGBUILD` from the release) | `/usr/bin` | `sandmux setup` as the user |
-| Homebrew (Linux) | `sandmux.rb` formula from the release | the Homebrew folder | `sandmux setup` (Homebrew does not run `sudo`) |
+| Debian and Ubuntu | `sandmux_<version>_amd64.deb` | `/usr/bin`, profile in `/etc/apparmor.d/sandmux-run`, loaded on install, and the `sandmux-helper` units in `/usr/lib/systemd/system`, with the socket enabled | `sandmux setup` as the user |
+| Fedora | `sandmux-<version>-1.x86_64.rpm` | `/usr/bin`, profile in `/etc/apparmor.d/sandmux-run`, `sandmux-helper` units with the socket enabled | `sandmux setup` as the user |
+| Arch (AUR) | `sandmux-bin` (`PKGBUILD` from the release) | `/usr/bin`, `sandmux-helper` units with the socket enabled | `sandmux setup` as the user |
+| Homebrew (Linux) | `sandmux.rb` formula from the release | the Homebrew folder, without `sandmux-helper` | `sandmux setup` (Homebrew does not run `sudo`) |
 | Tarball | `sandmux-<version>-x86_64-linux.tar.gz` | wherever `install.sh` puts it | `install.sh` already runs setup |
 
 ```sh

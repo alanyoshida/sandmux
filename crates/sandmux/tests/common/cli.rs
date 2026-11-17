@@ -104,6 +104,13 @@ impl Env {
             .env("SANDMUX_LOGIND_USER", "/nonexistent/sandmux-test-logind")
             // O ambiente é limpo; sem idioma, o sistema seria `C` (inglês).
             .env("LANG", "pt_BR.UTF-8")
+            // O auxiliar root só vale nos testes com root
+            // (`scripts/check-root.sh`); nos outros, nunca o do sistema.
+            .env(
+                "SANDMUX_HELPER_SOCKET",
+                std::env::var_os("SANDMUX_HELPER_SOCKET")
+                    .unwrap_or_else(|| "/nonexistent/sandmux-test-helper".into()),
+            )
             .stdin(Stdio::null());
         // O barramento do systemd de usuário de quem roda os testes, para os
         // tetos de recurso (o XDG_RUNTIME_DIR do teste é outra pasta).

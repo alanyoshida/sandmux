@@ -20,16 +20,30 @@ gateway, cofre de segredos e chat com os modelos cadastrados.
 %setup -q -n sandmux-%{version}-x86_64-linux
 
 %install
-mkdir -p %{buildroot}%{_bindir} %{buildroot}%{_sysconfdir}/apparmor.d
-for b in sandmux sandmuxd sandmux-run sandmux-chat sandmux-db-mcp; do
+mkdir -p %{buildroot}%{_bindir} %{buildroot}%{_sysconfdir}/apparmor.d %{buildroot}%{_unitdir}
+for b in sandmux sandmuxd sandmux-run sandmux-chat sandmux-db-mcp sandmux-helper; do
     install -m 0755 bin/$b %{buildroot}%{_bindir}/$b
 done
 sed 's|@SANDMUX_RUN@|%{_bindir}/sandmux-run|' apparmor/sandmux-run \
     > %{buildroot}%{_sysconfdir}/apparmor.d/sandmux-run
+install -m 0644 systemd/sandmux-helper.socket %{buildroot}%{_unitdir}/sandmux-helper.socket
+sed 's|@SANDMUX_HELPER@|%{_bindir}/sandmux-helper|' systemd/sandmux-helper.service.in \
+    > %{buildroot}%{_unitdir}/sandmux-helper.service
 
 %post
 if command -v apparmor_parser >/dev/null 2>&1 && [ -d /sys/kernel/security/apparmor ]; then
     apparmor_parser -r %{_sysconfdir}/apparmor.d/sandmux-run || :
+fi
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || :
+    systemctl enable --now sandmux-helper.socket || :
+    systemctl try-restart sandmux-helper.service || :
+fi
+
+%preun
+if [ "$1" -eq 0 ] && [ -d /run/systemd/system ]; then
+    systemctl disable --now sandmux-helper.socket || :
+    systemctl stop sandmux-helper.service || :
 fi
 
 %files
@@ -40,4 +54,7 @@ fi
 %{_bindir}/sandmux-run
 %{_bindir}/sandmux-chat
 %{_bindir}/sandmux-db-mcp
+%{_bindir}/sandmux-helper
+%{_unitdir}/sandmux-helper.socket
+%{_unitdir}/sandmux-helper.service
 %config(noreplace) %{_sysconfdir}/apparmor.d/sandmux-run

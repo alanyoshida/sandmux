@@ -669,6 +669,22 @@ fn sandbox_group(r: &support::SupportReport, host: Option<&Host>) -> Group {
                 ),
             ),
         });
+        let ebpf = tr!("confinamento do Docker por eBPF", "Docker eBPF confinement");
+        checks.push(match sandmux::helper::availability() {
+            Ok(detail) => support_check(true, ebpf, &detail, None),
+            Err(why) => support_check(
+                false,
+                ebpf,
+                &why,
+                Some(
+                    tr!(
+                        "  Sem ele, o Docker privado sobe só com as proteções sem privilégio, e um\n  contêiner com --privileged consegue desfazer as coberturas dos segredos e a\n  proteção do .git. Para ligar, rode `sandmux setup`, que instala o auxiliar\n  root (sandmux-helper) com sudo; o kernel precisa de `bpf` na lista de LSMs\n  (parâmetro lsm= do boot). Detalhes em docs/helper.md.",
+                        "  Without it, the private Docker starts with the unprivileged protections only,\n  and a container with --privileged can undo the secret covers and the .git\n  protection. To turn it on, run `sandmux setup`, which installs the root\n  helper (sandmux-helper) with sudo; the kernel needs `bpf` in the LSM list\n  (the lsm= boot parameter). Details in docs/en/helper.md."
+                    )
+                    .into(),
+                ),
+            ),
+        });
     }
 
     let tun = std::fs::metadata("/dev/net/tun")

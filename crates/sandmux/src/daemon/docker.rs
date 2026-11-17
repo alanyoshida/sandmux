@@ -28,6 +28,18 @@ struct Engine {
     /// Gateway de rede do Docker da pasta e o arquivo da política dele.
     gateway: Option<sandmux_net::Gateway>,
     policy_file: PathBuf,
+    /// A conexão com o auxiliar root, quando o confinamento por eBPF vale.
+    helper: Option<HelperLink>,
+    /// Por que o confinamento por eBPF não vale.
+    ebpf_off: Option<String>,
+}
+
+/// O confinamento ligado: a conexão com o auxiliar (as regras duram enquanto
+/// ela estiver aberta) e o aviso de parada, para a thread que vigia a
+/// conexão não derrubar o Docker que já está parando.
+struct HelperLink {
+    _client: crate::helper::Client,
+    stopping: Arc<AtomicBool>,
 }
 
 type SpawnJob = (Command, std::sync::mpsc::Sender<std::io::Result<Child>>);
@@ -236,6 +248,7 @@ impl Engines {
             .and_then(limits::read_counters)
             .unwrap_or_default();
         Some(DockerStats {
+            ebpf_off: e.ebpf_off.clone(),
             memory: c.memory,
             memory_max: c.memory_max,
             processes: c.processes,
@@ -334,6 +347,7 @@ fn start(
         &view,
     )
     .map_err(|e| trf!("visão do Docker: {e}", "Docker view: {e}"))?;
+    let marks = sandmux_policy::docker_marks(&spec, workdir);
     std::fs::write(dirs.view_file(), spec.to_json())
         .map_err(|e| io(tr!("gravar a visão", "write the view"), e))?;
     let _ = std::fs::set_permissions(dirs.view_file(), std::fs::Permissions::from_mode(0o600));
@@ -468,13 +482,173 @@ fn start(
                 .find(|a| a.file_name().is_some_and(|n| n == slice.as_str()))
                 .map(Path::to_path_buf)
         });
+    // O confinamento por eBPF, antes de o socket chegar à sessão.
+    let (helper, ebpf_off) = match &cgroup {
+        None => (
+            None,
+            Some(
+                tr!(
+                    "o Docker roda sem a slice dos tetos (sem o systemd de usuário)",
+                    "Docker runs without the caps slice (no systemd user manager)"
+                )
+                .to_string(),
+            ),
+        ),
+        Some(cg) => match confine(cg, &marks, child.id()) {
+            Ok(link) => (Some(link), None),
+            Err(Confine::Off(why)) => {
+                eprintln!(
+                    "{}",
+                    trf!(
+                        "sandmuxd: Docker de {} sem o confinamento por eBPF: {why}",
+                        "sandmuxd: Docker for {} without the eBPF confinement: {why}",
+                        workdir.display()
+                    )
+                );
+                (None, Some(why))
+            }
+            Err(Confine::Fatal(why)) => {
+                let e = Engine {
+                    dirs,
+                    child,
+                    cgroup,
+                    gateway,
+                    policy_file,
+                    helper: None,
+                    ebpf_off: None,
+                };
+                stop_engine(e);
+                return Err(trf!(
+                    "o confinamento por eBPF do Docker privado falhou no meio: {why}",
+                    "the private Docker's eBPF confinement failed halfway: {why}"
+                ));
+            }
+        },
+    };
     Ok(Engine {
         dirs,
         child,
         cgroup,
         gateway,
         policy_file,
+        helper,
+        ebpf_off,
     })
+}
+
+enum Confine {
+    /// Sem confinamento, com o motivo; o Docker segue com as proteções sem
+    /// privilégio.
+    Off(String),
+    /// O confinamento começou e não terminou: o Docker não pode seguir.
+    Fatal(String),
+}
+
+/// Liga o confinamento por eBPF no cgroup `cg` (a slice da pasta) e marca os
+/// arquivos. Uma thread vigia a conexão: se ela cair com o Docker rodando,
+/// manda SIGTERM ao processo `pid` (o `rootlesskit`).
+fn confine(
+    cg: &Path,
+    marks: &sandmux_policy::DockerMarks,
+    pid: u32,
+) -> Result<HelperLink, Confine> {
+    use crate::helper::{Client, MarkKind, socket_path};
+    match sandmux_ebpf::lsm_active() {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(Confine::Off(
+                tr!(
+                    "o BPF LSM não está ativo no kernel (falta `bpf` no parâmetro lsm=)",
+                    "the BPF LSM is not active in the kernel (`bpf` missing from the lsm= parameter)"
+                )
+                .into(),
+            ));
+        }
+        Err(e) => return Err(Confine::Off(e)),
+    }
+    let path = socket_path();
+    let c = Client::connect(&path).map_err(|e| {
+        Confine::Off(trf!(
+            "o auxiliar root não responde em {}: {e}; instale com `sandmux setup`",
+            "the root helper does not answer at {}: {e}; install it with `sandmux setup`",
+            path.display()
+        ))
+    })?;
+    let st = c.status().map_err(Confine::Off)?;
+    if !st.lsm {
+        return Err(Confine::Off(st.reason.unwrap_or_else(|| {
+            tr!(
+                "o auxiliar diz que o BPF LSM não está ativo",
+                "the helper says the BPF LSM is not active"
+            )
+            .into()
+        })));
+    }
+    c.confine(cg).map_err(|e| {
+        Confine::Off(trf!(
+            "o auxiliar recusou o confinamento: {e}",
+            "the helper refused the confinement: {e}"
+        ))
+    })?;
+    for (kind, paths) in [
+        (MarkKind::Deny, &marks.deny),
+        (MarkKind::Protect, &marks.protect),
+        (MarkKind::GitDir, &marks.gitdir),
+    ] {
+        c.mark(kind, paths).map_err(Confine::Fatal)?;
+    }
+    let stopping = Arc::new(AtomicBool::new(false));
+    let watch = c
+        .watch_handle()
+        .map_err(|e| Confine::Fatal(e.to_string()))?;
+    let pidfd = pidfd_open(pid).map_err(|e| Confine::Fatal(format!("pidfd_open: {e}")))?;
+    let flag = stopping.clone();
+    std::thread::Builder::new()
+        .name("helper-watch".into())
+        .spawn(move || {
+            crate::helper::wait_closed(&watch);
+            if flag.load(Ordering::SeqCst) {
+                return;
+            }
+            eprintln!(
+                "{}",
+                tr!(
+                    "sandmuxd: a conexão com o auxiliar root caiu; o Docker privado da pasta para",
+                    "sandmuxd: the connection to the root helper dropped; the folder's private Docker stops"
+                )
+            );
+            pidfd_kill(&pidfd, libc::SIGTERM);
+        })
+        .map_err(|e| Confine::Fatal(e.to_string()))?;
+    Ok(HelperLink {
+        _client: c,
+        stopping,
+    })
+}
+
+fn pidfd_open(pid: u32) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: pidfd_open devolve um descritor novo ou -1.
+    let r = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::c_int, 0) };
+    if r < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: descritor recém-criado.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(r as i32) })
+}
+
+fn pidfd_kill(fd: &std::os::fd::OwnedFd, sig: i32) {
+    use std::os::fd::AsRawFd;
+    // SAFETY: sinal pelo pidfd, que não se confunde com um pid reaproveitado.
+    unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            fd.as_raw_fd(),
+            sig,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        );
+    }
 }
 
 fn systemctl() -> Command {
@@ -521,6 +695,9 @@ pub fn stop_empty_slices() {
 }
 
 fn stop_engine(mut e: Engine) {
+    if let Some(h) = &e.helper {
+        h.stopping.store(true, Ordering::SeqCst);
+    }
     let pid = e.child.id() as i32;
     // SAFETY: sinal para o processo que este daemon criou.
     unsafe { libc::kill(pid, libc::SIGTERM) };
@@ -548,6 +725,8 @@ fn stop_engine(mut e: Engine) {
     }
     let _ = std::fs::remove_file(&e.policy_file);
     let _ = std::fs::remove_dir_all(&e.dirs.state);
+    // As regras saem por último, com o Docker já parado.
+    drop(e.helper.take());
 }
 
 /// Portas publicadas pelos contêineres, pela API.

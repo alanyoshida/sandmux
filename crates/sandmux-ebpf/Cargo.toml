@@ -1,0 +1,16 @@
+[package]
+name = "sandmux-ebpf"
+description = "Programas BPF LSM do confinamento do Docker privado: leitura do BTF do kernel, montagem das instruções e as chamadas bpf()"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+sandmux-spec.workspace = true
+libc.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
