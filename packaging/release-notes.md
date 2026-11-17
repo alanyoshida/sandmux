@@ -1,18 +1,21 @@
-sandmux 0.1.19, antes da v1: o Docker privado de cada pasta mais fechado.
+sandmux 0.1.20, antes da v1: o Docker privado confinado pelo kernel.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Chamadas de sistema negadas no Docker privado:** o `dockerd` sobe com um filtro seccomp do sandmux, herdado por todo contêiner da pasta, também com `--privileged` e `--security-opt seccomp=unconfined`.
-  - Negadas: as mesmas do sandbox do agente (`bpf`, `perf_event_open`, módulos, `kexec`, `userfaultfd`, `io_uring` e os `ioctl`s que injetam teclas no terminal), menos as de montagem, que o Docker usa.
-  - O chaveiro do kernel responde como se não existisse. O `su` e o `sudo` das imagens continuam funcionando.
-- **`/dev` mínimo nos contêineres:** só `null`, `zero`, `full`, `random`, `urandom`, `tty`, pseudo-terminais e `/dev/shm` próprios. Os terminais do usuário, a câmera, o áudio e os outros dispositivos do host não entram; a GPU e o `/dev/kvm` seguem as chaves `gpu` e `kvm` da configuração da pasta.
-- **Segredos da pasta cobertos:** quando o Docker da pasta sobe, os arquivos com cara de segredo e os caminhos de `file-deny` chegam vazios e em somente leitura a um `-v $PWD:/w`, menos os que o próprio agente criou. Acima de 4096 caminhos, o Docker não sobe e o `docker` explica como reduzir a lista.
-- **cgroups próprios:** o Docker roda num cgroup namespace próprio, e um contêiner com `-v /sys/fs/cgroup:/c` só vê os cgroups do Docker da pasta, sem o teto, as sessões e o resto do usuário.
-- Limites, como o contêiner privilegiado que consegue tirar as coberturas, em [docs/docker.md](https://github.com/alanyoshida/sandmux/blob/main/docs/docker.md#limites).
+- **Confinamento do Docker privado por eBPF:** com o novo auxiliar root (`sandmux-helper`) e o BPF LSM ativo no kernel, o próprio kernel decide o que os contêineres de cada pasta podem abrir e alterar, mesmo com `--privileged`.
+  - **Negados:** os segredos e o `file-deny` da pasta, com o conteúdo das pastas negadas, e as coberturas de `/etc`. Desmontar a cobertura ou criar um link não adianta, porque a decisão é pelo arquivo.
+  - **`.git` protegido:** hooks, `config` e `config.worktree` não são gravados, e `commondir` não é criado.
+  - Vale só para o Docker da pasta: o agente e o resto da máquina não são afetados, e não há custo mensurável.
+  - Sem o auxiliar, o Docker sobe como antes, e `sandmux doctor` e `sandmux stats` dizem por quê.
+  - Detalhes em [docs/helper.md](https://github.com/alanyoshida/sandmux/blob/main/docs/helper.md) e [docs/docker.md](https://github.com/alanyoshida/sandmux/blob/main/docs/docker.md#confinamento-por-ebpf).
+- **Instalação do auxiliar:**
+  - o `.deb`, o `.rpm` e o pacote do AUR ligam o socket do serviço na instalação;
+  - pelo `install.sh` com `sudo`, o `sandmux setup` instala as unidades depois de perguntar;
+  - o serviço só tem as capacidades `CAP_BPF` e `CAP_PERFMON`.
 
-Esta versão não muda o protocolo entre o cliente e o daemon. Depois de atualizar, rode `sandmux daemon restart` para o Docker de cada pasta subir com a visão nova.
+Esta versão muda o protocolo entre o cliente e o daemon (39). Depois de atualizar, rode `sandmux setup` (para o auxiliar) e `sandmux daemon restart`, e abra a TUI de novo.
 
 ## Instalar
 
