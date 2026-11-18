@@ -69,6 +69,8 @@ pub struct Session {
     pub cgroup: Option<std::path::PathBuf>,
     /// A observação das execuções pelo kernel (o auxiliar root).
     pub exec_obs: Option<super::execlog::ExecObs>,
+    /// As conexões TCP do lançamento atual vistas pelo kernel.
+    pub conns: super::execlog::Conns,
     /// Mortes por falta de memória e recusas de processo do último lançamento.
     pub oom_kills: u64,
     /// Chaves reais movidas ao cofre pelo vigia desde o lançamento.
@@ -149,6 +151,7 @@ impl Session {
             limits: None,
             cgroup: None,
             exec_obs: None,
+            conns: Default::default(),
             oom_kills: 0,
             keys_moved: 0,
             hist_buf: Vec::new(),
@@ -1059,6 +1062,7 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
             }
             s.cgroup = None;
             s.exec_obs = None;
+            s.conns = Default::default();
             s.oom_kills = 0;
             s.keys_moved = 0;
             s.fork_refusals = 0;

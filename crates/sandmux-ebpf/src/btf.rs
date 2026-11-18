@@ -479,3 +479,25 @@ mod tests {
         assert!(Btf::parse(&[0; 24]).is_err());
     }
 }
+
+#[cfg(test)]
+mod sock_tests {
+    use super::*;
+
+    #[test]
+    fn campos_do_sock() {
+        if !Path::new(VMLINUX).exists() {
+            return;
+        }
+        let b = Btf::vmlinux().unwrap();
+        for f in [
+            "__sk_common.skc_num",
+            "__sk_common.skc_dport",
+            "__sk_common.skc_daddr",
+            "__sk_common.skc_v6_daddr",
+            "__sk_common.skc_family",
+        ] {
+            b.offset("sock", f).unwrap_or_else(|e| panic!("{f}: {e}"));
+        }
+    }
+}

@@ -10,24 +10,24 @@ Decisões do usuário (2026-11-18), ao propor:
 
 ## What Changes
 
-- **Pelo kernel:** a observação de uma aba (o pedido `observe` do change 72) ganha um segundo programa `tp_btf`, no tracepoint `sock:inet_sock_set_state`. Na passagem para `SYN_SENT`, ele manda:
+- **Pelo kernel:** a observação de uma aba (o pedido `observe` do change 72) ganha programas `fexit` na saída de `tcp_v4_connect` e `tcp_v6_connect`. Quando o `connect` escolheu a porta de origem, eles mandam:
   - o pid do processo que chamou o `connect`;
   - a porta de origem;
   - o endereço e a porta de destino.
 
   O daemon guarda esse mapa por aba, com o executável lido em `/proc/<pid>/exe`.
-- **Pelo `/proc` (recuo):** quando o kernel não sabe, o gateway da aba acha o socket pela porta de origem e pelo destino em `/proc/<pid>/net/tcp` (ou `udp`, `tcp6`, `udp6`) do sandbox. Depois procura o processo dono do socket entre os processos do sandbox, como o `ss -p`. Não precisa de root.
-- **Gateway da aba:** quando grava a linha de uma conexão, pergunta ao daemon pelo processo (o kernel) e cai no `/proc` quando não há resposta.
+- **Pelo `/proc` (recuo):** quando o kernel não sabe, o gateway da aba acha o socket no começo da conexão, antes de abrir a conexão de saída, enquanto o processo espera a resposta. O inode vem da consulta exata do sock_diag, num socket que o sandbox cria no próprio namespace de rede e passa ao lançador. Sem ele, vem de `/proc/<pid>/net/tcp` (ou `udp`, `tcp6`, `udp6`). Depois o gateway procura o processo dono do socket na árvore de processos do sandbox, como o `ss -p`. Não precisa de root.
+- **Gateway da aba:** quando grava a linha de uma conexão, pergunta ao daemon pelo processo (o kernel) e usa o resultado do `/proc` quando não há resposta.
 - **Registro de rede:** três campos novos, `pid`, `exe` e `proc_via` (`kernel` ou `proc`). `sandmux net` e a tela de rede da TUI ganham a coluna do processo.
 
 Decisões do agente:
 
-- O UDP vem só do `/proc`, porque o tracepoint do kernel é só de TCP.
+- O UDP vem só do `/proc`, porque os programas do kernel são só de TCP.
 - O DNS que o processo manda ao gateway não ganha processo: a consulta é atendida pelo próprio gateway.
 
 Limites, escritos na proposta:
 
-- Sem o auxiliar, um processo que termina antes de o gateway procurar (um `curl` muito rápido) fica sem processo na linha.
+- Sem o auxiliar, um processo que fecha a conexão sem esperar resposta pode terminar antes da busca e ficar sem processo na linha. Cada conexão espera a busca, cerca de 1 ms.
 - O Docker privado fica sem processo.
 
 ## Capabilities
@@ -43,7 +43,8 @@ Limites, escritos na proposta:
 
 ## Impact
 
-- `crates/sandmux-ebpf`: o programa `tp_btf` de `inet_sock_set_state`, o evento `EV_CONN` e a carga junto com o de execução, na mesma fila.
+- `crates/sandmux-ebpf`: os programas `fexit` de `tcp_v4_connect` e `tcp_v6_connect`, o evento `EV_CONN` e a carga junto com o de execução, na mesma fila.
+- `crates/sandmux-launcher`: o socket de sock_diag criado no namespace de rede do sandbox e passado ao gateway junto com o TUN.
 - `crates/sandmux/src/helper.rs`: a observação com os dois programas e o evento como JSON.
 - `crates/sandmux/src/daemon/execlog.rs`: o mapa de conexões por aba, o executável e a resposta à pergunta do gateway.
 - `crates/sandmux-net`: a pergunta ao daemon, a busca no `/proc` e os campos novos do registro.

@@ -14,6 +14,7 @@ pub mod log;
 pub mod mitm;
 pub mod policy;
 pub mod ports;
+pub mod procinfo;
 pub mod sniff;
 pub mod tls;
 mod tun;
@@ -66,6 +67,12 @@ pub struct Config {
     /// Harness da aba: os endpoints de login capturados e os segredos de
     /// login trocados são só os dele.
     pub harness: String,
+    /// O pid do sandbox da aba, no namespace do host: com ele, cada linha do
+    /// registro ganha o processo da conexão (`None` no Docker).
+    pub sandbox_pid: Option<u32>,
+    /// Um socket de sock_diag no namespace de rede do sandbox, para achar o
+    /// socket de cada conexão sem ler `/proc/<pid>/net`.
+    pub sock_diag: Option<std::os::fd::OwnedFd>,
 }
 
 struct State {
@@ -202,6 +209,7 @@ fn target(dst: SocketAddr) -> SocketAddr {
 async fn tcp(mut s: ipstack::IpStackTcpStream, st: Arc<State>) {
     let t0 = Instant::now();
     let dst = s.peer_addr();
+    st.log.begin("tcp", s.local_addr(), dst).await;
     if let Some(why) = blocked_ip(dst.ip()) {
         st.log.write(
             "tcp",
@@ -515,6 +523,7 @@ async fn forward(q: &[u8], parsed: &dns::Query, st: &State) -> Option<(Vec<u8>, 
 async fn udp(mut u: ipstack::IpStackUdpStream, st: Arc<State>) {
     let t0 = Instant::now();
     let dst = u.peer_addr();
+    st.log.begin("udp", u.local_addr(), dst).await;
     if let Some(why) = blocked_ip(dst.ip()) {
         st.log.write(
             "udp",
@@ -699,7 +708,13 @@ async fn run(
 ) {
     let st = Arc::new(State {
         aliases: cfg.aliases.clone(),
-        log: Arc::new(log::Log::new(&cfg.log_dir, &cfg.tag, &cfg.workdir)),
+        log: Arc::new(match cfg.sandbox_pid {
+            Some(pid) => log::Log::new(&cfg.log_dir, &cfg.tag, &cfg.workdir).with_resolver(
+                procinfo::Resolver::new(cfg.vault.clone(), &cfg.tag, pid, cfg.sock_diag.take()),
+                active.clone(),
+            ),
+            None => log::Log::new(&cfg.log_dir, &cfg.tag, &cfg.workdir),
+        }),
         vault: cfg.vault.clone(),
         tag: cfg.tag.clone(),
         harness: cfg.harness.clone(),
@@ -749,18 +764,20 @@ async fn run(
             Ok(IpStackStream::Tcp(s)) => {
                 let guard = Active::new(&st.active);
                 let st = st.clone();
-                tokio::spawn(async move {
+                let src = s.local_addr();
+                tokio::spawn(procinfo::CONN_SRC.scope(src, async move {
                     tcp(s, st).await;
                     drop(guard);
-                });
+                }));
             }
             Ok(IpStackStream::Udp(u)) => {
                 let guard = Active::new(&st.active);
                 let st = st.clone();
-                tokio::spawn(async move {
+                let src = u.local_addr();
+                tokio::spawn(procinfo::CONN_SRC.scope(src, async move {
                     udp(u, st).await;
                     drop(guard);
-                });
+                }));
             }
             Ok(IpStackStream::UnknownTransport(p)) => {
                 let dst = p.dst_addr();

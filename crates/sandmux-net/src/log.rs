@@ -39,6 +39,14 @@ pub struct Entry {
     /// Nome do segredo trocado neste pedido (nunca o valor).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
+    /// O processo que abriu a conexão: pid, executável e a fonte (`kernel`
+    /// ou `proc`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proc_via: Option<String>,
 }
 
 /// Protocolo da linha de uma assinatura do agente SSH.
@@ -71,6 +79,9 @@ impl Entry {
             path: None,
             status: None,
             secret: (!name.is_empty()).then(|| name.to_string()),
+            pid: None,
+            exe: None,
+            proc_via: None,
         }
     }
 }
@@ -150,7 +161,24 @@ pub struct Log {
     tag: String,
     workdir: PathBuf,
     known: Mutex<Option<HashSet<String>>>,
+    /// Com o processo de cada conexão: as linhas vão para uma thread que o
+    /// procura e grava, fora do caminho dos dados.
+    procs: Option<std::sync::mpsc::Sender<Pending>>,
+    /// A busca no `/proc` no começo de cada conexão, enquanto o socket vive,
+    /// guardada pela origem até a linha ser gravada.
+    early: Option<(std::sync::Arc<crate::procinfo::Resolver>, Early)>,
+    /// Linhas esperando o processo: contam como conexões vivas do gateway,
+    /// para o fim do sandbox esperar que sejam gravadas.
+    pending: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 }
+
+/// O processo achado no `/proc` no começo de cada conexão, pela origem.
+type Early = std::sync::Arc<
+    Mutex<std::collections::HashMap<std::net::SocketAddr, Option<crate::procinfo::Found>>>,
+>;
+
+/// Uma linha que espera o processo: o dia, a linha, a origem e o destino.
+type Pending = (String, Entry, std::net::SocketAddr, std::net::SocketAddr);
 
 impl Log {
     pub fn new(dir: &Path, tag: &str, workdir: &Path) -> Log {
@@ -159,7 +187,78 @@ impl Log {
             tag: tag.into(),
             workdir: workdir.into(),
             known: Mutex::new(None),
+            procs: None,
+            early: None,
+            pending: None,
         }
+    }
+
+    /// Procura o processo de cada conexão (das tarefas com a origem em
+    /// [`crate::procinfo::CONN_SRC`]) antes de gravar a linha.
+    pub fn with_resolver(
+        mut self,
+        r: crate::procinfo::Resolver,
+        pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Log {
+        let r = std::sync::Arc::new(r);
+        let r2 = r.clone();
+        // O `/proc` só mostra o socket enquanto ele está aberto: a busca é
+        // feita no começo da conexão ([`Log::begin`]) e guardada pela origem
+        // até a linha ser gravada.
+        let early: Early = std::sync::Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let (tx, rx) = std::sync::mpsc::channel::<Pending>();
+        let dir = self.dir.clone();
+        let done = pending.clone();
+        let e2 = early.clone();
+        let _ = std::thread::Builder::new()
+            .name("rede-processo".into())
+            .spawn(move || {
+                for (day, mut e, src, dst) in rx {
+                    // A busca do começo já terminou: o gateway a espera.
+                    let found = r2.resolve_kernel(&e.proto, src, dst).or_else(|| {
+                        e2.lock()
+                            .unwrap_or_else(|x| x.into_inner())
+                            .remove(&src)
+                            .flatten()
+                    });
+                    if let Some(f) = found {
+                        e.pid = Some(f.pid);
+                        e.exe = Some(f.exe).filter(|x| !x.is_empty());
+                        e.proc_via = Some(f.via.into());
+                    }
+                    write_line(&dir, &day, &e);
+                    done.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            });
+        self.procs = Some(tx);
+        self.early = Some((r, early));
+        self.pending = Some(pending);
+        self
+    }
+
+    /// O começo de uma conexão (TCP ou UDP) de `src` a `dst`: procura o
+    /// processo dono do socket no `/proc` enquanto ele está aberto. O gateway
+    /// espera a busca (até 100 ms) antes de abrir a conexão de saída: até a
+    /// resposta chegar, o processo do sandbox mantém o socket aberto. Com a
+    /// aba pelo kernel, não procura.
+    pub async fn begin(&self, proto: &str, src: std::net::SocketAddr, dst: std::net::SocketAddr) {
+        let Some((r, early)) = &self.early else {
+            return;
+        };
+        if r.by_kernel() {
+            return;
+        }
+        let (r, early, proto) = (r.clone(), early.clone(), proto.to_string());
+        let job = tokio::task::spawn_blocking(move || {
+            let f = r.resolve_proc(&proto, src, dst);
+            let mut g = early.lock().unwrap_or_else(|e| e.into_inner());
+            g.insert(src, f);
+            // Um teto para conexões que nunca gravam a linha.
+            if g.len() > 4096 {
+                g.clear();
+            }
+        });
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), job).await;
     }
 
     fn known_file(&self) -> PathBuf {
@@ -264,24 +363,48 @@ impl Log {
             path: http.as_ref().map(|h| h.path.to_string()),
             status: http.as_ref().map(|h| h.status),
             secret: http.as_ref().and_then(|h| h.secret.map(String::from)),
+            pid: None,
+            exe: None,
+            proc_via: None,
         };
-        if std::fs::create_dir_all(&self.dir).is_ok() {
-            let _ = std::fs::set_permissions(
-                &self.dir,
-                std::os::unix::fs::PermissionsExt::from_mode(0o700),
-            );
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .mode(0o600)
-                .open(self.dir.join(format!("{day}.jsonl")))
-                && let Ok(mut line) = serde_json::to_string(&e)
+        if let (Some(tx), Some(n)) = (&self.procs, &self.pending)
+            && (proto == "tcp" || proto == "udp")
+            && let Ok(src) = crate::procinfo::CONN_SRC.try_with(|s| *s)
+            && let Ok(ip) = ip.parse::<std::net::IpAddr>()
+        {
+            n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if tx
+                .send((
+                    day.clone(),
+                    e.clone(),
+                    src,
+                    std::net::SocketAddr::new(ip, port),
+                ))
+                .is_ok()
             {
-                line.push('\n');
-                let _ = f.write_all(line.as_bytes());
+                return e;
             }
+            n.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         }
+        write_line(&self.dir, &day, &e);
         e
+    }
+}
+
+/// Grava uma linha no arquivo do dia (pasta 700, arquivo 600).
+fn write_line(dir: &Path, day: &str, e: &Entry) {
+    if std::fs::create_dir_all(dir).is_ok() {
+        let _ = std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700));
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(dir.join(format!("{day}.jsonl")))
+            && let Ok(mut line) = serde_json::to_string(e)
+        {
+            line.push('\n');
+            let _ = f.write_all(line.as_bytes());
+        }
     }
 }
 

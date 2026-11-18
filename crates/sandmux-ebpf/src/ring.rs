@@ -25,6 +25,44 @@ pub const RING_SIZE: u32 = 256 * 1024;
 pub const EV_DENY: u32 = 1;
 pub const EV_CREATE: u32 = 2;
 pub const EV_EXEC: u32 = 3;
+pub const EV_CONN: u32 = 4;
+
+/// Tamanho do evento de conexão.
+pub const CONN_EVENT: usize = 48;
+
+/// Uma conexão TCP aberta por um processo observado (no `SYN_SENT`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Conn {
+    pub pid: u32,
+    pub sport: u16,
+    pub dport: u16,
+    pub ip: std::net::IpAddr,
+}
+
+impl Conn {
+    /// Lê o evento: `kind`, a família, a porta de origem (ordem da máquina),
+    /// a de destino (ordem da rede), o pid, o IPv4 e o IPv6.
+    pub fn decode(b: &[u8]) -> Option<Conn> {
+        if b.len() < CONN_EVENT || u32_at(b, 0) != EV_CONN {
+            return None;
+        }
+        let family = u32_at(b, 4) as i32;
+        let ip = if family == libc::AF_INET6 {
+            let mut a = [0u8; 16];
+            a.copy_from_slice(&b[32..48]);
+            std::net::IpAddr::from(a)
+        } else {
+            std::net::IpAddr::from([b[24], b[25], b[26], b[27]])
+        };
+        let dport_be = u32_at(b, 12) as u16;
+        Some(Conn {
+            pid: u64::from_le_bytes(b[16..24].try_into().ok()?) as u32,
+            sport: u32_at(b, 8) as u16,
+            dport: u16::from_be(dport_be),
+            ip,
+        })
+    }
+}
 
 /// Bytes dos argumentos de uma execução, depois do caminho.
 pub const EXEC_ARGS: usize = 1024;
@@ -302,6 +340,17 @@ mod tests {
         let e = Event::decode(&d).unwrap();
         assert!(e.write && e.bits == 1 && e.ino == 7 && e.name.is_empty());
         assert!(Event::decode(&[0; 8]).is_none());
+        let mut c = vec![0u8; CONN_EVENT];
+        c[0..4].copy_from_slice(&EV_CONN.to_le_bytes());
+        c[4..8].copy_from_slice(&(libc::AF_INET as u32).to_le_bytes());
+        c[8..12].copy_from_slice(&40000u32.to_le_bytes());
+        c[12..16].copy_from_slice(&u32::from(443u16.to_be()).to_le_bytes());
+        c[16..24].copy_from_slice(&321u64.to_le_bytes());
+        c[24..28].copy_from_slice(&[1, 1, 1, 1]);
+        let k = Conn::decode(&c).unwrap();
+        assert_eq!((k.pid, k.sport, k.dport), (321, 40000, 443));
+        assert_eq!(k.ip, std::net::IpAddr::from([1, 1, 1, 1]));
+        assert!(Event::decode(&c).is_none());
         // Execução: o pid no lugar do inode, o tamanho dos argumentos no do
         // dispositivo.
         let mut x = vec![0u8; EV_HEADER + EV_NAME + EXEC_ARGS];

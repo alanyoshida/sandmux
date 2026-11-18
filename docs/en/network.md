@@ -257,8 +257,19 @@ Each TCP connection, each UDP flow and each DNS query becomes a JSON line in `$X
 | `new` | the domain showed up for the first time in this work folder |
 | `method`, `path`, `status` | only on `https` lines (decrypted requests): the method, the path without the query, and the response status |
 | `secret` | only when the gateway swapped the fake key for the real one in the request: the name of the [vault](vault.md) secret, never the value; on `ssh-sign` lines, the name of the SSH key (`ssh signature: <name>` in `sandmux net` and in the panel) |
+| `pid`, `exe` | only on the TCP and UDP connections of tabs, when known: the [process](#process-of-each-connection) that opened the connection (the pid in the host namespace) and the executable |
+| `proc_via` | where the process came from: `kernel` or `proc` |
 
 The domain comes from the DNS query the sandbox itself made (the IP stays linked to the name for 10 minutes), from the TLS SNI or from the HTTP `Host` header. A direct connection by IP stays as "no domain". The known domains of each folder are kept in `net/known/`.
+
+### Process of each connection
+
+The TCP and UDP lines of tabs say which process opened the connection, to tell the harness's inference call apart from a `curl` launched by a tool or from a package fetched by an `npm install`. The arguments don't go on the line: they are in the [execution log](files.md#executions), by pid.
+
+- **By the kernel (`kernel`):** with the [root helper](helper.md#execution-and-connection-observation), a BPF program on the exit of `connect` records the pid, the source port and the destination of each TCP connection of the tab, and the daemon keeps the executable. It works even for a process that has already ended when the line is written.
+- **By `/proc` (`proc`):** without the helper, and for UDP, the gateway finds the connection's socket (by the exact sock_diag query in the sandbox's network namespace, or by `/proc/<pid>/net/tcp`) and the process that owns it in the sandbox's process tree, like `ss -p`. The lookup happens at the start of the connection, before the gateway opens the outbound connection, while the process waits for the reply. It costs about 1 ms per connection. On the reference machine, 200 short connections to a local server took 0.5 s with the helper and 0.7 to 0.8 s without it, all with the process.
+
+DNS queries, which the gateway itself answers, and the lines of the [private Docker](docker.md) have no process: in Docker, the bridge's NAT changes the source port before the gateway.
 
 ### `sandmux net`
 
@@ -267,7 +278,7 @@ sandmux net      # the last 50 lines from all sessions and `run`s
 sandmux net 1    # only from session 1
 ```
 
-Shows the time, the session (`run` for a `run` without a terminal), the protocol, the domain, the destination, the bytes on each side, and "new" or the block. It reads today's and yesterday's lines.
+Shows the time, the session (`run` for a `run` without a terminal), the protocol, the domain, the destination, the bytes on each side, the process (`curl 4321`) and "new" or the block. It reads today's and yesterday's lines.
 
 In the [TUI](tui.md), the Network section of the panel shows the active tab's latest connections, and an inactive tab gets `•` on the bar when it accesses a new domain and `!` when it has a block. The network screen (Ctrl+b `a`) shows the tab's accesses and rules and lets you deny, allow, turn items on and off, and switch the mode.
 
@@ -291,4 +302,5 @@ A user-space TCP/IP stack is slower than the kernel's, as in `slirp4netns`. On t
 - **Connections already open** are not cut by a new rule; the rule applies to the following connections.
 - **Decryption with HTTP/1.1 only:** on decrypted domains, the gateway offers only HTTP/1.1; programs that pin the server's certificate fail on those domains.
 - **Long connections** only show up in the log when they end.
+- **Process without the helper:** a process that closes the connection without waiting for a reply may end before the `/proc` lookup, and the line has no process.
 - **No IPv6 and no ICMP** inside the sandbox.

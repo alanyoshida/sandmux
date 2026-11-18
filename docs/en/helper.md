@@ -31,9 +31,9 @@ The decision is by file (the inode), not by path. That is why unmounting a cover
 - **Unmark:** the daemon also asks for `unmark`, when the folder's file policy changes and a path is no longer denied. The helper removes the mark and releases the file's descriptor.
 - **Events:** the programs send an event through a kernel queue when they deny an operation and when a container creates a file on the folder's file system. The helper reads the queue and sends the events to the daemon over the same confinement connection. The event has the type, the hook, the inode and the created file's name, never the content of a file. With the queue full, extra events are dropped and counted, and containers do not wait.
 
-## Execution observation
+## Execution and connection observation
 
-The `observe` request turns on only the observation of executions in a user cgroup (a tab's scope), without file rules or marks. A program on the `sched_process_exec` tracepoint sends the executed path, the process and the arguments over the same connection. The Docker confinement (`confine`) includes the same observation. There are up to 64 active observations per user, besides the 16 confinements. The observation only logs: no execution is denied or delayed.
+The `observe` request turns on only the observation of executions in a user cgroup (a tab's scope), without file rules or marks. A program on the `sched_process_exec` tracepoint sends the executed path, the process and the arguments over the same connection. Two `fexit` programs, on the exit of `tcp_v4_connect` and `tcp_v6_connect`, send each TCP connection a process in the cgroup opens: the pid, the source port and the destination. The daemon uses these events for the [process of each connection](network.md#process-of-each-connection) in the network log. The Docker confinement (`confine`) includes the same observation. There are up to 64 active observations per user, besides the 16 confinements. The observation only logs: no execution or connection is denied or delayed.
 
 ## How long the rules last
 

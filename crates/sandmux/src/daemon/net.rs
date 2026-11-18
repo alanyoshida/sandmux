@@ -556,6 +556,9 @@ pub fn lines(
             path: e.path.clone(),
             status: e.status,
             secret: e.secret.clone(),
+            pid: e.pid,
+            exe: e.exe.clone(),
+            proc_via: e.proc_via.clone(),
         })
         .collect();
     out.reverse();

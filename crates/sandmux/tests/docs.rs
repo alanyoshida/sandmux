@@ -306,6 +306,9 @@ fn documentacao_da_rede_acompanha_o_codigo() {
         path: Some(String::new()),
         status: Some(0),
         secret: Some(String::new()),
+        pid: Some(0),
+        exe: Some(String::new()),
+        proc_via: Some(String::new()),
     })
     .unwrap();
     for k in e.as_object().unwrap().keys() {

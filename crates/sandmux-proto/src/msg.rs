@@ -478,6 +478,13 @@ pub struct NetLine {
     /// Nome do segredo trocado no pedido.
     #[serde(default)]
     pub secret: Option<String>,
+    /// O processo da conexão: pid, executável e a fonte (protocolo 42).
+    #[serde(default)]
+    pub pid: Option<u32>,
+    #[serde(default)]
+    pub exe: Option<String>,
+    #[serde(default)]
+    pub proc_via: Option<String>,
 }
 
 /// Mensagens de controle, nos dois sentidos.
@@ -681,6 +688,14 @@ pub enum Msg {
     VaultInject {
         tag: String,
     },
+    /// O processo de uma conexão TCP do lançamento `tag`, pela porta de
+    /// origem e pelo destino, do gateway ao daemon (protocolo 42).
+    ConnProcess {
+        tag: String,
+        sport: u16,
+        ip: String,
+        port: u16,
+    },
     /// Tokens reais capturados numa resposta de login (papel e valor), do
     /// gateway de um lançamento ao daemon, que os guarda e devolve os falsos
     /// (protocolo 26). `harness` é o dono do login (`claude`, `agy`), que
@@ -811,6 +826,13 @@ pub enum Msg {
     },
     Injections {
         secrets: Vec<Injection>,
+    },
+    /// Resposta ao `ConnProcess`: o processo, quando o kernel o registrou, e
+    /// se a aba está pelo kernel (protocolo 42).
+    ConnProcessReply {
+        pid: Option<u32>,
+        exe: Option<String>,
+        kernel: bool,
     },
     StatusInfo {
         pid: u32,

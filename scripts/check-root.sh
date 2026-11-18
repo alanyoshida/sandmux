@@ -43,6 +43,12 @@ echo "== compilando como $user"
 as_user cargo build -q -p sandmux --bin sandmux-helper
 [ -x "$helper" ] || { echo "check-root: falta $helper" >&2; exit 2; }
 
+# Sobras de uma rodada interrompida: o auxiliar de teste e as pastas.
+for u in $(systemctl list-units --no-legend --plain 'sandmux-helper-check-*' 2>/dev/null | awk '{print $1}'); do
+    systemctl stop "$u" 2>/dev/null || true
+done
+rm -rf /run/sandmux-check-root.* /var/lib/sandmux-check-root.*
+
 tmp=$(mktemp -d /run/sandmux-check-root.XXXXXX)
 # Do root (o serviço não tem CAP_DAC_OVERRIDE), com o sticky bit: os testes
 # criam ali o arquivo que pede o reinício do auxiliar.
@@ -84,10 +90,12 @@ stop_helper() {
     done
 }
 
-# O auxiliar, reiniciado quando os testes pedem, até o fim.
+# O auxiliar, reiniciado quando os testes pedem, até o fim (ou até o script
+# principal morrer sem passar pelo `trap`).
 start_helper
+main=$$
 (
-    while [ ! -e "$tmp/fim" ]; do
+    while [ ! -e "$tmp/fim" ] && kill -0 "$main" 2>/dev/null; do
         if [ -e "$sock.restart" ]; then
             stop_helper
             rm -f "$sock.restart"
@@ -96,6 +104,7 @@ start_helper
         fi
         sleep 0.2
     done
+    [ -e "$tmp/fim" ] || stop_helper
 ) &
 sup=$!
 fim() {

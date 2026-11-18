@@ -627,8 +627,18 @@ impl Events for RealEvents {
             .reader
             .poll(timeout_ms)
             .iter()
-            .filter_map(|r| sandmux_ebpf::ring::Event::decode(r))
-            .map(|e| event_json(&e))
+            .filter_map(|r| {
+                if let Some(c) = sandmux_ebpf::ring::Conn::decode(r) {
+                    return Some(json!({
+                        "kind": "conn",
+                        "pid": c.pid,
+                        "sport": c.sport,
+                        "dport": c.dport,
+                        "ip": c.ip.to_string(),
+                    }));
+                }
+                sandmux_ebpf::ring::Event::decode(r).map(|e| event_json(&e))
+            })
             .collect();
         (evs, sandmux_ebpf::prog::take_drops(&self.drops))
     }

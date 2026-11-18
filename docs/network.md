@@ -255,8 +255,19 @@ Cada conexão TCP, cada fluxo UDP e cada consulta de DNS vira uma linha JSON em 
 | `new` | o domínio apareceu pela primeira vez nesta pasta de trabalho |
 | `method`, `path`, `status` | só nas linhas `https` (pedidos decifrados): o método, o caminho sem a query e o status da resposta |
 | `secret` | só quando o gateway trocou a chave falsa pela real no pedido: o nome do segredo do [cofre](vault.md), nunca o valor; nas linhas `ssh-sign`, o nome da chave SSH (`assinatura ssh: <nome>` no `sandmux net` e no painel) |
+| `pid`, `exe` | só nas conexões TCP e UDP das abas, quando conhecido: o [processo](#processo-de-cada-conexão) que abriu a conexão (o pid no namespace do host) e o executável |
+| `proc_via` | de onde veio o processo: `kernel` ou `proc` |
 
 O domínio vem da consulta de DNS que o próprio sandbox fez (o IP fica ligado ao nome por 10 minutos), do SNI do TLS ou do cabeçalho `Host` do HTTP. Uma conexão direta por IP fica como "sem domínio". Os domínios conhecidos de cada pasta ficam em `net/known/`.
+
+### Processo de cada conexão
+
+As linhas TCP e UDP das abas dizem qual processo abriu a conexão, para separar a chamada de inferência do harness de um `curl` lançado por uma ferramenta ou de um pacote baixado por um `npm install`. Os argumentos não vão para a linha: ficam no [registro de execuções](files.md#execuções), pelo pid.
+
+- **Pelo kernel (`kernel`):** com o [auxiliar root](helper.md#observação-das-execuções-e-das-conexões), um programa BPF na saída do `connect` registra o pid, a porta de origem e o destino de cada conexão TCP da aba, e o daemon guarda o executável. Vale mesmo para um processo que já terminou quando a linha é gravada.
+- **Pelo `/proc` (`proc`):** sem o auxiliar, e no UDP, o gateway acha o socket da conexão (pela consulta exata do sock_diag no namespace de rede do sandbox, ou por `/proc/<pid>/net/tcp`) e o processo dono dele na árvore de processos do sandbox, como o `ss -p`. A busca acontece no começo da conexão, antes de o gateway abrir a conexão de saída, enquanto o processo espera a resposta. Ela custa cerca de 1 ms por conexão. Na máquina de referência, 200 conexões curtas a um servidor local levaram 0,5 s com o auxiliar e 0,7 a 0,8 s sem ele, todas com o processo.
+
+As consultas de DNS, que o próprio gateway atende, e as linhas do [Docker privado](docker.md) não têm processo: no Docker, o NAT da ponte troca a porta de origem antes do gateway.
 
 ### `sandmux net`
 
@@ -265,7 +276,7 @@ sandmux net      # as últimas 50 linhas de todas as sessões e dos `run`
 sandmux net 1    # só da sessão 1
 ```
 
-Mostra a hora, a sessão (`run` para um `run` sem terminal), o protocolo, o domínio, o destino, os bytes de cada lado, e "novo" ou o bloqueio. Lê as linhas de hoje e de ontem.
+Mostra a hora, a sessão (`run` para um `run` sem terminal), o protocolo, o domínio, o destino, os bytes de cada lado, o processo (`curl 4321`) e "novo" ou o bloqueio. Lê as linhas de hoje e de ontem.
 
 Na [TUI](tui.md), a seção Rede do painel mostra as últimas conexões da aba ativa, e uma aba inativa ganha `•` na barra quando acessa um domínio novo e `!` quando tem um bloqueio. A tela de rede (Ctrl+b `a`) mostra os acessos e as regras da aba e permite negar, liberar, ligar e desligar itens e trocar o modo.
 
@@ -289,4 +300,5 @@ Uma pilha TCP/IP em espaço de usuário é mais lenta que a do kernel, como no `
 - **Conexões já abertas** não são cortadas por uma regra nova; a regra vale nas conexões seguintes.
 - **Decifração só com HTTP/1.1:** nos domínios decifrados, o gateway oferece só HTTP/1.1; programas que fixam o certificado do servidor falham nesses domínios.
 - **Conexões longas** só aparecem no registro quando terminam.
+- **Processo sem o auxiliar:** um processo que fecha a conexão sem esperar resposta pode terminar antes da busca pelo `/proc`, e a linha fica sem processo.
 - **Sem IPv6 e sem ICMP** dentro do sandbox.

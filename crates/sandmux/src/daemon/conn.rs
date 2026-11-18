@@ -422,6 +422,22 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     Err(e) => error(&mut stream, e)?,
                 }
             }
+            Msg::ConnProcess {
+                tag,
+                sport,
+                ip,
+                port,
+            } => {
+                let (found, kernel) = super::execlog::conn_process(shared, &tag, sport, &ip, port);
+                write_control(
+                    &mut stream,
+                    &Msg::ConnProcessReply {
+                        pid: found.as_ref().map(|f| f.0),
+                        exe: found.map(|f| f.1),
+                        kernel,
+                    },
+                )?;
+            }
             Msg::VaultInject { tag } => {
                 let _ = tag;
                 let secrets = shared
