@@ -48,6 +48,19 @@ Desmontar uma cobertura, tirar o somente-leitura, renomear, criar um hard link o
 
 Sem o auxiliar, sem o `bpf` na lista de LSMs do kernel ou sem a slice dos tetos, o Docker sobe só com as proteções sem privilégio. `sandmux stats <id>` mostra a linha "confinamento eBPF" com o motivo, e o `sandmux doctor` mostra como ligar. Se o auxiliar parar com o Docker rodando, o Docker da pasta para, e o próximo `docker` sobe outro.
 
+### Ao vivo
+
+Com o confinamento ligado, o Docker que já está rodando acompanha a pasta e a configuração:
+
+- **Arquivos novos:** o daemon vigia a pasta de trabalho com inotify. Em até 1 segundo, ele nega aos contêineres:
+  - um arquivo com cara de segredo criado depois, que o agente não criou;
+  - tudo o que aparece dentro de uma pasta negada, inclusive o que você cria no host.
+
+  Um segredo que o próprio agente cria continua legível para os contêineres. Sem vigias de inotify disponíveis (`fs.inotify.max_user_watches`), o daemon refaz a varredura da pasta a cada 10 segundos, e o `sandmux stats` avisa.
+- **Política ao vivo:** uma mudança no `file-deny`, no `file-allow`, no `secret-files` ou no `secret-files-off` da configuração da pasta vale na operação seguinte, sem subir o Docker de novo.
+  - Liberar um caminho tira a negação no kernel, mas a cobertura por montagem feita na subida continua: um contêiner comum vê o arquivo vazio até o Docker subir de novo.
+- **Registro:** cada operação negada a um contêiner e cada arquivo que um contêiner cria na pasta de trabalho entram no [registro de arquivos](files.md#registro), com a etiqueta `docker-<id>` e o caminho do host. As leituras e escritas comuns dos contêineres não entram.
+
 ## Quando sobe e quando para
 
 - **Sobe** na primeira conexão ao socket. Uma sessão que nunca roda `docker` não sobe Docker nenhum. A primeira chamada espera de 1 a 3 segundos.
@@ -137,5 +150,6 @@ O `dockerd` nasce com um filtro seccomp do sandmux, e todo processo do Docker da
 - `--privileged` não dá privilégio real: o root do contêiner é o usuário, mapeado.
 - Um contêiner que precisa de um dispositivo do host fora da lista, como uma VPN com `/dev/net/tun` ou um sistema de arquivos com `/dev/fuse`, não funciona no Docker privado.
 - **Sem o confinamento por eBPF, as coberturas caem para um contêiner privilegiado.** Com `--privileged`, um contêiner tem `CAP_SYS_ADMIN` no user namespace em que a visão foi montada, e consegue desmontar uma cobertura ou tirar o somente-leitura de um bind. Isso vale para os segredos e os caminhos negados cobertos e para a proteção do `.git` (hooks e config em somente leitura). Um contêiner comum não consegue. Com o [confinamento por eBPF](#confinamento-por-ebpf), o kernel nega pelo arquivo, e desfazer a montagem não adianta.
-- **Arquivos criados depois não são cobertos.** Um segredo criado na pasta com o Docker já rodando, um arquivo que você cria dentro de uma pasta negada, ou uma mudança na política de arquivos, só vale quando o Docker da pasta sobe de novo (depois de `sandmux daemon restart`, ou quando a última sessão da pasta termina). Com o confinamento por eBPF, os próprios contêineres não criam nada dentro de uma pasta negada.
-- **Sem o resto da política de arquivos:** os contêineres não têm o registro de arquivos nem a política ao vivo. Sem o confinamento por eBPF, também não têm a recusa do `.git/commondir`.
+- **Sem o confinamento por eBPF, arquivos criados depois não são cobertos.** Um segredo criado na pasta com o Docker já rodando, um arquivo que você cria dentro de uma pasta negada, ou uma mudança na política de arquivos, só vale quando o Docker da pasta sobe de novo (depois de `sandmux daemon restart`, ou quando a última sessão da pasta termina). Com o confinamento, valem [ao vivo](#ao-vivo), em até 1 segundo.
+- **Sem o confinamento por eBPF, sem o resto da política de arquivos:** os contêineres não têm o registro de arquivos, a política ao vivo nem a recusa do `.git/commondir`. Com ele, o registro tem só os bloqueios e as criações.
+- **Janela dos arquivos novos:** entre a criação de um arquivo e a negação no kernel passam até cerca de 200 ms (a espera de silêncio da vigia), e um contêiner que lê o arquivo nesse intervalo consegue lê-lo.

@@ -38,8 +38,7 @@ struct Engine {
 /// ela estiver aberta) e o aviso de parada, para a thread que vigia a
 /// conexão não derrubar o Docker que já está parando.
 struct HelperLink {
-    _client: crate::helper::Client,
-    stopping: Arc<AtomicBool>,
+    files: Arc<super::dockerfiles::Files>,
 }
 
 type SpawnJob = (Command, std::sync::mpsc::Sender<std::io::Result<Child>>);
@@ -236,6 +235,27 @@ impl Engines {
             .unwrap_or_default()
     }
 
+    /// Recalcula as marcas do confinamento do Docker da pasta com a
+    /// configuração atual (a política de arquivos ao vivo).
+    pub fn refresh_marks(&self, shared: &Shared, workdir: &Path) {
+        let workdir = canon(workdir);
+        let files = {
+            let slot = self.slot(&workdir);
+            let g = slot.lock().unwrap_or_else(|e| e.into_inner());
+            match g.as_ref().and_then(|e| e.helper.as_ref()) {
+                Some(h) => h.files.clone(),
+                None => return,
+            }
+        };
+        let mut host = shared.base.clone();
+        host.cwd = workdir.clone();
+        let mut opts = LaunchOptions::new("shell");
+        opts.workdir = workdir.clone();
+        if let Ok(eff) = launch::effective(&host, &opts) {
+            files.refresh(Some(eff.file_policy(&host.home, &workdir)));
+        }
+    }
+
     /// Consumo do Docker da pasta, quando ele está rodando.
     pub fn stats(&self, workdir: &Path) -> Option<DockerStats> {
         let slot = self.slot(&canon(workdir));
@@ -256,6 +276,10 @@ impl Engines {
             .unwrap_or_default();
         Some(DockerStats {
             ebpf_off: e.ebpf_off.clone(),
+            files_poll: e
+                .helper
+                .as_ref()
+                .is_some_and(|h| h.files.poll.load(Ordering::SeqCst)),
             memory: c.memory,
             memory_max: c.memory_max,
             processes: c.processes,
@@ -501,7 +525,7 @@ fn start(
                 .to_string(),
             ),
         ),
-        Some(cg) => match confine(cg, &marks, child.id()) {
+        Some(cg) => match confine(cg, &marks, child.id(), workdir, &tag, policy.clone()) {
             Ok(link) => (Some(link), None),
             Err(Confine::Off(why)) => {
                 eprintln!(
@@ -558,6 +582,9 @@ fn confine(
     cg: &Path,
     marks: &sandmux_policy::DockerMarks,
     pid: u32,
+    workdir: &Path,
+    tag: &str,
+    policy: sandmux_spec::files::FilePolicy,
 ) -> Result<HelperLink, Confine> {
     use crate::helper::{Client, MarkKind, socket_path};
     match sandmux_ebpf::lsm_active() {
@@ -601,12 +628,13 @@ fn confine(
             .into()
         })));
     }
-    c.confine(cg).map_err(|e| {
-        Confine::Off(trf!(
-            "o auxiliar recusou o confinamento: {e}",
-            "the helper refused the confinement: {e}"
-        ))
-    })?;
+    c.confine(cg, crate::helper::kernel_dev(workdir))
+        .map_err(|e| {
+            Confine::Off(trf!(
+                "o auxiliar recusou o confinamento: {e}",
+                "the helper refused the confinement: {e}"
+            ))
+        })?;
     for (kind, paths) in [
         (MarkKind::Deny, &marks.deny),
         (MarkKind::Protect, &marks.protect),
@@ -614,33 +642,36 @@ fn confine(
     ] {
         c.mark(kind, paths).map_err(Confine::Fatal)?;
     }
-    let stopping = Arc::new(AtomicBool::new(false));
-    let watch = c
-        .watch_handle()
-        .map_err(|e| Confine::Fatal(e.to_string()))?;
     let pidfd = pidfd_open(pid).map_err(|e| Confine::Fatal(format!("pidfd_open: {e}")))?;
-    let flag = stopping.clone();
+    let files = Arc::new(super::dockerfiles::Files::new(
+        workdir,
+        tag.to_string(),
+        c,
+        policy,
+        &marks,
+    ));
+    let f = files.clone();
     std::thread::Builder::new()
-        .name("helper-watch".into())
+        .name("docker-eventos".into())
         .spawn(move || {
-            crate::helper::wait_closed(&watch);
-            if flag.load(Ordering::SeqCst) {
-                return;
-            }
-            eprintln!(
-                "{}",
-                tr!(
-                    "sandmuxd: a conexão com o auxiliar root caiu; o Docker privado da pasta para",
-                    "sandmuxd: the connection to the root helper dropped; the folder's private Docker stops"
-                )
-            );
-            pidfd_kill(&pidfd, libc::SIGTERM);
+            f.events_loop(|| {
+                eprintln!(
+                    "{}",
+                    tr!(
+                        "sandmuxd: a conexão com o auxiliar root caiu; o Docker privado da pasta para",
+                        "sandmuxd: the connection to the root helper dropped; the folder's private Docker stops"
+                    )
+                );
+                pidfd_kill(&pidfd, libc::SIGTERM);
+            });
         })
         .map_err(|e| Confine::Fatal(e.to_string()))?;
-    Ok(HelperLink {
-        _client: c,
-        stopping,
-    })
+    let f = files.clone();
+    std::thread::Builder::new()
+        .name("docker-pasta".into())
+        .spawn(move || f.watch_loop())
+        .map_err(|e| Confine::Fatal(e.to_string()))?;
+    Ok(HelperLink { files })
 }
 
 fn pidfd_open(pid: u32) -> std::io::Result<std::os::fd::OwnedFd> {
@@ -713,7 +744,7 @@ pub fn stop_empty_slices() {
 
 fn stop_engine(mut e: Engine) {
     if let Some(h) = &e.helper {
-        h.stopping.store(true, Ordering::SeqCst);
+        h.files.stopping.store(true, Ordering::SeqCst);
     }
     let pid = e.child.id() as i32;
     // SAFETY: sinal para o processo que este daemon criou.

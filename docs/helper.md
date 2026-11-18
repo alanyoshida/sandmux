@@ -26,6 +26,11 @@ A decisão é pelo arquivo (o inode), e não pelo caminho. Por isso, desmontar u
 - O auxiliar nunca abre um caminho. Os arquivos chegam como descritores abertos pelo próprio usuário, que prova assim que alcança o arquivo.
 - **Limites por usuário:** 16 confinamentos ativos, cada um com até 16384 marcas. Um pedido acima disso é recusado, sem afetar os outros.
 
+## Ao vivo e eventos
+
+- **Desmarcar:** o daemon também pede `unmark`, quando a política de arquivos da pasta muda e um caminho deixa de ser negado. O auxiliar tira a marca e solta o descritor do arquivo.
+- **Eventos:** os programas mandam um evento por uma fila do kernel quando negam uma operação e quando um contêiner cria um arquivo no sistema de arquivos da pasta. O auxiliar lê a fila e manda os eventos ao daemon pela mesma conexão do confinamento. O evento tem o tipo, o gancho, o inode e o nome do arquivo criado, nunca o conteúdo de um arquivo. Com a fila cheia, os eventos a mais são descartados e contados, e os contêineres não esperam.
+
 ## Quanto tempo as regras duram
 
 As regras e as marcas valem enquanto a conexão do daemon com o auxiliar estiver aberta. Elas somem quando:

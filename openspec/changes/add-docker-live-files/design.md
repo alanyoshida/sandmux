@@ -78,7 +78,7 @@ Cada confinamento ganha um mapa `BPF_MAP_TYPE_RINGBUF` de 256 KiB.
 O auxiliar lê a fila e manda cada lote ao daemon pela conexão do confinamento, como uma mensagem `{"ev": [...], "dropped": n}`.
 
 - **No auxiliar:** a leitura da fila faz `mmap` da página do consumidor (com escrita), da página do produtor e dos dados, e espera com `epoll` no descritor do mapa. O envio pelo socket fica atrás de um `Mutex`, porque a thread da fila e as respostas dos pedidos usam o mesmo socket.
-- **No cliente:** passa a ter uma thread de leitura. Ela manda as respostas para quem fez o pedido e os eventos para um canal. A thread que vigiava o fim da conexão (change 70) vira essa thread.
+- **No cliente:** passa a ter uma thread de leitura. Ela manda as respostas para quem fez o pedido e os eventos para um canal. A thread que vigiava o fim da conexão (change 70) vira essa thread. O `Drop` do cliente faz `shutdown` no socket, porque a thread de leitura segura uma cópia dele (achado na implementação: sem isso, soltar o cliente não fechava a conexão, e as regras ficavam).
 
 O daemon traduz cada evento num caminho do host:
 

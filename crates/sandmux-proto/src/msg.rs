@@ -342,6 +342,10 @@ pub struct DockerStats {
     /// (protocolo 39).
     #[serde(default)]
     pub ebpf_off: Option<String>,
+    /// Os arquivos novos são vistos por varredura a cada 10 s, sem vigias
+    /// de inotify (protocolo 40).
+    #[serde(default)]
+    pub files_poll: bool,
 }
 
 /// Uma porta publicada no `127.0.0.1` do host: a do sandbox (ou do
@@ -1015,6 +1019,7 @@ mod tests {
             fork_refusals: 2,
             docker: Some(Box::new(DockerStats {
                 ebpf_off: None,
+                files_poll: false,
                 memory: 1,
                 memory_max: None,
                 processes: 2,

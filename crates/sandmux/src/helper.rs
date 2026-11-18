@@ -201,14 +201,27 @@ pub fn peer_uid(sock: &impl AsRawFd) -> io::Result<u32> {
 /// Um confinamento carregado, do ponto de vista do servidor.
 pub trait Confined: Send {
     fn mark(&mut self, fd: OwnedFd, bits: u32) -> Result<(), String>;
+    fn unmark(&mut self, fd: OwnedFd, bits: u32) -> Result<(), String>;
+    /// Quantos arquivos estão marcados.
+    fn marks(&self) -> usize;
     fn attach(&self) -> &'static str;
+    /// A fonte dos eventos do confinamento, para a thread que os manda.
+    fn events(&self) -> Option<Box<dyn Events>>;
+}
+
+/// Eventos de um confinamento: os que chegaram em até `timeout_ms`, como
+/// JSON, e quantos foram descartados com a fila cheia.
+pub trait Events: Send {
+    fn poll(&mut self, timeout_ms: i32) -> (Vec<Value>, u64);
 }
 
 /// O que carrega os programas. A versão real usa `sandmux-ebpf`; os testes,
 /// uma falsa.
 pub trait Backend: Send + Sync {
     fn lsm(&self) -> Result<bool, String>;
-    fn confine(&self, cgroup: &OwnedFd) -> Result<Box<dyn Confined>, String>;
+    /// Liga o confinamento no cgroup. `dev` é o `s_dev` do superbloco da
+    /// pasta de trabalho (0 quando não se sabe), que filtra as criações.
+    fn confine(&self, cgroup: &OwnedFd, dev: u32) -> Result<Box<dyn Confined>, String>;
     /// Confere que o descritor é um cgroup v2 de `uid` (o root pode
     /// qualquer um).
     fn check_cgroup(&self, cgroup: &OwnedFd, uid: u32) -> Result<(), String> {
@@ -258,7 +271,6 @@ pub struct Server {
 struct Conn {
     uid: u32,
     confined: Option<Box<dyn Confined>>,
-    marks: usize,
 }
 
 fn err(msg: impl Into<String>) -> Value {
@@ -312,7 +324,8 @@ impl Server {
                     }
                     *n += 1;
                 }
-                match self.backend.confine(&cg) {
+                let dev = v.get("dev").and_then(Value::as_u64).unwrap_or(0) as u32;
+                match self.backend.confine(&cg, dev) {
                     Ok(x) => {
                         let attach = x.attach();
                         eprintln!(
@@ -333,7 +346,7 @@ impl Server {
                     }
                 }
             }
-            Some("mark") => {
+            Some(op @ ("mark" | "unmark")) => {
                 let Some(kind) = v
                     .get("kind")
                     .and_then(Value::as_str)
@@ -342,21 +355,28 @@ impl Server {
                     return err(tr!("marca desconhecida", "unknown mark"));
                 };
                 let Some(x) = c.confined.as_mut() else {
-                    return err(tr!("mark antes de confine", "mark before confine"));
+                    return err(tr!(
+                        "mark ou unmark antes de confine",
+                        "mark or unmark before confine"
+                    ));
                 };
-                if c.marks + fds.len() > MAX_MARKS {
+                if op == "mark" && x.marks() + fds.len() > MAX_MARKS {
                     return err(trf!(
                         "limite de {MAX_MARKS} marcas por confinamento",
                         "limit of {MAX_MARKS} marks per confinement"
                     ));
                 }
                 for fd in fds {
-                    if let Err(e) = x.mark(fd, kind.bits()) {
+                    let r = if op == "mark" {
+                        x.mark(fd, kind.bits())
+                    } else {
+                        x.unmark(fd, kind.bits())
+                    };
+                    if let Err(e) = r {
                         return err(e);
                     }
-                    c.marks += 1;
                 }
-                json!({"ok": true, "marks": c.marks})
+                json!({"ok": true, "marks": x.marks()})
             }
             _ => err(tr!("pedido desconhecido", "unknown request")),
         }
@@ -369,19 +389,29 @@ impl Server {
         }
     }
 
-    /// Atende uma conexão até ela fechar; depois desfaz o confinamento.
+    /// Atende uma conexão até ela fechar; depois desfaz o confinamento. Os
+    /// eventos do confinamento vão pela mesma conexão, de outra thread.
     pub fn serve(self: &Arc<Server>, sock: OwnedFd) {
         let Ok(uid) = peer_uid(&sock) else { return };
+        let sock = Arc::new(sock);
+        let send_lock = Arc::new(Mutex::new(()));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut c = Conn {
             uid,
             confined: None,
-            marks: 0,
         };
         let mut bad = 0;
         loop {
-            let reply = match recv(&sock) {
+            let reply = match recv(&*sock) {
                 Ok(None) => break,
-                Ok(Some((msg, fds))) => self.handle(&mut c, &msg, fds),
+                Ok(Some((msg, fds))) => {
+                    let had = c.confined.is_some();
+                    let r = self.handle(&mut c, &msg, fds);
+                    if !had && let Some(src) = c.confined.as_ref().and_then(|x| x.events()) {
+                        forward_events(src, sock.clone(), send_lock.clone(), stop.clone());
+                    }
+                    r
+                }
                 Err(e) if e.kind() == io::ErrorKind::InvalidData => err(e.to_string()),
                 Err(_) => break,
             };
@@ -391,14 +421,61 @@ impl Server {
                     break;
                 }
             }
-            if send(&sock, reply.to_string().as_bytes(), &[]).is_err() {
+            let _g = send_lock.lock().unwrap_or_else(|e| e.into_inner());
+            if send(&*sock, reply.to_string().as_bytes(), &[]).is_err() {
                 break;
             }
         }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
         if c.confined.take().is_some() {
             self.release(uid);
         }
     }
+}
+
+/// Uma thread que lê os eventos do confinamento e os manda em lotes, até a
+/// conexão terminar.
+fn forward_events(
+    mut src: Box<dyn Events>,
+    sock: Arc<OwnedFd>,
+    send_lock: Arc<Mutex<()>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) {
+    let _ = std::thread::Builder::new()
+        .name("helper-eventos".into())
+        .spawn(move || {
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                let (evs, dropped) = src.poll(300);
+                if evs.is_empty() && dropped == 0 {
+                    continue;
+                }
+                // Lotes que cabem numa mensagem.
+                let mut batch = Vec::new();
+                let mut size = 0;
+                let flush = |batch: &mut Vec<Value>, dropped: u64| -> bool {
+                    let msg = json!({"ev": batch, "dropped": dropped}).to_string();
+                    batch.clear();
+                    let _g = send_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    send(&*sock, msg.as_bytes(), &[]).is_ok()
+                };
+                let mut d = dropped;
+                for e in evs {
+                    let n = e.to_string().len() + 1;
+                    if size + n > MAX_MSG - 64 && !batch.is_empty() {
+                        if !flush(&mut batch, d) {
+                            return;
+                        }
+                        d = 0;
+                        size = 0;
+                    }
+                    size += n;
+                    batch.push(e);
+                }
+                if (!batch.is_empty() || d > 0) && !flush(&mut batch, d) {
+                    return;
+                }
+            }
+        });
 }
 
 /// A carga real, pelo `sandmux-ebpf`.
@@ -426,11 +503,58 @@ impl Confined for Real {
     fn mark(&mut self, fd: OwnedFd, bits: u32) -> Result<(), String> {
         self.0.mark(fd, bits).map_err(|e| e.to_string())
     }
+    fn unmark(&mut self, fd: OwnedFd, bits: u32) -> Result<(), String> {
+        self.0.unmark(&fd, bits).map_err(|e| e.to_string())
+    }
+    fn marks(&self) -> usize {
+        self.0.marks()
+    }
+    fn events(&self) -> Option<Box<dyn Events>> {
+        let ring = self.0.ring().ok()?;
+        let drops = self.0.drops().ok()?;
+        let reader = sandmux_ebpf::ring::Reader::new(ring, sandmux_ebpf::ring::RING_SIZE).ok()?;
+        Some(Box::new(RealEvents { reader, drops }))
+    }
     fn attach(&self) -> &'static str {
         match self.0.attach {
             sandmux_ebpf::prog::Attach::Cgroup => "cgroup",
             sandmux_ebpf::prog::Attach::Global { .. } => "global",
         }
+    }
+}
+
+struct RealEvents {
+    reader: sandmux_ebpf::ring::Reader,
+    drops: OwnedFd,
+}
+
+/// Um evento do kernel como JSON, com o nome do gancho.
+pub fn event_json(e: &sandmux_ebpf::ring::Event) -> Value {
+    let hook = sandmux_ebpf::prog::HOOKS
+        .get(e.hook as usize)
+        .map(|h| h.name())
+        .unwrap_or("?");
+    json!({
+        "kind": if e.kind == sandmux_ebpf::ring::EV_CREATE { "create" } else { "deny" },
+        "hook": hook,
+        "bits": e.bits,
+        "write": e.write,
+        "ino": e.ino,
+        "dev": e.dev,
+        "name": e.name,
+    })
+}
+
+impl Events for RealEvents {
+    fn poll(&mut self, timeout_ms: i32) -> (Vec<Value>, u64) {
+        let evs = self
+            .reader
+            .poll(timeout_ms)
+            .iter()
+            .filter_map(|r| sandmux_ebpf::ring::Event::decode(r))
+            .map(|e| event_json(&e))
+            .collect();
+        (evs, sandmux_ebpf::prog::take_drops(&self.drops))
     }
 }
 
@@ -469,7 +593,7 @@ impl Backend for Ebpf {
         sandmux_ebpf::lsm_active()
     }
 
-    fn confine(&self, cg: &OwnedFd) -> Result<Box<dyn Confined>, String> {
+    fn confine(&self, cg: &OwnedFd, dev: u32) -> Result<Box<dyn Confined>, String> {
         if !sandmux_ebpf::lsm_active()? {
             return Err(tr!(
                 "o BPF LSM não está ativo no kernel",
@@ -487,11 +611,11 @@ impl Backend for Ebpf {
             .as_ref()
             .map_err(Clone::clone)?;
         use sandmux_ebpf::prog::{Attach, Confinement};
-        match Confinement::load(l, cg.as_raw_fd(), Attach::Cgroup) {
+        match Confinement::load(l, cg.as_raw_fd(), Attach::Cgroup, dev) {
             Ok(c) => Ok(Box::new(Real(c))),
             Err(first) => {
                 let (level, cgroup_id) = cgroup_level_id(cg)?;
-                Confinement::load(l, -1, Attach::Global { level, cgroup_id })
+                Confinement::load(l, -1, Attach::Global { level, cgroup_id }, dev)
                     .map(|c| Box::new(Real(c)) as Box<dyn Confined>)
                     .map_err(|e| {
                         trf!(
@@ -506,9 +630,14 @@ impl Backend for Ebpf {
 
 // ---------------------------------------------------------------- cliente
 
-/// A conexão do daemon com o auxiliar.
+/// A conexão do daemon com o auxiliar. Uma thread lê tudo o que chega:
+/// as respostas vão para quem fez o pedido, e os eventos para o canal de
+/// [`Client::take_events`]. O canal fecha quando a conexão termina.
 pub struct Client {
-    sock: OwnedFd,
+    sock: Arc<OwnedFd>,
+    call_lock: Mutex<()>,
+    replies: Mutex<std::sync::mpsc::Receiver<Value>>,
+    events: Mutex<Option<std::sync::mpsc::Receiver<Value>>>,
 }
 
 /// Resposta do `status`.
@@ -604,16 +733,47 @@ impl Client {
         {
             return Err(io::Error::last_os_error());
         }
-        Ok(Client { sock: s })
+        let sock = Arc::new(s);
+        let (rep_tx, rep_rx) = std::sync::mpsc::channel();
+        let (ev_tx, ev_rx) = std::sync::mpsc::channel();
+        let r = sock.clone();
+        std::thread::Builder::new()
+            .name("helper-leitura".into())
+            .spawn(move || {
+                while let Ok(Some((msg, _))) = recv(&*r) {
+                    let Ok(v) = serde_json::from_slice::<Value>(&msg) else {
+                        continue;
+                    };
+                    if v.get("ev").is_some() {
+                        let _ = ev_tx.send(v);
+                    } else if rep_tx.send(v).is_err() {
+                        break;
+                    }
+                }
+            })?;
+        Ok(Client {
+            sock,
+            call_lock: Mutex::new(()),
+            replies: Mutex::new(rep_rx),
+            events: Mutex::new(Some(ev_rx)),
+        })
     }
 
     fn call(&self, req: Value, fds: &[RawFd]) -> Result<Value, String> {
-        send(&self.sock, req.to_string().as_bytes(), fds).map_err(|e| e.to_string())?;
-        let (msg, _) = recv(&self.sock).map_err(|e| e.to_string())?.ok_or(tr!(
-            "o auxiliar fechou a conexão",
-            "the helper closed the connection"
-        ))?;
-        let v: Value = serde_json::from_slice(&msg).map_err(|e| e.to_string())?;
+        let _g = self.call_lock.lock().unwrap_or_else(|e| e.into_inner());
+        send(&*self.sock, req.to_string().as_bytes(), fds).map_err(|e| e.to_string())?;
+        let v = self
+            .replies
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .map_err(|_| {
+                tr!(
+                    "o auxiliar fechou a conexão ou não respondeu",
+                    "the helper closed the connection or did not answer"
+                )
+                .to_string()
+            })?;
         if v["ok"] == true {
             Ok(v)
         } else {
@@ -622,6 +782,12 @@ impl Client {
                 .unwrap_or(tr!("erro sem texto", "error without text"))
                 .to_string())
         }
+    }
+
+    /// O canal dos eventos (só uma vez). Ele fecha quando a conexão com o
+    /// auxiliar termina.
+    pub fn take_events(&self) -> Option<std::sync::mpsc::Receiver<Value>> {
+        self.events.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
 
     pub fn status(&self) -> Result<Status, String> {
@@ -635,15 +801,24 @@ impl Client {
 
     /// Liga o confinamento no cgroup do diretório `dir`. Devolve o anexo
     /// usado (`cgroup` ou `global`).
-    pub fn confine(&self, dir: &Path) -> Result<String, String> {
+    pub fn confine(&self, dir: &Path, dev: u32) -> Result<String, String> {
         let f = std::fs::File::open(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let v = self.call(json!({"op": "confine"}), &[f.as_raw_fd()])?;
+        let v = self.call(json!({"op": "confine", "dev": dev}), &[f.as_raw_fd()])?;
         Ok(v["attach"].as_str().unwrap_or("").to_string())
     }
 
     /// Marca os caminhos, abertos aqui com `O_PATH`, em lotes. Os que não
     /// existem são pulados. Devolve quantos foram marcados.
     pub fn mark(&self, kind: MarkKind, paths: &[PathBuf]) -> Result<usize, String> {
+        self.send_paths("mark", kind, paths)
+    }
+
+    /// Tira as marcas `kind` dos caminhos. Os que não existem são pulados.
+    pub fn unmark(&self, kind: MarkKind, paths: &[PathBuf]) -> Result<usize, String> {
+        self.send_paths("unmark", kind, paths)
+    }
+
+    fn send_paths(&self, op: &str, kind: MarkKind, paths: &[PathBuf]) -> Result<usize, String> {
         use std::os::unix::fs::OpenOptionsExt;
         let mut n = 0;
         for chunk in paths.chunks(MAX_FDS) {
@@ -663,26 +838,55 @@ impl Client {
                 continue;
             }
             let fds: Vec<RawFd> = files.iter().map(|f| f.as_raw_fd()).collect();
-            self.call(json!({"op": "mark", "kind": kind.as_str()}), &fds)?;
+            self.call(json!({"op": op, "kind": kind.as_str()}), &fds)?;
             n += files.len();
         }
         Ok(n)
     }
+}
 
-    /// Uma cópia do socket, para esperar o fim da conexão noutra thread.
-    pub fn watch_handle(&self) -> io::Result<OwnedFd> {
-        self.sock.try_clone()
+impl Drop for Client {
+    fn drop(&mut self) {
+        // A thread de leitura segura uma cópia do socket: sem o shutdown, a
+        // conexão ficaria aberta, e as regras do confinamento junto.
+        // SAFETY: shutdown num descritor nosso.
+        unsafe { libc::shutdown(self.sock.as_raw_fd(), libc::SHUT_RDWR) };
     }
 }
 
-/// Bloqueia até o auxiliar fechar a conexão (ou ela dar erro).
-pub fn wait_closed(sock: &OwnedFd) {
-    loop {
-        match recv(sock) {
-            Ok(None) | Err(_) => return,
-            Ok(Some(_)) => {}
+/// O `s_dev` do superbloco de `path`, no formato do kernel (`major << 20 |
+/// minor`), pelo `/proc/self/mountinfo`: o campo `major:minor` da montagem
+/// mais longa que contém o caminho. No btrfs, o `stat` dá o dispositivo do
+/// subvolume, e não o do superbloco que o kernel vê. 0 quando não acha.
+pub fn kernel_dev(path: &Path) -> u32 {
+    let Ok(s) = std::fs::read_to_string("/proc/self/mountinfo") else {
+        return 0;
+    };
+    kernel_dev_in(&s, path)
+}
+
+pub fn kernel_dev_in(mountinfo: &str, path: &Path) -> u32 {
+    let mut best: Option<(usize, u32)> = None;
+    for l in mountinfo.lines() {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        let (Some(dev), Some(mp)) = (f.get(2), f.get(4)) else {
+            continue;
+        };
+        let mp = mp.replace("\\040", " ");
+        if !path.starts_with(&mp) {
+            continue;
+        }
+        let Some((ma, mi)) = dev.split_once(':') else {
+            continue;
+        };
+        let (Ok(ma), Ok(mi)) = (ma.parse::<u32>(), mi.parse::<u32>()) else {
+            continue;
+        };
+        if best.is_none_or(|(n, _)| mp.len() >= n) {
+            best = Some((mp.len(), (ma << 20) | mi));
         }
     }
+    best.map(|b| b.1).unwrap_or(0)
 }
 
 /// O confinamento do Docker por eBPF está disponível nesta máquina? `Ok`
@@ -753,15 +957,41 @@ mod tests {
             self.marks.lock().unwrap().push(bits);
             Ok(())
         }
+        fn unmark(&mut self, _fd: OwnedFd, bits: u32) -> Result<(), String> {
+            let mut m = self.marks.lock().unwrap();
+            if let Some(i) = m.iter().position(|b| *b == bits) {
+                m.remove(i);
+            }
+            Ok(())
+        }
+        fn marks(&self) -> usize {
+            self.marks.lock().unwrap().len()
+        }
         fn attach(&self) -> &'static str {
             "cgroup"
+        }
+        fn events(&self) -> Option<Box<dyn Events>> {
+            Some(Box::new(FakeEvents(0)))
+        }
+    }
+    /// Um bloqueio na primeira volta, com 2 descartados; depois, nada.
+    struct FakeEvents(u32);
+    impl Events for FakeEvents {
+        fn poll(&mut self, _timeout_ms: i32) -> (Vec<Value>, u64) {
+            self.0 += 1;
+            if self.0 == 1 {
+                (vec![json!({"kind": "deny", "ino": 42})], 2)
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                (vec![], 0)
+            }
         }
     }
     impl Backend for Fake {
         fn lsm(&self) -> Result<bool, String> {
             Ok(true)
         }
-        fn confine(&self, _cg: &OwnedFd) -> Result<Box<dyn Confined>, String> {
+        fn confine(&self, _cg: &OwnedFd, _dev: u32) -> Result<Box<dyn Confined>, String> {
             self.loaded.fetch_add(1, Ordering::SeqCst);
             Ok(Box::new(FakeConfined {
                 loaded: self.loaded.clone(),
@@ -820,8 +1050,13 @@ mod tests {
         let e = c.call(json!({"op": "root"}), &[]).unwrap_err();
         assert!(e.contains("desconhecido"), "{e}");
         send(&c.sock, b"lixo", &[]).unwrap();
-        let (m, _) = recv(&c.sock).unwrap().unwrap();
-        assert!(String::from_utf8_lossy(&m).contains("JSON"));
+        let m = c
+            .replies
+            .lock()
+            .unwrap()
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(m["error"].as_str().unwrap().contains("JSON"));
         // A conexão continua de pé.
         assert!(c.status().is_ok());
     }
@@ -836,7 +1071,7 @@ mod tests {
             .mark(MarkKind::Deny, std::slice::from_ref(&f))
             .unwrap_err();
         assert!(e.contains("antes de confine"), "{e}");
-        let e = c.confine(d.path()).unwrap_err();
+        let e = c.confine(d.path(), 0).unwrap_err();
         assert!(e.contains("outro uid"), "{e}");
         assert_eq!(loaded.load(Ordering::SeqCst), 0);
     }
@@ -845,8 +1080,8 @@ mod tests {
     fn confine_marca_e_solta_no_fim() {
         let (d, p, loaded, _) = start(true);
         let c = Client::connect(&p).unwrap();
-        assert_eq!(c.confine(d.path()).unwrap(), "cgroup");
-        assert!(c.confine(d.path()).unwrap_err().contains("já tem"));
+        assert_eq!(c.confine(d.path(), 0).unwrap(), "cgroup");
+        assert!(c.confine(d.path(), 0).unwrap_err().contains("já tem"));
         let mut paths = Vec::new();
         for i in 0..250 {
             let f = d.path().join(format!("f{i}"));
@@ -866,15 +1101,15 @@ mod tests {
         let mut keep = Vec::new();
         for _ in 0..MAX_CONFINE_PER_UID {
             let c = Client::connect(&p).unwrap();
-            c.confine(d.path()).unwrap();
+            c.confine(d.path(), 0).unwrap();
             keep.push(c);
         }
         let c = Client::connect(&p).unwrap();
-        let e = c.confine(d.path()).unwrap_err();
+        let e = c.confine(d.path(), 0).unwrap_err();
         assert!(e.contains("limite"), "{e}");
         // Fechar um libera a vaga.
         drop(keep.pop());
-        wait_for(|| Client::connect(&p).unwrap().confine(d.path()).is_ok());
+        wait_for(|| Client::connect(&p).unwrap().confine(d.path(), 0).is_ok());
     }
 
     #[test]
@@ -916,6 +1151,57 @@ mod tests {
         let (_d, p, _, _) = start(true);
         let ok = availability_with(Ok(true), &p).unwrap();
         assert!(ok.contains(env!("CARGO_PKG_VERSION")), "{ok}");
+    }
+
+    #[test]
+    fn desmarcar_e_eventos_no_meio_dos_pedidos() {
+        let (d, p, _, _) = start(true);
+        let c = Client::connect(&p).unwrap();
+        let ev = c.take_events().unwrap();
+        assert!(c.take_events().is_none());
+        c.confine(d.path(), 0).unwrap();
+        let f = d.path().join("x");
+        std::fs::write(&f, "").unwrap();
+        assert_eq!(c.mark(MarkKind::Deny, std::slice::from_ref(&f)).unwrap(), 1);
+        // O evento chega pelo canal, sem atrapalhar as respostas.
+        for _ in 0..5 {
+            assert!(c.status().is_ok());
+        }
+        let v = ev.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(v["dropped"], 2);
+        assert_eq!(v["ev"][0]["ino"], 42);
+        let r = c
+            .call(
+                json!({"op": "unmark", "kind": "deny"}),
+                &[std::fs::File::open(&f).unwrap().as_raw_fd()],
+            )
+            .unwrap();
+        assert_eq!(r["marks"], 0);
+        // Desmarcar o que não está marcado não é erro.
+        assert_eq!(
+            c.unmark(MarkKind::Deny, std::slice::from_ref(&f)).unwrap(),
+            1
+        );
+        // Fechar a conexão fecha o canal dos eventos.
+        drop(c);
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match ev.recv_timeout(std::time::Duration::from_millis(100)) {
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                _ => assert!(std::time::Instant::now() < fim, "o canal não fechou"),
+            }
+        }
+    }
+
+    #[test]
+    fn dispositivo_do_kernel_pelo_mountinfo() {
+        let mi = "22 1 259:2 / / rw - ext4 /dev/nvme0n1p2 rw\n\
+                  40 22 0:35 /@home /home rw - btrfs /dev/sda1 rw\n\
+                  41 40 0:36 / /home/u/montado\\040x rw - tmpfs t rw\n";
+        assert_eq!(kernel_dev_in(mi, Path::new("/etc/x")), (259 << 20) | 2);
+        assert_eq!(kernel_dev_in(mi, Path::new("/home/u/proj")), 35);
+        assert_eq!(kernel_dev_in(mi, Path::new("/home/u/montado x/a")), 36);
+        assert_eq!(kernel_dev_in("", Path::new("/x")), 0);
     }
 
     #[test]

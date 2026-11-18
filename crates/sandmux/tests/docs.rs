@@ -816,6 +816,17 @@ fn auxiliar_root_documentado() {
     ] {
         assert!(docker.contains(c), "docs/docker.md não cita {c}");
     }
+    for c in [
+        "### Ao vivo",
+        "fs.inotify.max_user_watches",
+        "docker-<id>",
+        "200 ms",
+    ] {
+        assert!(docker.contains(c), "docs/docker.md não cita {c}");
+    }
+    let files = std::fs::read_to_string(format!("{root}docs/files.md")).unwrap();
+    assert!(files.contains("docker-<id>") && files.contains("### Contêineres do Docker privado"));
+    assert!(doc.contains("`unmark`"));
     let unit =
         std::fs::read_to_string(format!("{root}packaging/systemd/sandmux-helper.socket")).unwrap();
     assert!(unit.contains(&format!(

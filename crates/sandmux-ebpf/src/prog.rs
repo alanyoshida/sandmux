@@ -91,6 +91,16 @@ pub struct Layout {
     pub fn_inode_storage_get: i32,
     pub fn_probe_read_kernel: i32,
     pub fn_ancestor_cgroup_id: i32,
+    pub fn_ringbuf_output: i32,
+    pub fn_probe_read_kernel_str: i32,
+    pub fn_map_lookup_elem: i32,
+    pub map_ringbuf: u32,
+    pub map_array: u32,
+    inode_ino: i16,
+    inode_ino_size: Size,
+    inode_sb: i16,
+    sb_dev: i16,
+    sb_dev_size: Size,
     file_inode: i16,
     file_mode: i16,
     file_mode_size: Size,
@@ -130,6 +140,16 @@ impl Layout {
             fn_inode_storage_get: uapi(b, "BPF_FUNC_inode_storage_get")? as i32,
             fn_probe_read_kernel: uapi(b, "BPF_FUNC_probe_read_kernel")? as i32,
             fn_ancestor_cgroup_id: uapi(b, "BPF_FUNC_get_current_ancestor_cgroup_id")? as i32,
+            fn_ringbuf_output: uapi(b, "BPF_FUNC_ringbuf_output")? as i32,
+            fn_probe_read_kernel_str: uapi(b, "BPF_FUNC_probe_read_kernel_str")? as i32,
+            fn_map_lookup_elem: uapi(b, "BPF_FUNC_map_lookup_elem")? as i32,
+            map_ringbuf: uapi(b, "BPF_MAP_TYPE_RINGBUF")? as u32,
+            map_array: uapi(b, "BPF_MAP_TYPE_ARRAY")? as u32,
+            inode_ino: off(b, "inode", "i_ino")?,
+            inode_ino_size: Size::of(b.field_size("inode", "i_ino")?)?,
+            inode_sb: off(b, "inode", "i_sb")?,
+            sb_dev: off(b, "super_block", "s_dev")?,
+            sb_dev_size: Size::of(b.field_size("super_block", "s_dev")?)?,
             file_inode: off(b, "file", "f_inode")?,
             file_mode: off(b, "file", "f_mode")?,
             file_mode_size: Size::of(b.field_size("file", "f_mode")?)?,
@@ -178,17 +198,33 @@ pub enum Attach {
     Global { level: i32, cgroup_id: u64 },
 }
 
+/// Os mapas dos eventos: a fila e o contador de descartados.
+#[derive(Clone, Copy, Debug)]
+pub struct EventMaps {
+    pub ring_fd: i32,
+    pub drops_fd: i32,
+    /// O `s_dev` do superbloco da pasta de trabalho, no formato do kernel; 0
+    /// manda as criações de qualquer sistema de arquivos.
+    pub workdir_dev: u32,
+}
+
+/// Onde o evento é montado na pilha, e a chave do contador.
+const EV: i16 = -320;
+const KEY: i16 = -328;
+
 struct Gen<'a> {
     a: Asm,
     l: &'a Layout,
     map_fd: i32,
     deny: Label,
+    ev: Option<EventMaps>,
+    hook: i32,
 }
 
 impl Gen<'_> {
     /// Nega se o inode em `inode` (ponteiro confiável, talvez nulo) tem algum
     /// bit de `mask`.
-    fn check(&mut self, inode: Reg, mask: u32) {
+    fn check(&mut self, inode: Reg, mask: u32, write: bool) {
         let next = self.a.label();
         self.a.jmp_imm(Cond::Eq, inode, 0, next);
         self.a.mov(R2, inode);
@@ -199,8 +235,82 @@ impl Gen<'_> {
         self.a.jmp_imm(Cond::Eq, R0, 0, next);
         self.a.ldx(Size::W, R1, R0, 0);
         self.a.alu_imm(Alu::And, R1, mask as i32);
-        self.a.jmp_imm(Cond::Ne, R1, 0, self.deny);
+        self.a.jmp_imm(Cond::Eq, R1, 0, next);
+        self.deny_event(inode, write);
+        self.a.ja(self.deny);
         self.a.bind(next);
+    }
+
+    /// Manda o evento de bloqueio: os bits em R1, o inode marcado em `inode`
+    /// (confiável).
+    fn deny_event(&mut self, inode: Reg, write: bool) {
+        if self.ev.is_none() {
+            return;
+        }
+        let a = &mut self.a;
+        a.st(Size::W, R10, EV, crate::ring::EV_DENY as i32);
+        a.st(Size::W, R10, EV + 4, self.hook);
+        a.stx(Size::W, R10, EV + 8, R1);
+        a.st(Size::W, R10, EV + 12, i32::from(write));
+        a.ldx(self.l.inode_ino_size, R2, inode, self.l.inode_ino);
+        a.stx(Size::DW, R10, EV + 16, R2);
+        a.st(Size::W, R10, EV + 24, 0);
+        a.st(Size::W, R10, EV + 28, 0);
+        self.output(crate::ring::EV_HEADER as i32);
+    }
+
+    /// `bpf_ringbuf_output` do evento montado em `EV`, com `size` bytes; na
+    /// falha (fila cheia), soma 1 ao contador.
+    fn output(&mut self, size: i32) {
+        let Some(ev) = self.ev else { return };
+        let done = self.a.label();
+        let a = &mut self.a;
+        a.ld_map_fd(R1, ev.ring_fd);
+        a.mov(R2, R10);
+        a.alu_imm(Alu::Add, R2, i32::from(EV));
+        a.mov_imm(R3, size);
+        a.mov_imm(R4, 0);
+        a.call(self.l.fn_ringbuf_output);
+        a.jmp_imm(Cond::Eq, R0, 0, done);
+        a.st(Size::W, R10, KEY, 0);
+        a.ld_map_fd(R1, ev.drops_fd);
+        a.mov(R2, R10);
+        a.alu_imm(Alu::Add, R2, i32::from(KEY));
+        a.call(self.l.fn_map_lookup_elem);
+        a.jmp_imm(Cond::Eq, R0, 0, done);
+        a.mov_imm(R1, 1);
+        a.atomic_add64(R0, 0, R1);
+        a.bind(done);
+    }
+
+    /// Manda o evento de criação: diretório em R8 (confiável), dentry nova em
+    /// R9. Só do sistema de arquivos da pasta de trabalho, quando ele é
+    /// conhecido.
+    fn create_event(&mut self, skip: Label) {
+        let Some(ev) = self.ev else { return };
+        let l = self.l;
+        let a = &mut self.a;
+        a.ldx(Size::DW, R1, R8, l.inode_sb);
+        a.jmp_imm(Cond::Eq, R1, 0, skip);
+        a.ldx(l.sb_dev_size, R7, R1, l.sb_dev);
+        if ev.workdir_dev != 0 {
+            a.ld_imm64(R1, u64::from(ev.workdir_dev));
+            a.jmp_reg(Cond::Ne, R7, R1, skip);
+        }
+        a.st(Size::W, R10, EV, crate::ring::EV_CREATE as i32);
+        a.st(Size::W, R10, EV + 4, self.hook);
+        a.st(Size::W, R10, EV + 8, 0);
+        a.st(Size::W, R10, EV + 12, 0);
+        a.ldx(l.inode_ino_size, R2, R8, l.inode_ino);
+        a.stx(Size::DW, R10, EV + 16, R2);
+        a.stx(Size::W, R10, EV + 24, R7);
+        a.mov(R1, R10);
+        a.alu_imm(Alu::Add, R1, i32::from(EV) + crate::ring::EV_HEADER as i32);
+        a.mov_imm(R2, crate::ring::EV_NAME as i32);
+        a.ldx(Size::DW, R3, R9, l.d_name_name);
+        a.call(l.fn_probe_read_kernel_str);
+        a.stx(Size::W, R10, EV + 28, R0);
+        self.output((crate::ring::EV_HEADER + crate::ring::EV_NAME) as i32);
     }
 
     /// Carrega o argumento `name` do gancho (posição `off` no contexto em R6)
@@ -252,19 +362,35 @@ impl Gen<'_> {
                 a.ld_imm64(R2, v);
                 a.jmp_reg(Cond::Ne, R1, R2, next);
             }
-            a.ja(self.deny);
-            a.bind(next);
+            self.a.mov_imm(R1, GITDIR as i32);
+            self.deny_event(R8, true);
+            self.a.ja(self.deny);
+            self.a.bind(next);
         }
         self.a.bind(done);
     }
 }
 
 /// Monta o programa de um gancho.
-pub fn build(l: &Layout, h: Hook, map_fd: i32, attach: Attach) -> Result<Vec<Insn>, Error> {
+pub fn build(
+    l: &Layout,
+    h: Hook,
+    map_fd: i32,
+    attach: Attach,
+    ev: Option<EventMaps>,
+) -> Result<Vec<Insn>, Error> {
     let mut a = Asm::new();
     let allow = a.label();
     let deny = a.label();
-    let mut g = Gen { a, l, map_fd, deny };
+    let hook = HOOKS.iter().position(|x| *x == h).unwrap_or(0) as i32;
+    let mut g = Gen {
+        a,
+        l,
+        map_fd,
+        deny,
+        ev,
+        hook,
+    };
     // R6 = contexto (vetor de argumentos de 64 bits).
     g.a.mov(R6, R1);
     if let Attach::Global { level, cgroup_id } = attach {
@@ -285,51 +411,54 @@ pub fn build(l: &Layout, h: Hook, map_fd: i32, attach: Attach) -> Result<Vec<Ins
             g.a.ldx(l.file_mode_size, R1, R8, l.file_mode);
             let write = g.a.label();
             g.a.jmp_imm(Cond::Set, R1, FMODE_WRITE, write);
-            g.check(R7, DENY);
+            g.check(R7, DENY, false);
             g.a.ja(allow);
             g.a.bind(write);
-            g.check(R7, DENY | PROTECT);
+            g.check(R7, DENY | PROTECT, true);
         }
         Hook::InodeCreate | Hook::InodeMkdir | Hook::InodeMknod | Hook::InodeSymlink => {
             g.arg(R8, l.arg(h, "dir")?);
-            g.check(R8, dir);
+            g.check(R8, dir, true);
             g.arg(R9, l.arg(h, "dentry")?);
             g.reserved_names();
+            if h == Hook::InodeCreate {
+                g.create_event(allow);
+            }
         }
         Hook::InodeLink => {
             g.arg(R1, l.arg(h, "old_dentry")?);
             g.d_inode(R7, R1);
-            g.check(R7, own);
+            g.check(R7, own, true);
             g.arg(R8, l.arg(h, "dir")?);
-            g.check(R8, dir);
+            g.check(R8, dir, true);
             g.arg(R9, l.arg(h, "new_dentry")?);
             g.reserved_names();
         }
         Hook::InodeRename => {
             g.arg(R1, l.arg(h, "old_dentry")?);
             g.d_inode(R7, R1);
-            g.check(R7, own);
+            g.check(R7, own, true);
             g.arg(R7, l.arg(h, "old_dir")?);
-            g.check(R7, dir);
+            g.check(R7, dir, true);
             g.arg(R1, l.arg(h, "new_dentry")?);
             g.d_inode(R7, R1);
-            g.check(R7, own);
+            g.check(R7, own, true);
             g.arg(R8, l.arg(h, "new_dir")?);
-            g.check(R8, dir);
+            g.check(R8, dir, true);
             g.arg(R9, l.arg(h, "new_dentry")?);
             g.reserved_names();
         }
         Hook::InodeUnlink | Hook::InodeRmdir => {
             g.arg(R7, l.arg(h, "dir")?);
-            g.check(R7, dir);
+            g.check(R7, dir, true);
             g.arg(R1, l.arg(h, "dentry")?);
             g.d_inode(R7, R1);
-            g.check(R7, own);
+            g.check(R7, own, true);
         }
         Hook::InodeSetattr => {
             g.arg(R1, l.arg(h, "dentry")?);
             g.d_inode(R7, R1);
-            g.check(R7, own);
+            g.check(R7, own, true);
         }
     }
     let (ok, no) = match attach {
@@ -353,17 +482,25 @@ pub const LICENSE: &str = "Dual MIT/GPL";
 /// marcados, mantidos abertos para a marca não se perder.
 pub struct Confinement {
     map: OwnedFd,
+    ring: OwnedFd,
+    drops: OwnedFd,
     _btf: OwnedFd,
     _progs: Vec<OwnedFd>,
     _links: Vec<OwnedFd>,
-    marked: Vec<OwnedFd>,
+    /// Dispositivo, inode e o descritor guardado de cada arquivo marcado.
+    marked: Vec<(u64, u64, OwnedFd)>,
     pub attach: Attach,
 }
 
 impl Confinement {
     /// Carrega os programas e os prende ao cgroup `cgroup`. Com
     /// `Attach::Global`, o descritor do cgroup não é usado.
-    pub fn load(l: &Layout, cgroup: RawFd, attach: Attach) -> Result<Confinement, Error> {
+    pub fn load(
+        l: &Layout,
+        cgroup: RawFd,
+        attach: Attach,
+        workdir_dev: u32,
+    ) -> Result<Confinement, Error> {
         let btf = sys::btf_load(&crate::btf::int_btf())?;
         let map = sys::map_create(&sys::MapSpec {
             map_type: l.map_inode_storage,
@@ -374,10 +511,33 @@ impl Confinement {
             name: "sandmux_marks",
             btf: Some((btf.as_raw_fd(), 1, 1)),
         })?;
+        let ring = sys::map_create(&sys::MapSpec {
+            map_type: l.map_ringbuf,
+            key_size: 0,
+            value_size: 0,
+            max_entries: crate::ring::RING_SIZE,
+            flags: 0,
+            name: "sandmux_events",
+            btf: None,
+        })?;
+        let drops = sys::map_create(&sys::MapSpec {
+            map_type: l.map_array,
+            key_size: 4,
+            value_size: 8,
+            max_entries: 1,
+            flags: 0,
+            name: "sandmux_drops",
+            btf: None,
+        })?;
+        let ev = EventMaps {
+            ring_fd: ring.as_raw_fd(),
+            drops_fd: drops.as_raw_fd(),
+            workdir_dev,
+        };
         let mut progs = Vec::new();
         let mut links = Vec::new();
         for h in HOOKS {
-            let insns = build(l, h, map.as_raw_fd(), attach)?;
+            let insns = build(l, h, map.as_raw_fd(), attach, Some(ev))?;
             let (exp, target) = match attach {
                 Attach::Cgroup => (l.attach_lsm_cgroup, cgroup),
                 Attach::Global { .. } => (l.attach_lsm_mac, 0),
@@ -397,6 +557,8 @@ impl Confinement {
         }
         Ok(Confinement {
             map,
+            ring,
+            drops,
             _btf: btf,
             _progs: progs,
             _links: links,
@@ -405,15 +567,43 @@ impl Confinement {
         })
     }
 
-    /// Marca o arquivo do descritor com `bits` (somados aos que ele já tem),
-    /// e guarda o descritor.
+    /// Marca o arquivo do descritor com `bits` (somados aos que ele já tem).
+    /// Guarda o descritor, ou só a marca quando o arquivo já tem um guardado.
     pub fn mark(&mut self, fd: OwnedFd, bits: u32) -> Result<(), Error> {
-        let key = fd.as_raw_fd().to_ne_bytes();
+        let id = file_id(&fd)?;
+        let held = self.marked.iter().position(|m| (m.0, m.1) == id);
+        let key = match held {
+            Some(i) => self.marked[i].2.as_raw_fd(),
+            None => fd.as_raw_fd(),
+        }
+        .to_ne_bytes();
         let mut cur = [0u8; 4];
         let had = sys::map_lookup(&self.map, &key, &mut cur)?;
         let v = if had { u32::from_ne_bytes(cur) } else { 0 } | bits;
         sys::map_update(&self.map, &key, &v.to_ne_bytes(), 0)?;
-        self.marked.push(fd);
+        if held.is_none() {
+            self.marked.push((id.0, id.1, fd));
+        }
+        Ok(())
+    }
+
+    /// Tira `bits` da marca do arquivo do descritor. Sem bit nenhum, apaga a
+    /// marca e fecha o descritor guardado. Um arquivo sem marca não é erro.
+    pub fn unmark(&mut self, fd: &impl AsRawFd, bits: u32) -> Result<(), Error> {
+        let id = file_id(fd)?;
+        let Some(i) = self.marked.iter().position(|m| (m.0, m.1) == id) else {
+            return Ok(());
+        };
+        let key = self.marked[i].2.as_raw_fd().to_ne_bytes();
+        let mut cur = [0u8; 4];
+        let had = sys::map_lookup(&self.map, &key, &mut cur)?;
+        let v = if had { u32::from_ne_bytes(cur) } else { 0 } & !bits;
+        if v == 0 {
+            let _ = sys::map_delete(&self.map, &key);
+            self.marked.swap_remove(i);
+        } else {
+            sys::map_update(&self.map, &key, &v.to_ne_bytes(), 0)?;
+        }
         Ok(())
     }
 
@@ -424,7 +614,11 @@ impl Confinement {
 
     /// As marcas de um arquivo (para os testes).
     pub fn bits(&self, fd: &impl AsRawFd) -> Result<u32, Error> {
-        let key = fd.as_raw_fd().to_ne_bytes();
+        let id = file_id(fd)?;
+        let Some(m) = self.marked.iter().find(|m| (m.0, m.1) == id) else {
+            return Ok(0);
+        };
+        let key = m.2.as_raw_fd().to_ne_bytes();
         let mut cur = [0u8; 4];
         Ok(if sys::map_lookup(&self.map, &key, &mut cur)? {
             u32::from_ne_bytes(cur)
@@ -432,14 +626,54 @@ impl Confinement {
             0
         })
     }
+
+    /// Uma cópia do descritor da fila de eventos, para a thread que a lê.
+    pub fn ring(&self) -> std::io::Result<OwnedFd> {
+        self.ring.try_clone()
+    }
+
+    /// Uma cópia do descritor do contador de eventos descartados.
+    pub fn drops(&self) -> std::io::Result<OwnedFd> {
+        self.drops.try_clone()
+    }
+}
+
+/// Lê e zera o contador de eventos descartados.
+pub fn take_drops(drops: &impl AsRawFd) -> u64 {
+    let key = 0u32.to_ne_bytes();
+    let mut cur = [0u8; 8];
+    match sys::map_lookup(drops, &key, &mut cur) {
+        Ok(true) => {
+            let n = u64::from_ne_bytes(cur);
+            if n > 0 {
+                let _ = sys::map_update(drops, &key, &0u64.to_ne_bytes(), 0);
+            }
+            n
+        }
+        _ => 0,
+    }
+}
+
+/// O dispositivo e o inode do arquivo de um descritor.
+fn file_id(fd: &impl AsRawFd) -> Result<(u64, u64), Error> {
+    // SAFETY: fstat escreve na struct zerada.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd.as_raw_fd(), &mut st) } < 0 {
+        return Err(Error::Sys {
+            what: "fstat".into(),
+            err: std::io::Error::last_os_error(),
+            log: String::new(),
+        });
+    }
+    Ok((st.st_dev, st.st_ino))
 }
 
 impl Drop for Confinement {
     fn drop(&mut self) {
         // As marcas saem antes dos descritores, para não sobrar nada no
         // armazenamento dos inodes que continuam na memória.
-        for f in &self.marked {
-            let _ = sys::map_delete(&self.map, &f.as_raw_fd().to_ne_bytes());
+        for m in &self.marked {
+            let _ = sys::map_delete(&self.map, &m.2.as_raw_fd().to_ne_bytes());
         }
     }
 }
@@ -466,7 +700,18 @@ mod tests {
                     cgroup_id: 1234,
                 },
             ] {
-                let p = build(&l, h, 3, at).unwrap_or_else(|e| panic!("{h:?}: {e}"));
+                let p = build(
+                    &l,
+                    h,
+                    3,
+                    at,
+                    Some(EventMaps {
+                        ring_fd: 4,
+                        drops_fd: 5,
+                        workdir_dev: 0x80_0002,
+                    }),
+                )
+                .unwrap_or_else(|e| panic!("{h:?}: {e}"));
                 assert_eq!(p.last().unwrap().code, 0x95, "{h:?} termina em exit");
                 assert!(p.len() < 8000, "{h:?}: {} instruções", p.len());
                 // O mapa entra pelo descritor 3, como BPF_PSEUDO_MAP_FD.
@@ -475,6 +720,17 @@ mod tests {
                         .any(|i| i.code == 0x18 && i.regs == 0x11 && i.imm == 3),
                     "{h:?} usa o mapa"
                 );
+                // A fila entra pelo descritor 4, e o contador pela soma atômica.
+                assert!(
+                    p.iter()
+                        .any(|i| i.code == 0x18 && i.regs == 0x11 && i.imm == 4),
+                    "{h:?} usa a fila"
+                );
+                assert!(p.iter().any(|i| i.code == 0xdb), "{h:?} conta descartes");
+                let le_nome = p
+                    .iter()
+                    .any(|i| i.code == 0x85 && i.imm == l.fn_probe_read_kernel_str);
+                assert_eq!(le_nome, h == Hook::InodeCreate, "{h:?}");
             }
         }
     }
@@ -488,7 +744,7 @@ mod tests {
                 .map(|i| i.imm)
                 .collect()
         };
-        let c = build(&l, Hook::InodeUnlink, 3, Attach::Cgroup).unwrap();
+        let c = build(&l, Hook::InodeUnlink, 3, Attach::Cgroup, None).unwrap();
         assert_eq!(movs(&c), [1, 0]);
         let g = build(
             &l,
@@ -498,6 +754,7 @@ mod tests {
                 level: 1,
                 cgroup_id: 9,
             },
+            None,
         )
         .unwrap();
         assert_eq!(movs(&g), [0, -libc::EPERM]);
@@ -507,7 +764,7 @@ mod tests {
     fn nomes_reservados_so_na_criacao() {
         let Some(l) = layout() else { return };
         let reads = |h| {
-            build(&l, h, 3, Attach::Cgroup)
+            build(&l, h, 3, Attach::Cgroup, None)
                 .unwrap()
                 .iter()
                 .filter(|i| i.code == 0x85 && i.imm == l.fn_probe_read_kernel)
@@ -527,7 +784,7 @@ mod tests {
                 x.2 = vec!["dir".into()];
             }
         }
-        let e = build(&l, Hook::InodeCreate, 3, Attach::Cgroup).unwrap_err();
+        let e = build(&l, Hook::InodeCreate, 3, Attach::Cgroup, None).unwrap_err();
         assert!(e.to_string().contains("dentry"), "{e}");
     }
 }

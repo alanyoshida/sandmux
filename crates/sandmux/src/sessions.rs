@@ -447,6 +447,13 @@ pub fn stats(id: u32) -> Result<i32> {
                 )
             );
             match &d.ebpf_off {
+                None if d.files_poll => println!(
+                    "{}",
+                    tr!(
+                        "  confinamento eBPF: ligado; arquivos novos por varredura a cada 10 s (sem vigias de inotify)",
+                        "  eBPF confinement: on; new files by a scan every 10 s (no inotify watches)"
+                    )
+                ),
                 None => println!(
                     "{}",
                     tr!("  confinamento eBPF: ligado", "  eBPF confinement: on")
