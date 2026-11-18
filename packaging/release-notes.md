@@ -1,16 +1,17 @@
-sandmux 0.1.22, antes da v1: o registro de execuções.
+sandmux 0.1.23, antes da v1: o processo de cada conexão.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **Registro de execuções:** cada programa executado numa aba, pelo agente ou num shell, aparece no registro de arquivos (`sandmux files <id>`, Ctrl+b `f`), com o caminho e os argumentos. Um `curl` lançado por uma ferramenta, um script baixado e rodado, um compilador: agora deixam linha.
-  - Com o auxiliar root (`sandmux-helper`) e o BPF LSM ativos, o registro vem do kernel e não dá para falsificar. As execuções do Docker privado da pasta também entram.
-  - Sem eles, o supervisor do sandbox registra, lendo o que o processo pediu. Esse registro pode ser enganado, e a linha diz a fonte (`via`).
-  - O `sandmux stats` e o painel dizem de onde vêm as execuções da aba.
-  - Detalhes em [docs/files.md](https://github.com/alanyoshida/sandmux/blob/main/docs/files.md#execuções).
+- **Processo de cada conexão:** cada conexão TCP e UDP de uma aba no registro de rede diz qual processo a abriu, com o pid e o executável. Dá para separar a chamada de inferência do harness de um `curl` lançado por uma ferramenta ou de um pacote baixado por um `npm install`. Os argumentos ficam no registro de execuções, pelo pid.
+  - Com o auxiliar root (`sandmux-helper`) e o BPF LSM ativos, o processo das conexões TCP vem do kernel, registrado no `connect`.
+  - Sem eles, e no UDP, o gateway acha o dono do socket no começo da conexão, sem root. Isso custa cerca de 1 ms por conexão. A linha diz a fonte (`proc_via`).
+  - `sandmux net` ganha a coluna do processo, e a tela de rede da TUI mostra o processo da linha.
+  - As linhas do Docker privado ficam sem processo.
+  - Detalhes em [docs/network.md](https://github.com/alanyoshida/sandmux/blob/main/docs/network.md#processo-de-cada-conexão).
 
-Esta versão muda o protocolo entre o cliente e o daemon (41) e o auxiliar root. Depois de atualizar, rode `sandmux setup` (que reinicia o auxiliar) e `sandmux daemon restart`, e abra a TUI de novo.
+Esta versão muda o protocolo entre o cliente e o daemon (42), o auxiliar root e o lançador. Depois de atualizar, rode `sandmux setup` (que reinicia o auxiliar) e `sandmux daemon restart`, e abra a TUI de novo.
 
 ## Instalar
 
