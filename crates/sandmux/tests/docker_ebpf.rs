@@ -474,3 +474,195 @@ $P 'umount /w/.env; cat /w/.env; echo oi > /w/saida.txt; echo x > /tmp/x-do-cont
     t.wait_exit();
     limpar(&e);
 }
+
+/// O programa de execução no kernel: o `observe` de um escopo do systemd de
+/// usuário recebe o `ls -la` com o caminho e os argumentos.
+#[test]
+fn observacao_de_execucoes_no_kernel() {
+    let Some(sock) = helper() else { return };
+    let mut child = Command::new("systemd-run")
+        .args([
+            "--user",
+            "--scope",
+            "--quiet",
+            "--",
+            "sh",
+            "-c",
+            "sleep 2; ls -la / >/dev/null",
+        ])
+        .spawn()
+        .unwrap();
+    // O escopo: o cgroup do processo (o systemd-run --scope vira o comando).
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    let dir = loop {
+        let cg =
+            std::fs::read_to_string(format!("/proc/{}/cgroup", child.id())).unwrap_or_default();
+        if let Some(rel) = cg.trim().strip_prefix("0::")
+            && rel.ends_with(".scope")
+            && cg != own
+        {
+            break Path::new("/sys/fs/cgroup").join(rel.trim_start_matches('/'));
+        }
+        assert!(Instant::now() < deadline, "sem escopo: {cg}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let c = sandmux::helper::Client::connect(&sock).unwrap();
+    let ev = c.take_events().unwrap();
+    c.observe(&dir).unwrap_or_else(|e| panic!("observe: {e}"));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut achou = false;
+    while Instant::now() < deadline && !achou {
+        if let Ok(v) = ev.recv_timeout(Duration::from_millis(200)) {
+            for e in v["ev"].as_array().into_iter().flatten() {
+                if e["kind"] == "exec" && e["path"].as_str().is_some_and(|p| p.ends_with("ls")) {
+                    assert_eq!(e["args"][0], "ls", "{e}");
+                    assert_eq!(e["args"][1], "-la", "{e}");
+                    assert_eq!(e["args"][2], "/", "{e}");
+                    achou = true;
+                }
+            }
+        }
+    }
+    let _ = child.wait();
+    assert!(achou, "o evento do ls não chegou");
+}
+
+/// Linhas `exec` do registro de arquivos deste ambiente.
+fn exec_lines(e: &Env) -> Vec<serde_json::Value> {
+    let dir = e.state.join("sandmux/files");
+    let mut out = Vec::new();
+    for f in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        if f.path().extension().is_some_and(|x| x == "jsonl") {
+            let text = std::fs::read_to_string(f.path()).unwrap();
+            out.extend(
+                text.lines()
+                    .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+                    .filter(|l| l["access"] == "exec"),
+            );
+        }
+    }
+    out
+}
+
+/// Com o auxiliar, as execuções da aba vêm do kernel, com os argumentos, e
+/// as do Docker vêm com a etiqueta dele; parar o auxiliar devolve o registro
+/// ao supervisor.
+#[test]
+fn execucoes_pelo_kernel_e_recuo() {
+    let Some(sock) = helper() else { return };
+    let e = Env::new();
+    let mut t = term(&e, &e.work);
+    let s = run_in(&mut t, &e.work, "sleep 1.5; echo PRONTO");
+    assert!(s.contains("PRONTO"), "{s}");
+    let st = stats(&e);
+    assert!(st.contains("execuções: pelo kernel"), "{st}");
+    let s = run_in(
+        &mut t,
+        &e.work,
+        &format!(
+            "ls -la /tmp >/dev/null; echo LS
+{IMAGEM}
+docker run --rm sx sh -c 'ls / >/dev/null'; echo FIM"
+        ),
+    );
+    assert!(s.contains("FIM"), "{s}");
+    std::thread::sleep(Duration::from_millis(1500));
+    let l = exec_lines(&e);
+    let ls = l
+        .iter()
+        .find(|x| {
+            x["path"].as_str().is_some_and(|p| p.ends_with("/ls"))
+                && x["args"] == serde_json::json!(["ls", "-la", "/tmp"])
+        })
+        .unwrap_or_else(|| panic!("sem a linha do ls -la: {l:?}"));
+    assert_eq!(ls["via"], "kernel", "{ls}");
+    assert!(ls["tag"].as_str().unwrap().starts_with('s'), "{ls}");
+    // O `sh` do contêiner (o busybox roda o `ls` como função dele, sem
+    // `exec`).
+    assert!(
+        l.iter().any(
+            |x| x["tag"].as_str().is_some_and(|t| t.starts_with("docker-"))
+                && x["path"] == "/bin/sh"
+                && x["args"][2] == "ls / >/dev/null"
+        ),
+        "sem a execução do contêiner: {l:?}"
+    );
+    // O auxiliar cai: o supervisor volta para a execução seguinte.
+    std::fs::write(format!("{}.restart", sock.display()), "").unwrap();
+    std::thread::sleep(Duration::from_millis(3000));
+    let s = run_in(&mut t, &e.work, "uname -s >/dev/null; echo FIM2");
+    assert!(s.contains("FIM2"), "{s}");
+    std::thread::sleep(Duration::from_millis(500));
+    let l = exec_lines(&e);
+    let un = l
+        .iter()
+        .filter(|x| x["path"].as_str().is_some_and(|p| p.ends_with("uname")))
+        .collect::<Vec<_>>();
+    assert!(un.iter().any(|x| x["via"] == "supervisor"), "{un:?}");
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
+}
+
+/// Custo do programa de execução: 2000 `/bin/true` no host, com e sem um
+/// escopo observado, e numa aba. Só mede; roda com
+/// `sudo scripts/check-root.sh --ignored custo_das_exec --nocapture`.
+#[test]
+#[ignore]
+fn custo_das_execucoes() {
+    let Some(sock) = helper() else { return };
+    let laco = || {
+        let t = Instant::now();
+        let ok = Command::new("sh")
+            .args([
+                "-c",
+                "i=0; while [ $i -lt 2000 ]; do /bin/true; i=$((i+1)); done",
+            ])
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        t.elapsed().as_millis()
+    };
+    laco();
+    let sem = [laco(), laco(), laco()];
+    let mut child = Command::new("systemd-run")
+        .args(["--user", "--scope", "--quiet", "--", "sleep", "60"])
+        .spawn()
+        .unwrap();
+    let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    let dir = loop {
+        let cg =
+            std::fs::read_to_string(format!("/proc/{}/cgroup", child.id())).unwrap_or_default();
+        if let Some(rel) = cg.trim().strip_prefix("0::")
+            && rel.ends_with(".scope")
+            && cg != own
+        {
+            break Path::new("/sys/fs/cgroup").join(rel.trim_start_matches('/'));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let c = sandmux::helper::Client::connect(&sock).unwrap();
+    c.observe(&dir).unwrap();
+    let com = [laco(), laco(), laco()];
+    drop(c);
+    let _ = child.kill();
+    let _ = child.wait();
+    let e = Env::new();
+    let mut t = term(&e, &e.work);
+    let s = run_in(
+        &mut t,
+        &e.work,
+        "sleep 1.5; s=$(date +%s%N); i=0; while [ $i -lt 2000 ]; do /bin/true; i=$((i+1)); done; e=$(date +%s%N); echo ABA=$(( (e-s)/1000000 ))",
+    );
+    eprintln!(
+        "MEDIDA 2000 /bin/true no host: sem observação {sem:?} ms, com uma aba observada {com:?} ms"
+    );
+    eprintln!(
+        "MEDIDA 2000 /bin/true numa aba (kernel + supervisor que só deixa seguir): {}",
+        s.trim()
+    );
+    t.write(b"exit\r");
+    t.wait_exit();
+}

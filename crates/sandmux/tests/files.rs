@@ -93,10 +93,13 @@ fn registro_das_pastas_do_agente() {
     assert_eq!(has("/a.txt", "r"), 1, "{lines:?}");
     assert_eq!(has("/b.txt", "create"), 1, "{lines:?}");
     assert_eq!(has("/no-home.txt", "create"), 1, "{lines:?}");
+    // As aberturas fora das pastas do agente não entram; as execuções
+    // (`exec`) entram de qualquer lugar.
     assert!(
-        !lines.iter().any(|l| l["path"]
-            .as_str()
-            .is_some_and(|p| p.starts_with("/usr") || p.starts_with("/etc"))),
+        !lines.iter().any(|l| l["access"] != "exec"
+            && l["path"]
+                .as_str()
+                .is_some_and(|p| p.starts_with("/usr") || p.starts_with("/etc"))),
         "{lines:?}"
     );
     let tag = lines[0]["tag"].as_str().unwrap();
@@ -378,4 +381,30 @@ fn pastas_ao_vivo_em_mnt_sandmux() {
     a.with_screen(|s| assert!(s.contents().contains("b.txt"), "{}", s.contents()));
     a.write(b"\x02d");
     a.wait_exit();
+}
+
+/// Sem o auxiliar root, o supervisor registra as execuções, com os
+/// argumentos e a fonte; um programa que não existe não trava nada.
+#[test]
+fn execucoes_pelo_supervisor() {
+    let env = Env::new();
+    let out = shell(
+        &env,
+        "ls -la /tmp >/dev/null && echo LS-OK; ./nao-existe 2>/dev/null; sh -c 'true' && echo FIM",
+    );
+    assert!(out.contains("LS-OK") && out.contains("FIM"), "{out}");
+    let execs: Vec<serde_json::Value> = file_lines(&env)
+        .into_iter()
+        .filter(|l| l["access"] == "exec")
+        .collect();
+    let ls = execs
+        .iter()
+        .find(|l| l["path"].as_str().is_some_and(|p| p.ends_with("/ls")))
+        .unwrap_or_else(|| panic!("sem a linha do ls: {execs:?}"));
+    assert_eq!(ls["via"], "supervisor");
+    assert_eq!(ls["args"], serde_json::json!(["ls", "-la", "/tmp"]));
+    assert!(
+        execs.iter().any(|l| l["path"] == "./nao-existe"),
+        "{execs:?}"
+    );
 }

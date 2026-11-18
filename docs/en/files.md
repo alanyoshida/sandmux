@@ -122,6 +122,19 @@ sandmux files --days 7   # from the last 7 days
 
 Shows the last 200 lines, with the time, the session, the access, the path and the block.
 
+### Executions
+
+Every program run in a tab (by the agent or in a shell) becomes a line with access `exec`, the executed path and the arguments (`args`, up to 1024 bytes). The `via` field says the source:
+
+- **`kernel`:** with the [root helper](helper.md) and the BPF LSM active, a program on the kernel's exec tracepoint logs what the kernel actually executed. It cannot be forged.
+- **`supervisor`:** without them, the open supervisor also receives `execve` and `execveat`, reads the path and the arguments in the process memory and lets the kernel proceed. Another thread can swap the path or the arguments between the read and the execution, so this source can be fooled.
+
+The supervisor logs from the start of the tab. When the helper takes over (right after the tab's scope appears), the daemon turns it off; if the connection to the helper drops, it comes back. In the handover, one execution may show up from both sources. With the helper, the folder's private Docker executions are logged too, with the `docker-<id>` tag.
+
+The path is what was passed to `execve`: a program called as `./script` shows as `./script`. The execution's environment is not logged. No execution is denied by this log.
+
+The launch protection, in `sandmux stats <id>` and in the panel, shows the "executions" line: "by the kernel" or "supervisor: <reason>". `sandmux files` shows the arguments after the path.
+
 ### Private Docker containers
 
 With the [eBPF confinement](docker.md#ebpf-confinement), the log also has the lines of the folder's private Docker containers, with the `docker-<id>` tag and the host path:

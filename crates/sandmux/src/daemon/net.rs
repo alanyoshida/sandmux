@@ -162,7 +162,14 @@ pub fn recompile(shared: &Shared, id: u32) -> anyhow::Result<Recompiled> {
         if f.exists() {
             let workdir =
                 std::fs::canonicalize(&opts.workdir).unwrap_or_else(|_| opts.workdir.clone());
-            crate::launch::write_file_policy(&f, &eff.file_policy(&host.home, &workdir))?;
+            let mut p = eff.file_policy(&host.home, &workdir);
+            // A chave do registro de execuções é do daemon, não da
+            // configuração: fica como estava.
+            p.exec_log = std::fs::read(&f)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<sandmux_spec::files::FilePolicy>(&b).ok())
+                .and_then(|o| o.exec_log);
+            crate::launch::write_file_policy(&f, &p)?;
         }
     }
     let new = eff

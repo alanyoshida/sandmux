@@ -291,6 +291,8 @@ impl Files {
             access: access.into(),
             blocked,
             new: false,
+            args: Vec::new(),
+            via: None,
         };
         if let Some(n) = msg["dropped"].as_u64().filter(|n| *n > 0) {
             out.push(entry(
@@ -302,6 +304,7 @@ impl Files {
                 )),
             ));
         }
+        out.extend(super::execlog::entries(msg, &self.tag, &self.workdir));
         for e in msg["ev"].as_array().into_iter().flatten() {
             let ino = e["ino"].as_u64().unwrap_or(0);
             match e["kind"].as_str() {
@@ -632,6 +635,9 @@ mod tests {
     impl Backend for FakeBackend {
         fn lsm(&self) -> Result<bool, String> {
             Ok(true)
+        }
+        fn observe(&self, _: &std::os::fd::OwnedFd) -> Result<Box<dyn Events>, String> {
+            Err("sem observação".into())
         }
         fn confine(&self, _: &std::os::fd::OwnedFd, _: u32) -> Result<Box<dyn Confined>, String> {
             Ok(Box::new(FakeConfined(self.0.clone(), 0)))

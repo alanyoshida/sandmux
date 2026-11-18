@@ -328,6 +328,10 @@ pub struct PolicySummary {
     /// Portal do desktop do lançamento (protocolo 37).
     #[serde(default)]
     pub portal: bool,
+    /// De onde vêm as execuções no registro: `kernel` ou
+    /// `supervisor: <motivo>` (protocolo 41).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec: Option<String>,
 }
 
 /// Consumo do Docker privado da pasta de uma sessão.

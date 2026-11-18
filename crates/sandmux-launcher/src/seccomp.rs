@@ -215,17 +215,27 @@ pub const OPEN_SYSCALLS: &[i64] = &[
     libc::SYS_symlinkat,
 ];
 
+/// Chamadas de execução que vão ao supervisor, com o registro de execuções
+/// pelo supervisor ligado.
+pub const EXEC_SYSCALLS: &[i64] = &[libc::SYS_execve, libc::SYS_execveat];
+
 /// O filtro das aberturas: `SECCOMP_RET_USER_NOTIF` para cada chamada de
-/// [`OPEN_SYSCALLS`], o resto passa (o filtro de negação decide antes).
-pub fn build_notify() -> Vec<libc::sock_filter> {
-    let n = OPEN_SYSCALLS.len();
+/// [`OPEN_SYSCALLS`] (e de [`EXEC_SYSCALLS`], com `exec`), o resto passa (o
+/// filtro de negação decide antes).
+pub fn build_notify(exec: bool) -> Vec<libc::sock_filter> {
+    let calls: Vec<i64> = OPEN_SYSCALLS
+        .iter()
+        .chain(if exec { EXEC_SYSCALLS } else { &[] })
+        .copied()
+        .collect();
+    let n = calls.len();
     let mut p = vec![
         stmt(BPF_LD_W_ABS, OFF_ARCH),
         jump(BPF_JEQ_K, AUDIT_ARCH, 1, 0),
         stmt(BPF_RET_K, SECCOMP_RET_ALLOW),
         stmt(BPF_LD_W_ABS, OFF_NR),
     ];
-    for (i, nr) in OPEN_SYSCALLS.iter().enumerate() {
+    for (i, nr) in calls.iter().enumerate() {
         // Achou: pula até o retorno da notificação, depois do retorno comum.
         p.push(jump(BPF_JEQ_K, *nr as u32, (n - i) as u8, 0));
     }
@@ -236,9 +246,9 @@ pub fn build_notify() -> Vec<libc::sock_filter> {
 
 /// Instala o filtro das aberturas e devolve o descritor de notificação.
 /// Exige `no_new_privs` já ligado.
-pub fn install_notify() -> io::Result<std::os::fd::OwnedFd> {
+pub fn install_notify(exec: bool) -> io::Result<std::os::fd::OwnedFd> {
     use std::os::fd::FromRawFd;
-    let prog = build_notify();
+    let prog = build_notify(exec);
     let fprog = libc::sock_fprog {
         len: prog.len() as u16,
         filter: prog.as_ptr() as *mut libc::sock_filter,
@@ -286,10 +296,22 @@ mod tests {
 
     #[test]
     fn filtro_das_aberturas() {
-        let p = build_notify();
+        let p = build_notify(false);
         for nr in OPEN_SYSCALLS {
             assert_eq!(eval(&p, *nr as u32, AUDIT_ARCH), SECCOMP_RET_USER_NOTIF);
         }
+        assert_eq!(
+            eval(&p, libc::SYS_execve as u32, AUDIT_ARCH),
+            SECCOMP_RET_ALLOW
+        );
+        let x = build_notify(true);
+        for nr in OPEN_SYSCALLS.iter().chain(EXEC_SYSCALLS) {
+            assert_eq!(eval(&x, *nr as u32, AUDIT_ARCH), SECCOMP_RET_USER_NOTIF);
+        }
+        assert_eq!(
+            eval(&x, libc::SYS_read as u32, AUDIT_ARCH),
+            SECCOMP_RET_ALLOW
+        );
         assert_eq!(
             eval(&p, libc::SYS_read as u32, AUDIT_ARCH),
             SECCOMP_RET_ALLOW

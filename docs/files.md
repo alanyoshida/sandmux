@@ -120,6 +120,19 @@ sandmux files --days 7   # dos últimos 7 dias
 
 Mostra as últimas 200 linhas, com a hora, a sessão, o acesso, o caminho e o bloqueio.
 
+### Execuções
+
+Cada programa executado numa aba (pelo agente ou num shell) vira uma linha com o acesso `exec`, o caminho executado e os argumentos (`args`, até 1024 bytes). O campo `via` diz a fonte:
+
+- **`kernel`:** com o [auxiliar root](helper.md) e o BPF LSM ativos, um programa no tracepoint de execução do kernel registra o que o kernel de fato executou. Não dá para falsificar.
+- **`supervisor`:** sem eles, o supervisor de aberturas recebe também `execve` e `execveat`, lê o caminho e os argumentos na memória do processo e deixa o kernel seguir. Outra thread pode trocar o caminho ou os argumentos entre a leitura e a execução, então essa fonte pode ser enganada.
+
+O supervisor registra desde o começo da aba. Quando o auxiliar assume (logo depois de o escopo da aba aparecer), o daemon o desliga; se a conexão com o auxiliar cair, ele volta. Na passagem, uma execução pode sair nas duas fontes. Com o auxiliar, as execuções do Docker privado da pasta também entram, com a etiqueta `docker-<id>`.
+
+O caminho é o que foi passado ao `execve`: um programa chamado por `./script` aparece como `./script`. O ambiente da execução não entra no registro. Nenhuma execução é negada por este registro.
+
+A proteção do lançamento, no `sandmux stats <id>` e no painel, mostra a linha "execuções": "pelo kernel" ou "supervisor: <motivo>". `sandmux files` mostra os argumentos depois do caminho.
+
 ### Contêineres do Docker privado
 
 Com o [confinamento por eBPF](docker.md#confinamento-por-ebpf), o registro também tem as linhas dos contêineres do Docker privado da pasta, com a etiqueta `docker-<id>` e o caminho do host:

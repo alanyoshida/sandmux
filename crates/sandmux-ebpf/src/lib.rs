@@ -7,6 +7,7 @@
 
 pub mod asm;
 pub mod btf;
+pub mod exec;
 pub mod prog;
 pub mod ring;
 pub mod sys;

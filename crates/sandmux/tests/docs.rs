@@ -500,6 +500,8 @@ fn documentacao_dos_arquivos_acompanha_o_codigo() {
         access: String::new(),
         blocked: None,
         new: false,
+        args: Vec::new(),
+        via: None,
     })
     .unwrap();
     for k in e.as_object().unwrap().keys() {
@@ -827,6 +829,11 @@ fn auxiliar_root_documentado() {
     let files = std::fs::read_to_string(format!("{root}docs/files.md")).unwrap();
     assert!(files.contains("docker-<id>") && files.contains("### Contêineres do Docker privado"));
     assert!(doc.contains("`unmark`"));
+    assert!(doc.contains("`observe`") && doc.contains("64"));
+    let files = std::fs::read_to_string(format!("{root}docs/files.md")).unwrap();
+    for c in ["### Execuções", "`via`", "`exec`", "execveat", "1024"] {
+        assert!(files.contains(c), "docs/files.md não cita {c}");
+    }
     let unit =
         std::fs::read_to_string(format!("{root}packaging/systemd/sandmux-helper.socket")).unwrap();
     assert!(unit.contains(&format!(
