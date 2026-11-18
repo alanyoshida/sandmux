@@ -835,7 +835,7 @@ pub fn net_rules(id: Option<u32>) -> Result<i32> {
 
 /// Linhas da tabela de `sandmux net`.
 pub fn net_table(lines: &[sandmux_proto::msg::NetLine]) -> Vec<String> {
-    let rows: Vec<[String; 7]> = lines
+    let rows: Vec<[String; 8]> = lines
         .iter()
         .map(|l| {
             let hora = l.ts.split('T').nth(1).unwrap_or(&l.ts).to_string();
@@ -876,12 +876,25 @@ pub fn net_table(lines: &[sandmux_proto::msg::NetLine]) -> Vec<String> {
                     nota.push_str(&trf!("chave: {s}", "key: {s}"));
                 }
             }
+            // O processo: o nome do executável e o pid.
+            let processo = match (&l.exe, l.pid) {
+                (Some(e), Some(p)) => format!(
+                    "{} {p}",
+                    std::path::Path::new(e)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                ),
+                (None, Some(p)) => p.to_string(),
+                _ => String::new(),
+            };
             [
                 hora,
                 sessao,
                 l.proto.clone(),
                 l.domain.clone(),
                 destino,
+                processo,
                 format!("{} / {}", human(l.up), human(l.down)),
                 nota,
             ]
@@ -893,6 +906,7 @@ pub fn net_table(lines: &[sandmux_proto::msg::NetLine]) -> Vec<String> {
         "PROTO",
         tr!("DOMÍNIO", "DOMAIN"),
         tr!("DESTINO", "DESTINATION"),
+        tr!("PROCESSO", "PROCESS"),
         tr!("ENVIADO / RECEBIDO", "SENT / RECEIVED"),
         "",
     ];
@@ -902,7 +916,7 @@ pub fn net_table(lines: &[sandmux_proto::msg::NetLine]) -> Vec<String> {
             w[i] = w[i].max(c.chars().count());
         }
     }
-    let fmt = |cells: [&str; 7]| {
+    let fmt = |cells: [&str; 8]| {
         cells
             .iter()
             .enumerate()
@@ -1390,4 +1404,41 @@ pub fn mcp_list(id: Option<u32>, harness: &str) -> Result<i32> {
         );
     }
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tabela_de_rede_com_o_processo() {
+        let l = sandmux_proto::msg::NetLine {
+            session: Some(1),
+            ts: "2026-11-18T10:00:00".into(),
+            tag: "s1-1".into(),
+            proto: "tcp".into(),
+            domain: "exemplo.com".into(),
+            ip: "1.2.3.4".into(),
+            port: 443,
+            up: 10,
+            down: 20,
+            ms: 5,
+            blocked: None,
+            new: false,
+            method: None,
+            path: None,
+            status: None,
+            secret: None,
+            pid: Some(4321),
+            exe: Some("/usr/bin/curl".into()),
+            proc_via: Some("kernel".into()),
+        };
+        let t = net_table(std::slice::from_ref(&l));
+        assert!(t[0].contains(tr!("PROCESSO", "PROCESS")), "{t:?}");
+        assert!(t[1].contains("curl 4321"), "{t:?}");
+        let mut sem = l.clone();
+        sem.pid = None;
+        sem.exe = None;
+        assert!(!net_table(&[sem])[1].contains("curl"));
+    }
 }

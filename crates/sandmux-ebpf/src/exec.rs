@@ -12,6 +12,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use sandmux_spec::trf;
 
 use crate::Error;
+
 use crate::asm::{Alu, Asm, Cond, Insn, R0, R1, R2, R3, R6, R7, R8, R10, Size};
 use crate::btf::{Btf, Kind};
 use crate::ring::{EV_EXEC, EV_HEADER, EV_NAME, EXEC_ARGS};
@@ -26,6 +27,14 @@ pub struct ExecLayout {
     prog_type_tracing: u32,
     attach_raw_tp: u32,
     btf_id: u32,
+    /// `tcp_v4_connect` e `tcp_v6_connect`, para o `fexit`.
+    conn_ids: Vec<u32>,
+    attach_fexit: u32,
+    sk_num: i16,
+    sk_dport: i16,
+    sk_daddr: i16,
+    sk_v6_daddr: i16,
+    sk_family: i16,
     fn_ringbuf_reserve: i32,
     fn_ringbuf_submit: i32,
     fn_probe_read_kernel_str: i32,
@@ -65,7 +74,18 @@ impl ExecLayout {
                     "the kernel has no sched_process_exec tracepoint in BTF"
                 ))
             })?;
+        let sk = |f: &str| off(b, "sock", &format!("__sk_common.{f}"));
         Ok(ExecLayout {
+            conn_ids: ["tcp_v4_connect", "tcp_v6_connect"]
+                .iter()
+                .filter_map(|f| b.find(Kind::Func, f))
+                .collect(),
+            attach_fexit: uapi(b, "BPF_TRACE_FEXIT")? as u32,
+            sk_num: sk("skc_num")?,
+            sk_dport: sk("skc_dport")?,
+            sk_daddr: sk("skc_daddr")?,
+            sk_v6_daddr: sk("skc_v6_daddr")?,
+            sk_family: sk("skc_family")?,
             prog_type_tracing: uapi(b, "BPF_PROG_TYPE_TRACING")? as u32,
             attach_raw_tp: uapi(b, "BPF_TRACE_RAW_TP")? as u32,
             btf_id,
@@ -171,12 +191,82 @@ pub fn build(
     a.finish()
 }
 
-/// Uma observação carregada: a fila, o contador e o programa preso.
+/// Monta o programa de conexões: um `fexit` de `tcp_v4_connect` ou
+/// `tcp_v6_connect`. Na saída, a porta de origem já foi escolhida e o
+/// processo atual é o que pediu a conexão; manda o pid, a família, as portas
+/// e o destino. Uma porta de origem 0 (o `connect` falhou) não gera evento.
+/// (O tracepoint `inet_sock_set_state` passa por `SYN_SENT` antes de a porta
+/// ser escolhida.)
+pub fn build_conn(
+    l: &ExecLayout,
+    level: i32,
+    cgroup_id: u64,
+    ring_fd: i32,
+    drops_fd: i32,
+) -> Result<Vec<Insn>, Error> {
+    use crate::ring::{CONN_EVENT, EV_CONN};
+    let mut a = Asm::new();
+    let out = a.label();
+    let drop = a.label();
+    a.mov(R6, R1);
+    a.ldx(Size::DW, R8, R6, 0);
+    a.ldx(Size::H, R1, R8, l.sk_num);
+    a.jmp_imm(Cond::Eq, R1, 0, out);
+    a.mov_imm(R1, level);
+    a.call(l.fn_ancestor_cgroup_id);
+    a.ld_imm64(R1, cgroup_id);
+    a.jmp_reg(Cond::Ne, R0, R1, out);
+    a.ld_map_fd(R1, ring_fd);
+    a.mov_imm(R2, CONN_EVENT as i32);
+    a.mov_imm(R3, 0);
+    a.call(l.fn_ringbuf_reserve);
+    a.jmp_imm(Cond::Eq, R0, 0, drop);
+    a.mov(R7, R0);
+    a.ldx(Size::DW, R8, R6, 0);
+    a.st(Size::W, R7, 0, EV_CONN as i32);
+    a.ldx(Size::H, R1, R8, l.sk_family);
+    a.stx(Size::W, R7, 4, R1);
+    a.ldx(Size::H, R1, R8, l.sk_num);
+    a.stx(Size::W, R7, 8, R1);
+    a.ldx(Size::H, R1, R8, l.sk_dport);
+    a.stx(Size::W, R7, 12, R1);
+    a.ldx(Size::W, R1, R8, l.sk_daddr);
+    a.stx(Size::W, R7, 24, R1);
+    a.st(Size::W, R7, 28, 0);
+    a.ldx(Size::DW, R1, R8, l.sk_v6_daddr);
+    a.stx(Size::DW, R7, 32, R1);
+    a.ldx(Size::DW, R1, R8, l.sk_v6_daddr + 8);
+    a.stx(Size::DW, R7, 40, R1);
+    a.call(l.fn_pid_tgid);
+    a.alu_imm(Alu::Rsh, R0, 32);
+    a.stx(Size::DW, R7, 16, R0);
+    a.mov(R1, R7);
+    a.mov_imm(R2, 0);
+    a.call(l.fn_ringbuf_submit);
+    a.ja(out);
+    a.bind(drop);
+    a.st(Size::W, R10, -8, 0);
+    a.ld_map_fd(R1, drops_fd);
+    a.mov(R2, R10);
+    a.alu_imm(Alu::Add, R2, -8);
+    a.call(l.fn_map_lookup_elem);
+    a.jmp_imm(Cond::Eq, R0, 0, out);
+    a.mov_imm(R1, 1);
+    a.atomic_add64(R0, 0, R1);
+    a.bind(out);
+    a.mov_imm(R0, 0);
+    a.exit();
+    a.finish()
+}
+
+/// Uma observação carregada: a fila, o contador e os programas presos (o de
+/// execução e, quando o kernel tem o tracepoint, o de conexões).
 pub struct Observation {
     ring: OwnedFd,
     drops: OwnedFd,
-    _prog: OwnedFd,
-    _link: OwnedFd,
+    _progs: Vec<(OwnedFd, OwnedFd)>,
+    /// O programa de conexões foi preso.
+    pub conns: bool,
 }
 
 impl Observation {
@@ -200,12 +290,19 @@ impl Observation {
             name: "sandmux_xdrops",
             btf: None,
         })?;
-        let (prog, link) = Observation::attach(l, level, cgroup_id, &ring, &drops)?;
+        let mut progs = vec![Observation::attach(l, level, cgroup_id, &ring, &drops)?];
+        let conns = match Observation::attach_conn(l, level, cgroup_id, &ring, &drops) {
+            Ok(p) => {
+                progs.extend(p);
+                true
+            }
+            Err(_) => false,
+        };
         Ok(Observation {
             ring,
             drops,
-            _prog: prog,
-            _link: link,
+            _progs: progs,
+            conns,
         })
     }
 
@@ -232,6 +329,40 @@ impl Observation {
             Err(_) => sys::raw_tracepoint_open(&prog)?,
         };
         Ok((prog, link))
+    }
+
+    /// Carrega e prende o programa de conexões.
+    pub fn attach_conn(
+        l: &ExecLayout,
+        level: i32,
+        cgroup_id: u64,
+        ring: &impl AsRawFd,
+        drops: &impl AsRawFd,
+    ) -> Result<Vec<(OwnedFd, OwnedFd)>, Error> {
+        if l.conn_ids.is_empty() {
+            return Err(Error::Btf(trf!(
+                "o kernel não tem tcp_v4_connect no BTF",
+                "the kernel has no tcp_v4_connect in BTF"
+            )));
+        }
+        let insns = build_conn(l, level, cgroup_id, ring.as_raw_fd(), drops.as_raw_fd())?;
+        let mut out = Vec::new();
+        for &id in &l.conn_ids {
+            let prog = sys::prog_load(&sys::ProgSpec {
+                prog_type: l.prog_type_tracing,
+                expected_attach_type: l.attach_fexit,
+                attach_btf_id: id,
+                name: "sm_conn",
+                license: crate::prog::LICENSE,
+                insns: &insns,
+            })?;
+            let link = match sys::link_create(&prog, 0, l.attach_fexit) {
+                Ok(k) => k,
+                Err(_) => sys::raw_tracepoint_open(&prog)?,
+            };
+            out.push((prog, link));
+        }
+        Ok(out)
     }
 
     pub fn ring(&self) -> std::io::Result<OwnedFd> {
@@ -279,5 +410,12 @@ mod tests {
         );
         assert!(p.iter().any(|i| i.code == 0xdb));
         assert_eq!(EXEC_EVENT, 32 + 256 + 1024);
+        let c = build_conn(&l, 5, 1234, 4, 5).unwrap();
+        assert_eq!(c.last().unwrap().code, 0x95);
+        assert_eq!(l.conn_ids.len(), 2);
+        assert!(
+            c.iter()
+                .any(|i| i.code == 0x85 && i.imm == l.fn_ringbuf_reserve)
+        );
     }
 }

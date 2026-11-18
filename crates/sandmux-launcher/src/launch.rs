@@ -276,6 +276,9 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
     if let (Some(r), Some(n)) = (tun_r, spec.network.as_ref())
         && let Ok(Some(tun)) = net::recv_fd(&r)
     {
+        // O socket de sock_diag, quando o filho conseguiu criar (o canal
+        // fecha logo depois do TUN).
+        let sock_diag = net::recv_fd(&r).ok().flatten();
         let cfg = sandmux_net::Config {
             log_dir: n.log_dir.clone(),
             tag: n.tag.clone(),
@@ -296,6 +299,8 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
             tls: n.tls.clone(),
             vault: n.vault.clone(),
             harness: n.harness.clone(),
+            sandbox_pid: Some(child.as_raw() as u32),
+            sock_diag,
         };
         match sandmux_net::spawn(tun, cfg) {
             Ok(g) => gateway = Some(g),
@@ -416,7 +421,18 @@ fn init_process(
     if let Some(n) = &spec.network {
         let res =
             net::setup(n.mode == sandmux_spec::NetMode::Open).and_then(|tun| match (tun, &tun_w) {
-                (Some(t), Some(w)) => net::send_fd(w, &t),
+                (Some(t), Some(w)) => {
+                    net::send_fd(w, &t)?;
+                    // Um socket de sock_diag criado aqui fica preso ao
+                    // namespace de rede do sandbox: o gateway acha o socket
+                    // de cada conexão pela consulta exata do kernel, sem ler
+                    // a tabela inteira de /proc/<pid>/net. Sem ele, o
+                    // gateway lê o /proc.
+                    if let Ok(d) = net::diag_socket() {
+                        let _ = net::send_fd_tagged(w, &d, b'D');
+                    }
+                    Ok(())
+                }
                 _ => Ok(()),
             });
         if let Err(e) = res {

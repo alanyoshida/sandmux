@@ -478,6 +478,8 @@ fn start(
                         config_dir: shared.base.config_dir.clone(),
                     }),
                     harness: String::new(),
+                    sandbox_pid: None,
+                    sock_diag: None,
                 };
                 gateway = sandmux_net::spawn(tun, cfg).ok();
             }

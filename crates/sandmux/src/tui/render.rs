@@ -2859,8 +2859,20 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
                             (None, true) => tr!("novo", "new").into(),
                             _ => String::new(),
                         };
+                        // O processo (o nome do executável e o pid), quando há.
+                        let processo = match (&x.exe, x.pid) {
+                            (Some(e), Some(p)) => format!(
+                                " [{} {p}]",
+                                std::path::Path::new(e)
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_default()
+                            ),
+                            (None, Some(p)) => format!(" [{p}]"),
+                            _ => String::new(),
+                        };
                         format!(
-                            "{hora} {:<4} {} {}:{} {}/{} {nota}",
+                            "{hora} {:<4} {} {}:{}{processo} {}/{} {nota}",
                             x.proto,
                             x.domain,
                             x.ip,

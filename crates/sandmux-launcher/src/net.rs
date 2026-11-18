@@ -161,6 +161,21 @@ pub fn setup(open: bool) -> io::Result<Option<OwnedFd>> {
     Ok(Some(tun))
 }
 
+/// Um socket de sock_diag (`NETLINK_SOCK_DIAG`) no namespace de rede atual.
+pub fn diag_socket() -> io::Result<OwnedFd> {
+    // SAFETY: socket() com argumentos numéricos; o descritor é nosso.
+    let fd = unsafe {
+        libc::socket(
+            libc::AF_NETLINK,
+            libc::SOCK_DGRAM | libc::SOCK_CLOEXEC,
+            libc::NETLINK_SOCK_DIAG,
+        )
+    };
+    check(fd)?;
+    // SAFETY: descritor recém-criado, nosso.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
 /// Par de sockets para levar o TUN do filho ao supervisor.
 pub fn pair() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0 as RawFd; 2];

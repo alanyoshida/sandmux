@@ -1090,3 +1090,80 @@ fn porta_do_host_acrescentada_ao_vivo_sem_eco() {
     t.write(b"\x02d");
     t.wait_exit();
 }
+
+/// Sem o auxiliar root, o processo de uma conexão vem do `/proc` do sandbox.
+#[test]
+fn processo_da_conexao_pelo_proc() {
+    let env = Env::new();
+    let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = tcp.local_addr().unwrap().port();
+    // O cliente fala primeiro; o servidor responde depois de 1 s, com o
+    // socket do cliente aberto.
+    let srv = std::thread::spawn(move || {
+        let (mut c, _) = tcp.accept().unwrap();
+        let mut buf = [0u8; 8];
+        let _ = c.read(&mut buf);
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let _ = c.write_all(b"y");
+    });
+    let script = format!(
+        r#"python3 -c '
+import socket
+s = socket.create_connection(("host.sandmux.internal", {port}), timeout=5)
+s.sendall(b"x")
+s.recv(8)
+s.close()
+print("ok")
+'"#
+    );
+    assert_eq!(shell(&env, &[], &script), "ok\n");
+    srv.join().unwrap();
+    let lines = log_lines(&env);
+    let t = lines
+        .iter()
+        .find(|l| l["proto"] == "tcp" && l["port"] == port)
+        .unwrap_or_else(|| panic!("{lines:?}"));
+    assert_eq!(t["proc_via"], "proc", "{t}");
+    assert!(t["pid"].as_u64().is_some_and(|p| p > 0), "{t}");
+    assert!(
+        t["exe"].as_str().is_some_and(|e| e.contains("python")),
+        "{t}"
+    );
+}
+
+/// Conexões curtas (cerca de 2 ms cada) também ganham o processo: o gateway
+/// procura o socket antes de abrir a conexão de saída, enquanto o processo
+/// espera a resposta.
+#[test]
+fn processo_das_conexoes_curtas() {
+    let env = Env::new();
+    let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = tcp.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for c in tcp.incoming().flatten() {
+            let mut c = c;
+            let mut b = [0u8; 4];
+            let _ = c.read(&mut b);
+            let _ = c.write_all(b"y");
+        }
+    });
+    let script = format!(
+        r#"python3 -c '
+import socket
+for i in range(50):
+    s = socket.create_connection(("host.sandmux.internal", {port}), timeout=5); s.sendall(b"x"); s.recv(4); s.close()
+print("ok")
+'"#
+    );
+    assert_eq!(shell(&env, &[], &script), "ok\n");
+    let lines = log_lines(&env);
+    let mine: Vec<_> = lines.iter().filter(|l| l["port"] == port).collect();
+    assert_eq!(mine.len(), 50, "{lines:?}");
+    for l in mine {
+        assert_eq!(l["proc_via"], "proc", "{l}");
+        assert!(
+            l["exe"].as_str().is_some_and(|e| e.contains("python")),
+            "{l}"
+        );
+    }
+}

@@ -666,3 +666,189 @@ fn custo_das_execucoes() {
     t.write(b"exit\r");
     t.wait_exit();
 }
+
+/// O programa de conexões no kernel: o `observe` de um escopo recebe a
+/// conexão TCP de um processo dele, com a porta de origem certa.
+#[test]
+fn observacao_de_conexoes_no_kernel() {
+    let Some(sock) = helper() else { return };
+    let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = srv.local_addr().unwrap().port();
+    let mut child = Command::new("systemd-run")
+        .args(["--user", "--scope", "--quiet", "--", "bash", "-c"])
+        .arg(format!("sleep 2; exec 3<>/dev/tcp/127.0.0.1/{port}"))
+        .spawn()
+        .unwrap();
+    let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let dir = loop {
+        let cg =
+            std::fs::read_to_string(format!("/proc/{}/cgroup", child.id())).unwrap_or_default();
+        if let Some(rel) = cg.trim().strip_prefix("0::")
+            && rel.ends_with(".scope")
+            && cg != own
+        {
+            break Path::new("/sys/fs/cgroup").join(rel.trim_start_matches('/'));
+        }
+        assert!(Instant::now() < deadline, "sem escopo: {cg}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let c = sandmux::helper::Client::connect(&sock).unwrap();
+    let ev = c.take_events().unwrap();
+    c.observe(&dir).unwrap();
+    // O `accept` com tempo limite: sem a conexão, o teste falha em vez de
+    // ficar parado.
+    srv.set_nonblocking(true).unwrap();
+    let fim = Instant::now() + Duration::from_secs(10);
+    let peer = loop {
+        match srv.accept() {
+            Ok((conn, peer)) => {
+                drop(conn);
+                break peer;
+            }
+            Err(_) if Instant::now() < fim => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => panic!("a conexão não chegou: {e}"),
+        }
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut achou = false;
+    while Instant::now() < deadline && !achou {
+        if let Ok(v) = ev.recv_timeout(Duration::from_millis(200)) {
+            for e in v["ev"].as_array().into_iter().flatten() {
+                if e["kind"] == "conn" && e["dport"] == port {
+                    assert_eq!(e["sport"], peer.port(), "{e}");
+                    assert_eq!(e["ip"], "127.0.0.1", "{e}");
+                    assert!(e["pid"].as_u64().unwrap() > 0, "{e}");
+                    achou = true;
+                }
+            }
+        }
+    }
+    let _ = child.wait();
+    assert!(achou, "o evento da conexão não chegou");
+}
+
+/// Linhas do registro de rede deste ambiente.
+fn net_lines(e: &Env) -> Vec<serde_json::Value> {
+    let dir = e.state.join("sandmux/net");
+    let mut out = Vec::new();
+    for f in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        if f.path().extension().is_some_and(|x| x == "jsonl") {
+            let text = std::fs::read_to_string(f.path()).unwrap();
+            out.extend(text.lines().filter_map(|l| serde_json::from_str(l).ok()));
+        }
+    }
+    out
+}
+
+/// Com o auxiliar, o processo das conexões de uma aba vem do kernel; as
+/// conexões do Docker ficam sem processo.
+#[test]
+fn processo_das_conexoes_pelo_kernel() {
+    if helper().is_none() {
+        return;
+    }
+    let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = srv.local_addr().unwrap().port();
+    let t_srv = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let (mut c, _) = srv.accept().unwrap();
+        let mut buf = [0u8; 8];
+        let _ = c.read(&mut buf);
+        let _ = c.write_all(b"y");
+    });
+    let e = Env::new();
+    let mut t = term(&e, &e.work);
+    let s = run_in(
+        &mut t,
+        &e.work,
+        &format!(
+            "sleep 1.5
+python3 -c 'import socket;s=socket.create_connection((\"host.sandmux.internal\",{port}),timeout=5);s.sendall(b\"x\");s.recv(8);s.close();print(\"CONECTOU\")'
+{IMAGEM}
+docker run --rm sx wget -q -T 2 -O /dev/null http://169.254.169.254/ ; echo FIM"
+        ),
+    );
+    assert!(s.contains("CONECTOU") && s.contains("FIM"), "{s}");
+    t_srv.join().unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    let l = net_lines(&e);
+    let c = l
+        .iter()
+        .find(|x| x["proto"] == "tcp" && x["port"] == port)
+        .unwrap_or_else(|| panic!("sem a conexão: {l:?}"));
+    assert_eq!(c["proc_via"], "kernel", "{c}");
+    assert!(
+        c["exe"].as_str().is_some_and(|x| x.contains("python")),
+        "{c}"
+    );
+    assert!(c["pid"].as_u64().is_some_and(|p| p > 0), "{c}");
+    let docker: Vec<_> = l
+        .iter()
+        .filter(|x| x["tag"].as_str().is_some_and(|t| t.starts_with("docker-")))
+        .collect();
+    assert!(!docker.is_empty(), "sem linha do Docker: {l:?}");
+    assert!(docker.iter().all(|x| x.get("pid").is_none()), "{docker:?}");
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
+}
+
+/// Custo do processo das conexões: 200 conexões a um servidor local numa
+/// aba, com o auxiliar (kernel) e sem ele (sock_diag e `/proc`). Mede o
+/// tempo e confere que as linhas têm o processo; roda com
+/// `sudo scripts/check-root.sh --ignored custo_das_con --nocapture`.
+#[test]
+#[ignore]
+fn custo_das_conexoes() {
+    if helper().is_none() {
+        return;
+    }
+    let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = srv.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        for c in srv.incoming().flatten() {
+            let mut c = c;
+            let mut b = [0u8; 4];
+            let _ = c.read(&mut b);
+            let _ = c.write_all(b"y");
+        }
+    });
+    let script = format!(
+        "sleep 1.5; s=$(date +%s%N); python3 -c 'import socket
+for i in range(200):
+    s=socket.create_connection((\"host.sandmux.internal\",{port}),timeout=5); s.sendall(b\"x\"); s.recv(4); s.close()'; e=$(date +%s%N); echo T=$(( (e-s)/1000000 ))"
+    );
+    for com in [false, true, false, true] {
+        let e = Env::new();
+        let mut cmd = e.cmd(&e.work, &["run", "shell"]);
+        cmd.env("SHELL", "/bin/bash");
+        if !com {
+            cmd.env("SANDMUX_HELPER_SOCKET", "/nonexistent/sem-auxiliar");
+        }
+        let mut t = Term::spawn(cmd, 160, 40);
+        let s = run_in(&mut t, &e.work, &script);
+        std::thread::sleep(Duration::from_millis(1500));
+        let l = net_lines(&e);
+        let com_proc = l
+            .iter()
+            .filter(|x| x["port"] == port && x.get("pid").is_some())
+            .count();
+        eprintln!(
+            "MEDIDA {}: 200 conexões em {} ms; {com_proc} de {} linhas com processo",
+            if com {
+                "com o auxiliar"
+            } else {
+                "sem o auxiliar"
+            },
+            s.lines().find_map(|x| x.strip_prefix("T=")).unwrap_or("?"),
+            l.iter().filter(|x| x["port"] == port).count()
+        );
+        // As conexões duram cerca de 2 ms: o gateway espera a busca antes
+        // de abrir a conexão de saída, e quase todas ganham o processo.
+        assert!(com_proc >= 190, "{com_proc} de 200 com processo");
+        t.write(b"exit\r");
+        t.wait_exit();
+    }
+}

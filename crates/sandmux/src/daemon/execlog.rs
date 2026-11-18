@@ -14,6 +14,70 @@ use serde_json::Value;
 use super::Shared;
 use crate::helper::Client;
 
+/// Teto de conexões guardadas por aba.
+pub const MAX_CONNS: usize = 4096;
+
+/// A chave de uma conexão: a porta de origem, o IP e a porta de destino.
+pub type ConnKey = (u16, String, u16);
+/// O processo de uma conexão: o pid e o executável.
+pub type ConnProc = (u32, String);
+
+/// As conexões TCP de uma aba vistas pelo kernel: (porta de origem, IP e
+/// porta de destino) → (pid, executável). As mais velhas saem primeiro.
+#[derive(Default)]
+pub struct Conns {
+    map: std::collections::HashMap<ConnKey, ConnProc>,
+    order: std::collections::VecDeque<ConnKey>,
+}
+
+impl Conns {
+    pub fn insert(&mut self, key: ConnKey, v: ConnProc) {
+        if self.map.insert(key.clone(), v).is_none() {
+            self.order.push_back(key);
+        }
+        while self.order.len() > MAX_CONNS {
+            if let Some(k) = self.order.pop_front() {
+                self.map.remove(&k);
+            }
+        }
+    }
+
+    pub fn get(&self, key: &ConnKey) -> Option<&ConnProc> {
+        self.map.get(key)
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
+/// O processo de uma conexão do lançamento `tag`: o pid e o executável, se
+/// o kernel a registrou, e se a aba está pelo kernel.
+pub fn conn_process(
+    shared: &Shared,
+    tag: &str,
+    sport: u16,
+    ip: &str,
+    port: u16,
+) -> (Option<(u32, String)>, bool) {
+    let st = shared.lock();
+    let Some(s) = st
+        .sessions
+        .values()
+        .find(|s| s.tags.last().is_some_and(|t| t == tag))
+    else {
+        return (None, false);
+    };
+    (
+        s.conns.get(&(sport, ip.to_string(), port)).cloned(),
+        s.exec_obs.is_some(),
+    )
+}
+
 /// A observação de uma aba: a conexão com o auxiliar. Soltá-la desfaz a
 /// observação (a thread que lê os eventos termina junto).
 pub struct ExecObs {
@@ -123,6 +187,15 @@ fn run(shared: &Arc<Shared>, id: u32, pid: i32, cg: &Path) {
         for e in entries(&msg, &tag, &workdir) {
             super::dockerfiles::write_entry(&e);
         }
+        let conns = conn_events(&msg);
+        if !conns.is_empty() {
+            let mut st = shared.lock();
+            if let Some(s) = st.sessions.get_mut(&id) {
+                for (k, v) in conns {
+                    s.conns.insert(k, v);
+                }
+            }
+        }
     }
     // A conexão caiu: com a aba ainda no mesmo lançamento, o supervisor volta.
     let why = tr!(
@@ -136,6 +209,31 @@ fn run(shared: &Arc<Shared>, id: u32, pid: i32, cg: &Path) {
             s.exec_obs = None;
         }
     }
+}
+
+/// As conexões de uma mensagem de eventos, com o executável lido em
+/// `/proc/<pid>/exe` (o processo quase sempre ainda vive).
+pub fn conn_events(msg: &Value) -> Vec<(ConnKey, ConnProc)> {
+    msg["ev"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|e| e["kind"] == "conn")
+        .filter_map(|e| {
+            let pid = e["pid"].as_u64()? as u32;
+            let exe = std::fs::read_link(format!("/proc/{pid}/exe"))
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            Some((
+                (
+                    e["sport"].as_u64()? as u16,
+                    e["ip"].as_str()?.to_string(),
+                    e["dport"].as_u64()? as u16,
+                ),
+                (pid, exe),
+            ))
+        })
+        .collect()
 }
 
 fn connect(cg: &Path) -> Result<Client, String> {
@@ -166,6 +264,28 @@ fn connect(cg: &Path) -> Result<Client, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mapa_de_conexoes() {
+        let mut c = Conns::default();
+        for i in 0..(MAX_CONNS + 10) {
+            c.insert((i as u16, "1.1.1.1".into(), 443), (i as u32, "/x".into()));
+        }
+        assert_eq!(c.len(), MAX_CONNS);
+        assert!(c.get(&(0, "1.1.1.1".into(), 443)).is_none());
+        assert_eq!(
+            c.get(&((MAX_CONNS + 9) as u16, "1.1.1.1".into(), 443)),
+            Some(&((MAX_CONNS + 9) as u32, "/x".into()))
+        );
+        let msg = serde_json::json!({"ev": [
+            {"kind": "conn", "pid": std::process::id(), "sport": 40000, "dport": 443, "ip": "1.1.1.1"},
+            {"kind": "exec", "pid": 1, "path": "/x"}
+        ]});
+        let v = conn_events(&msg);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].0, (40000, "1.1.1.1".into(), 443));
+        assert!(!v[0].1.1.is_empty(), "o executável do próprio teste");
+    }
 
     #[test]
     fn eventos_de_execucao_viram_linhas() {
