@@ -1549,6 +1549,61 @@ pub fn docker_marks(spec: &LaunchSpec, workdir: &Path) -> DockerMarks {
     m
 }
 
+/// Marca de um caminho no confinamento do Docker: os bits de
+/// `sandmux_ebpf` (1 nega, 2 protege, 4 diretório git), por caminho.
+pub type MarkSet = std::collections::BTreeMap<PathBuf, u32>;
+
+/// As marcas como conjunto, com os bits de cada caminho.
+pub fn mark_set(m: &DockerMarks) -> MarkSet {
+    let mut s = MarkSet::new();
+    for (v, bit) in [(&m.deny, 1u32), (&m.protect, 2), (&m.gitdir, 4)] {
+        for p in v {
+            *s.entry(p.clone()).or_default() |= bit;
+        }
+    }
+    s
+}
+
+/// O que muda de `old` para `new`: os bits a acrescentar e a tirar, por
+/// caminho.
+pub fn mark_diff(old: &MarkSet, new: &MarkSet) -> (MarkSet, MarkSet) {
+    let mut add = MarkSet::new();
+    let mut del = MarkSet::new();
+    for (p, &b) in new {
+        let o = old.get(p).copied().unwrap_or(0);
+        if b & !o != 0 {
+            add.insert(p.clone(), b & !o);
+        }
+    }
+    for (p, &o) in old {
+        let b = new.get(p).copied().unwrap_or(0);
+        if o & !b != 0 {
+            del.insert(p.clone(), o & !b);
+        }
+    }
+    (add, del)
+}
+
+/// Um caminho que apareceu na pasta de trabalho com o Docker rodando é
+/// negado aos contêineres? Sim quando a política de arquivos diz que é
+/// segredo (e o agente não o criou) ou negado, ou quando ele fica dentro de
+/// uma das pastas negadas `denied_dirs`.
+pub fn docker_mark_for(
+    policy: &sandmux_spec::files::FilePolicy,
+    created: impl Fn(&Path) -> bool,
+    denied_dirs: &[PathBuf],
+    path: &Path,
+) -> bool {
+    use sandmux_spec::files::FileVerdict;
+    if denied_dirs.iter().any(|d| path != d && path.starts_with(d)) {
+        return true;
+    }
+    matches!(
+        policy.decide(path, created),
+        FileVerdict::Deny(_) | FileVerdict::Secret
+    )
+}
+
 /// Visão de arquivos do Docker privado de uma pasta: sistema em somente
 /// leitura com as coberturas de `/etc`, a pasta de trabalho com a proteção do
 /// `.git`, a pasta de entrada, o `/dev` mínimo do sandbox, `/proc` novo,
@@ -1935,6 +1990,62 @@ mod docker_view_tests {
         .unwrap();
         let m = docker_marks(&spec, &outra);
         assert!(m.protect.is_empty() && m.gitdir.is_empty(), "{m:?}");
+    }
+
+    #[test]
+    fn diferenca_das_marcas() {
+        let p = |s: &str| PathBuf::from(s);
+        let old: MarkSet = [(p("/a"), 1), (p("/b"), 3), (p("/c"), 4)].into();
+        let new: MarkSet = [(p("/a"), 1), (p("/b"), 1), (p("/d"), 1)].into();
+        let (add, del) = mark_diff(&old, &new);
+        assert_eq!(add, [(p("/d"), 1)].into());
+        assert_eq!(del, [(p("/b"), 2), (p("/c"), 4)].into());
+        let m = DockerMarks {
+            deny: vec![p("/x")],
+            protect: vec![p("/x"), p("/h")],
+            gitdir: vec![p("/g")],
+        };
+        assert_eq!(
+            mark_set(&m),
+            [(p("/x"), 3), (p("/h"), 2), (p("/g"), 4)].into()
+        );
+    }
+
+    #[test]
+    fn decisao_de_um_caminho_novo() {
+        let (secrets, secret_exceptions) = sandmux_spec::files::default_secrets();
+        let w = PathBuf::from("/w");
+        let policy = sandmux_spec::files::FilePolicy {
+            secrets,
+            secret_exceptions,
+            workdir: w.clone(),
+            deny: vec![sandmux_spec::files::FilePattern::parse("*.sql", None).unwrap()],
+            ..Default::default()
+        };
+        let none = |_: &Path| false;
+        let dirs = vec![w.join("privado")];
+        assert!(docker_mark_for(&policy, none, &dirs, &w.join(".env")));
+        assert!(!docker_mark_for(
+            &policy,
+            none,
+            &dirs,
+            &w.join(".env.example")
+        ));
+        assert!(!docker_mark_for(
+            &policy,
+            |p: &Path| p.ends_with(".env"),
+            &dirs,
+            &w.join(".env")
+        ));
+        assert!(docker_mark_for(&policy, none, &dirs, &w.join("dados.sql")));
+        assert!(docker_mark_for(
+            &policy,
+            none,
+            &dirs,
+            &w.join("privado/novo/x.txt")
+        ));
+        assert!(!docker_mark_for(&policy, none, &dirs, &w.join("privado")));
+        assert!(!docker_mark_for(&policy, none, &dirs, &w.join("a.txt")));
     }
 
     #[test]

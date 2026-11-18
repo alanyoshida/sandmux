@@ -120,6 +120,15 @@ sandmux files --days 7   # dos últimos 7 dias
 
 Mostra as últimas 200 linhas, com a hora, a sessão, o acesso, o caminho e o bloqueio.
 
+### Contêineres do Docker privado
+
+Com o [confinamento por eBPF](docker.md#confinamento-por-ebpf), o registro também tem as linhas dos contêineres do Docker privado da pasta, com a etiqueta `docker-<id>` e o caminho do host:
+
+- cada operação negada, com o motivo (`segredo`, `file-deny: <padrão>`, `.git` ou `cobertura`);
+- cada arquivo que um contêiner cria na pasta de trabalho, uma vez por subida do Docker.
+
+As leituras e escritas comuns dos contêineres não entram. Uma linha com o caminho da pasta e o acesso `?` diz quantos eventos foram descartados com a fila cheia. `sandmux files <id>` mostra essas linhas junto com as da sessão, na coluna da sessão como `docker`.
+
 ## Retenção
 
 O registro de arquivos segue a retenção do registro de rede: `net-log-days` (padrão 30 dias) e `net-log-max` (padrão `"500M"`), em `[global]` na [configuração](config.md). O daemon apaga os arquivos velhos ao subir e de hora em hora.

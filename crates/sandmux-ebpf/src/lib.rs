@@ -8,6 +8,7 @@
 pub mod asm;
 pub mod btf;
 pub mod prog;
+pub mod ring;
 pub mod sys;
 
 /// Lista dos LSMs ativos no kernel.

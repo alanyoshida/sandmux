@@ -92,6 +92,7 @@ const CLS_STX: u8 = 0x03;
 const CLS_JMP: u8 = 0x05;
 const CLS_ALU64: u8 = 0x07;
 const MODE_MEM: u8 = 0x60;
+const MODE_ATOMIC: u8 = 0xc0;
 const SRC_K: u8 = 0x00;
 const SRC_X: u8 = 0x08;
 
@@ -244,6 +245,18 @@ impl Asm {
         ));
     }
 
+    /// `*(u64 *)(dst + off) += src`, atômico (`BPF_STX | BPF_ATOMIC`, com
+    /// `BPF_ADD` no imediato).
+    pub fn atomic_add64(&mut self, dst: Reg, off: i16, src: Reg) {
+        self.push(Insn::new(
+            CLS_STX | MODE_ATOMIC | Size::DW.bits(),
+            dst,
+            src,
+            off,
+            0,
+        ));
+    }
+
     fn jump(&mut self, code: u8, dst: Reg, src: Reg, imm: i32, to: Label) {
         self.fixups.insert(self.insns.len(), to);
         self.push(Insn::new(code, dst, src, 0, imm));
@@ -358,6 +371,17 @@ mod tests {
         let l = a.label();
         a.ja(l);
         assert!(a.finish().is_err());
+    }
+
+    #[test]
+    fn soma_atomica() {
+        let mut a = Asm::new();
+        a.atomic_add64(R0, 0, R1);
+        // BPF_STX | BPF_ATOMIC | BPF_DW = 0xdb, origem R1, imediato BPF_ADD.
+        assert_eq!(
+            a.finish().unwrap()[0].bytes(),
+            [0xdb, 0x10, 0, 0, 0, 0, 0, 0]
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@ Name:           sandmux
 Version:        %{sandmux_version}
 Release:        1
 Summary:        Multiplexador de terminal para agentes de código em sandbox
-License:        MIT OR Apache-2.0
+License:        MIT
 URL:            https://github.com/alanyoshida/sandmux
 Source0:        sandmux-%{version}-x86_64-linux.tar.gz
 ExclusiveArch:  x86_64
@@ -47,7 +47,7 @@ if [ "$1" -eq 0 ] && [ -d /run/systemd/system ]; then
 fi
 
 %files
-%license LICENSE-MIT LICENSE-APACHE
+%license LICENSE
 %doc README.md
 %{_bindir}/sandmux
 %{_bindir}/sandmuxd

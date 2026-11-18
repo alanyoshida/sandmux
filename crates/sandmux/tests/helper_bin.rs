@@ -51,7 +51,7 @@ fn sem_root_recusa_e_continua() {
     let cg = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
     if let Some(rel) = cg.trim().strip_prefix("0::") {
         let dir = Path::new("/sys/fs/cgroup").join(rel.trim_start_matches('/'));
-        let e = c.confine(&dir).unwrap_err();
+        let e = c.confine(&dir, 0).unwrap_err();
         assert!(!e.is_empty());
     }
     assert!(Client::connect(&sock).unwrap().status().is_ok());

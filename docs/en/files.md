@@ -122,6 +122,15 @@ sandmux files --days 7   # from the last 7 days
 
 Shows the last 200 lines, with the time, the session, the access, the path and the block.
 
+### Private Docker containers
+
+With the [eBPF confinement](docker.md#ebpf-confinement), the log also has the lines of the folder's private Docker containers, with the `docker-<id>` tag and the host path:
+
+- every denied operation, with the reason (`segredo` (secret), `file-deny: <pattern>`, `.git` or `cobertura` (cover));
+- every file a container creates in the work folder, once per Docker start.
+
+Containers' ordinary reads and writes are not logged. A line with the folder's path and access `?` says how many events were dropped with the queue full. `sandmux files <id>` shows these lines together with the session's, with `docker` in the session column.
+
 ## Retention
 
 The file log follows the retention of the network log: `net-log-days` (default 30 days) and `net-log-max` (default `"500M"`), in `[global]` in the [configuration](config.md). The daemon deletes old files when it starts and every hour.

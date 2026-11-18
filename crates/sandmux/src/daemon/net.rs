@@ -368,6 +368,8 @@ fn with_docker_secrets(
 
 /// Regrava a política do Docker da pasta, quando ele está rodando.
 pub fn refresh_engine(shared: &Shared, workdir: &std::path::Path) {
+    // A política de arquivos ao vivo, no confinamento por eBPF.
+    shared.docker.refresh_marks(shared, workdir);
     if let Some(f) = shared.docker.policy_file(workdir) {
         let p = engine_policy(shared, workdir);
         if let Err(e) = write_policy(&f, &p) {

@@ -26,6 +26,11 @@ The decision is by file (the inode), not by path. That is why unmounting a cover
 - The helper never opens a path. Files arrive as descriptors opened by the user, who thereby proves they can reach the file.
 - **Per-user limits:** 16 active confinements, each with up to 16384 marks. A request above that is refused, without affecting the others.
 
+## Live and events
+
+- **Unmark:** the daemon also asks for `unmark`, when the folder's file policy changes and a path is no longer denied. The helper removes the mark and releases the file's descriptor.
+- **Events:** the programs send an event through a kernel queue when they deny an operation and when a container creates a file on the folder's file system. The helper reads the queue and sends the events to the daemon over the same confinement connection. The event has the type, the hook, the inode and the created file's name, never the content of a file. With the queue full, extra events are dropped and counted, and containers do not wait.
+
 ## How long the rules last
 
 The rules and marks apply while the daemon's connection to the helper is open. They go away when:

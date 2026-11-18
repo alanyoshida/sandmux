@@ -207,14 +207,14 @@ fn auxiliar_recusa_cgroup_alheio_e_solta_no_fim() {
     let c = sandmux::helper::Client::connect(&sock).unwrap();
     let s = c.status().unwrap();
     assert!(s.lsm, "{s:?}");
-    let e = c.confine(Path::new("/sys/fs/cgroup")).unwrap_err();
+    let e = c.confine(Path::new("/sys/fs/cgroup"), 0).unwrap_err();
     assert!(e.contains("pertence ao uid 0"), "{e}");
     // Um cgroup do próprio usuário: o do teste.
     let cg = std::fs::read_to_string("/proc/self/cgroup").unwrap();
     let rel = cg.trim().strip_prefix("0::").unwrap();
     let dir = Path::new("/sys/fs/cgroup").join(rel.trim_start_matches('/'));
     let c2 = sandmux::helper::Client::connect(&sock).unwrap();
-    match c2.confine(&dir) {
+    match c2.confine(&dir, 0) {
         Ok(attach) => {
             let progs = || {
                 Command::new("bpftool")
@@ -333,4 +333,144 @@ done"
             if com { "com eBPF" } else { "sem eBPF" }
         );
     }
+}
+
+/// Arquivos criados com o Docker rodando: o `.env` novo e o que aparece no
+/// host dentro de uma pasta negada são negados; o segredo do agente, não.
+#[test]
+fn arquivos_novos_negados_ao_vivo() {
+    if helper().is_none() {
+        return;
+    }
+    let e = Env::new();
+    let privado = e.work.join("privado");
+    std::fs::create_dir_all(&privado).unwrap();
+    e.write_config(&format!(
+        "[project.\"{}\"]\nfile-deny = [\"{}\"]\n",
+        e.work.display(),
+        privado.display()
+    ));
+    let mut t = term(&e, &e.work);
+    let s = run_in(
+        &mut t,
+        &e.work,
+        &format!("{IMAGEM}\ndocker ps >/dev/null && echo UP"),
+    );
+    assert!(s.contains("UP"), "{s}");
+    assert!(stats(&e).contains("eBPF: ligado"));
+    std::fs::write(e.work.join(".env"), "SEGREDO=novo\n").unwrap();
+    std::fs::write(privado.join("outro.txt"), "outro\n").unwrap();
+    let s = run_in(&mut t, &e.work, "echo do-agente > chave.pem; echo CRIADO");
+    assert!(s.contains("CRIADO"), "{s}");
+    std::thread::sleep(Duration::from_millis(1500));
+    let s = run_in(
+        &mut t,
+        &e.work,
+        "P='docker run --rm --privileged -v '$PWD':/w sx sh -c'
+$P 'cat /w/.env && echo ENV-LIDO || echo ENV-NEGADO'
+$P 'umount /w/privado; cat /w/privado/outro.txt && echo OUTRO-LIDO || echo OUTRO-NEGADO'
+$P 'cat /w/chave.pem'
+echo FIM",
+    );
+    assert!(
+        s.contains("ENV-NEGADO") && !s.contains("SEGREDO=novo"),
+        "{s}"
+    );
+    assert!(s.contains("OUTRO-NEGADO") && !s.contains("outro\n"), "{s}");
+    assert!(s.contains("do-agente"), "{s}");
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
+}
+
+/// A política de arquivos ao vivo: negar vale na leitura seguinte; liberar
+/// tira a negação no kernel, e o arquivo coberto chega vazio.
+#[test]
+fn politica_de_arquivos_ao_vivo() {
+    if helper().is_none() {
+        return;
+    }
+    let e = Env::new();
+    std::fs::write(e.work.join("dados.csv"), "linha\n").unwrap();
+    std::fs::write(e.work.join(".env"), "SEGREDO=velho\n").unwrap();
+    let mut t = term(&e, &e.work);
+    let s = run_in(
+        &mut t,
+        &e.work,
+        &format!(
+            "{IMAGEM}
+P='docker run --rm --privileged -v '$PWD':/w sx sh -c'
+$P 'cat /w/dados.csv'
+$P 'umount /w/.env; cat /w/.env && echo ENV-ABRIU || echo ENV-NEGADO'"
+        ),
+    );
+    assert!(s.contains("linha") && s.contains("ENV-NEGADO"), "{s}");
+    e.write_config(&format!(
+        "[project.\"{}\"]\nfile-deny = [\"{}\"]\nfile-allow = [\"{}\"]\n",
+        e.work.display(),
+        e.work.join("dados.csv").display(),
+        e.work.join(".env").display()
+    ));
+    std::thread::sleep(Duration::from_millis(3000));
+    let s = run_in(
+        &mut t,
+        &e.work,
+        "P='docker run --rm -v '$PWD':/w sx sh -c'
+$P 'cat /w/dados.csv && echo CSV-LIDO || echo CSV-NEGADO'
+$P 'cat /w/.env && echo ENV-ABRIU || echo ENV-NEGADO'
+echo PRIV
+docker run --rm --privileged -v $PWD:/w sx sh -c 'umount /w/.env; cat /w/.env'",
+    );
+    assert!(s.contains("CSV-NEGADO") && !s.contains("linha"), "{s}");
+    let (comum, priv_) = s.split_once("PRIV").unwrap();
+    // Liberado no kernel, mas ainda coberto pela montagem: um contêiner comum
+    // abre o arquivo vazio; sem a cobertura, o conteúdo.
+    assert!(
+        comum.contains("ENV-ABRIU") && !comum.contains("SEGREDO=velho"),
+        "{s}"
+    );
+    assert!(priv_.contains("SEGREDO=velho"), "{s}");
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
+}
+
+/// O registro tem os bloqueios e as criações dos contêineres, com o caminho
+/// do host, e nada do que é criado fora da pasta.
+#[test]
+fn registro_dos_conteineres() {
+    if helper().is_none() {
+        return;
+    }
+    let e = Env::new();
+    std::fs::write(e.work.join(".env"), "SEGREDO=do-usuario\n").unwrap();
+    let mut t = term(&e, &e.work);
+    let s = run_in(
+        &mut t,
+        &e.work,
+        &format!(
+            "{IMAGEM}
+P='docker run --rm --privileged -v '$PWD':/w sx sh -c'
+$P 'umount /w/.env; cat /w/.env; echo oi > /w/saida.txt; echo x > /tmp/x-do-conteiner; echo FEITO'"
+        ),
+    );
+    assert!(s.contains("FEITO"), "{s}");
+    std::thread::sleep(Duration::from_millis(1500));
+    let out = stdout(&e.run(&e.work, &["files", "1"]));
+    let env = e.work.join(".env").display().to_string();
+    let saida = e.work.join("saida.txt").display().to_string();
+    assert!(
+        out.lines()
+            .any(|l| l.contains("docker") && l.contains(&env) && l.contains(" r ")),
+        "{out}"
+    );
+    assert!(
+        out.lines()
+            .any(|l| l.contains("docker") && l.contains(&saida) && l.contains("create")),
+        "{out}"
+    );
+    assert!(!out.contains("x-do-conteiner"), "{out}");
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
 }

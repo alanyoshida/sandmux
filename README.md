@@ -1,5 +1,9 @@
 # sandmux
 
+[![Licença](https://img.shields.io/badge/licença-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/alanyoshida/sandmux)](https://github.com/alanyoshida/sandmux/releases/latest)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
+
 > English: [README.en.md](README.en.md)
 
 Multiplexador de terminal para rodar agentes de código dentro de um sandbox de segurança.
@@ -305,4 +309,4 @@ O primeiro change (`add-sandbox-cli`) está implementado e arquivado. Para rodar
 
 ## Licença
 
-Licença dupla, MIT ou Apache-2.0, à sua escolha: [LICENSE-MIT](LICENSE-MIT) e [LICENSE-APACHE](LICENSE-APACHE).
+MIT, veja [LICENSE](LICENSE).

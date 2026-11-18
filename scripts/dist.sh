@@ -32,7 +32,7 @@ done
 cp packaging/install.sh "$OUT/$NAME/install.sh"
 cp packaging/apparmor/sandmux-run "$OUT/$NAME/apparmor/sandmux-run"
 cp packaging/systemd/sandmux-helper.socket packaging/systemd/sandmux-helper.service.in "$OUT/$NAME/systemd/"
-cp LICENSE-MIT LICENSE-APACHE README.md "$OUT/$NAME/"
+cp LICENSE README.md "$OUT/$NAME/"
 chmod 0755 "$OUT/$NAME/install.sh"
 
 echo "== tarballs"
@@ -54,7 +54,7 @@ sed 's|@SANDMUX_RUN@|/usr/bin/sandmux-run|' packaging/apparmor/sandmux-run >"$DE
 install -m 0644 packaging/systemd/sandmux-helper.socket "$DEB/usr/lib/systemd/system/"
 sed 's|@SANDMUX_HELPER@|/usr/bin/sandmux-helper|' packaging/systemd/sandmux-helper.service.in >"$DEB/usr/lib/systemd/system/sandmux-helper.service"
 chmod 0644 "$DEB/usr/lib/systemd/system/sandmux-helper.service"
-cp LICENSE-MIT LICENSE-APACHE "$DEB/usr/share/doc/sandmux/"
+cp LICENSE "$DEB/usr/share/doc/sandmux/"
 sed "s/@VERSION@/$VERSION/" packaging/deb/control.in >"$DEB/DEBIAN/control"
 echo "/etc/apparmor.d/sandmux-run" >"$DEB/DEBIAN/conffiles"
 install -m 0755 packaging/deb/postinst "$DEB/DEBIAN/postinst"
@@ -90,7 +90,6 @@ pkgbase = sandmux-bin
 	install = sandmux.install
 	arch = x86_64
 	license = MIT
-	license = Apache-2.0
 	provides = sandmux
 	conflicts = sandmux
 	source = https://github.com/alanyoshida/sandmux/releases/download/v$VERSION/$NAME.tar.gz

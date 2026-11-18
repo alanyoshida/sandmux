@@ -50,6 +50,19 @@ Unmounting a cover, removing the read-only flag, renaming, creating a hard link 
 
 Without the helper, without `bpf` in the kernel's LSM list or without the caps slice, the Docker starts with the unprivileged protections only. `sandmux stats <id>` shows the "eBPF confinement" line with the reason, and `sandmux doctor` shows how to turn it on. If the helper stops with the Docker running, the folder's Docker stops, and the next `docker` starts another.
 
+### Live
+
+With the confinement on, the Docker that is already running follows the folder and the configuration:
+
+- **New files:** the daemon watches the work folder with inotify. Within 1 second, it denies containers:
+  - a secret-looking file created later, that the agent did not create;
+  - everything that appears inside a denied folder, including what you create on the host.
+
+  A secret the agent itself creates stays readable to containers. With no inotify watches available (`fs.inotify.max_user_watches`), the daemon rescans the folder every 10 seconds, and `sandmux stats` warns.
+- **Live policy:** a change in the folder configuration's `file-deny`, `file-allow`, `secret-files` or `secret-files-off` applies on the next operation, without restarting the Docker.
+  - Allowing a path removes the denial in the kernel, but the mount cover made at startup stays: an ordinary container sees the file empty until the Docker starts again.
+- **Log:** every operation denied to a container and every file a container creates in the work folder go into the [file log](files.md#log), with the `docker-<id>` tag and the host path. Containers' ordinary reads and writes are not logged.
+
 ## When it starts and when it stops
 
 - **Starts** on the first connection to the socket. A session that never runs `docker` starts no Docker at all. The first call waits 1 to 3 seconds.
@@ -139,5 +152,6 @@ Error response from daemon: the private Docker is not available on this machine:
 - `--privileged` gives no real privilege: the container's root is the user, mapped.
 - A container that needs a host device outside the list, such as a VPN with `/dev/net/tun` or a file system with `/dev/fuse`, does not work in the private Docker.
 - **Without the eBPF confinement, covers fall to a privileged container.** With `--privileged`, a container has `CAP_SYS_ADMIN` in the user namespace where the view was mounted, and can unmount a cover or remove the read-only flag from a bind. This applies to the covered secrets and denied paths and to the `.git` protection (hooks and config read-only). An ordinary container cannot. With the [eBPF confinement](#ebpf-confinement), the kernel denies by file, and undoing the mount does not help.
-- **Files created later are not covered.** A secret created in the folder with the Docker already running, a file you create inside a denied folder, or a change in the file policy, only applies when the folder's Docker starts again (after `sandmux daemon restart`, or when the folder's last session ends). With the eBPF confinement, containers themselves cannot create anything inside a denied folder.
-- **Without the rest of the file policy:** containers have no file log and no live policy. Without the eBPF confinement, they also have no `.git/commondir` refusal.
+- **Without the eBPF confinement, files created later are not covered.** A secret created in the folder with the Docker already running, a file you create inside a denied folder, or a change in the file policy, only applies when the folder's Docker starts again (after `sandmux daemon restart`, or when the folder's last session ends). With the confinement, they apply [live](#live), within 1 second.
+- **Without the eBPF confinement, without the rest of the file policy:** containers have no file log, no live policy and no `.git/commondir` refusal. With it, the log has only the denials and the creations.
+- **New-file window:** between a file's creation and the denial in the kernel, up to about 200 ms pass (the watcher's quiet wait), and a container that reads the file in that interval can read it.
