@@ -33,7 +33,7 @@ O foco principal é o sandbox, não a interface:
 | Regras do eBPF | O eBPF pode ter regras exclusivas. Cada uma é marcada como obrigatória (a aba não sobe sem eBPF) ou opcional (sobe com aviso) |
 | Ameaça alvo | Agente manipulado por prompt injection, tentando ativamente ler segredos e exfiltrar dados. Exploit de kernel fora do escopo |
 | Nome | `sandmux`, escolhido pelo usuário em 2026-11-12. Substitui `asmux`, escolhido antes no mesmo dia, e o nome de trabalho `agentmux`. Os binários seguem o nome: `sandmux`, `sandmuxd`, `sandmux-run`, `sandmux-helper` |
-| Licença | MIT e Apache-2.0, licença dupla |
+| Licença | MIT. Era MIT e Apache-2.0 em licença dupla; trocado para MIT apenas por decisão do usuário (2026-11-17) |
 | Distribuição na v1 | Binário estático com script de instalação, `cargo install`, pacotes deb e rpm, AUR e Homebrew |
 | Distros suportadas na v1 | Ubuntu LTS atual (26.04), Debian estável (13), Fedora atual e Arch: são as testadas e prometidas. O Ubuntu 24.04 com o kernel original (6.8) fica de fora pelo requisito de kernel do primeiro change |
 

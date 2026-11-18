@@ -1,5 +1,9 @@
 # sandmux
 
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/alanyoshida/sandmux)](https://github.com/alanyoshida/sandmux/releases/latest)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
+
 > Português: [README.md](README.md)
 
 Terminal multiplexer for running coding agents inside a security sandbox.
@@ -305,4 +309,4 @@ The first change (`add-sandbox-cli`) is implemented and archived. To run the ful
 
 ## License
 
-Dual license, MIT or Apache-2.0, at your choice: [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
+MIT, see [LICENSE](LICENSE).
