@@ -24,6 +24,10 @@ pub const RING_SIZE: u32 = 256 * 1024;
 /// Tipos de evento.
 pub const EV_DENY: u32 = 1;
 pub const EV_CREATE: u32 = 2;
+pub const EV_EXEC: u32 = 3;
+
+/// Bytes dos argumentos de uma execução, depois do caminho.
+pub const EXEC_ARGS: usize = 1024;
 
 /// Tamanho do cabeçalho de um evento e do nome que vem depois dele.
 pub const EV_HEADER: usize = 32;
@@ -44,8 +48,11 @@ pub struct Event {
     pub ino: u64,
     /// O `s_dev` do superbloco do diretório (criações).
     pub dev: u32,
-    /// O nome do arquivo criado (criações).
+    /// O nome do arquivo criado (criações) ou o caminho executado
+    /// (execuções).
     pub name: String,
+    /// Os argumentos de uma execução.
+    pub args: Vec<String>,
 }
 
 fn u32_at(b: &[u8], o: usize) -> u32 {
@@ -61,15 +68,28 @@ impl Event {
             return None;
         }
         let kind = u32_at(b, 0);
-        if kind != EV_DENY && kind != EV_CREATE {
+        if kind != EV_DENY && kind != EV_CREATE && kind != EV_EXEC {
             return None;
         }
         let len = u32_at(b, 28) as i32;
-        let name = if kind == EV_CREATE && len > 1 {
+        let name = if kind != EV_DENY && len > 1 {
             let end = (EV_HEADER + len as usize - 1).min(b.len());
             String::from_utf8_lossy(&b[EV_HEADER..end]).into_owned()
         } else {
             String::new()
+        };
+        let args = if kind == EV_EXEC {
+            let n = (u32_at(b, 24) as usize).min(EXEC_ARGS);
+            let start = EV_HEADER + EV_NAME;
+            let end = (start + n).min(b.len());
+            b.get(start..end)
+                .unwrap_or(&[])
+                .split(|&c| c == 0)
+                .filter(|a| !a.is_empty())
+                .map(|a| String::from_utf8_lossy(a).into_owned())
+                .collect()
+        } else {
+            Vec::new()
         };
         Some(Event {
             kind,
@@ -79,6 +99,7 @@ impl Event {
             ino: u64::from_le_bytes(b[16..24].try_into().expect("8 bytes")),
             dev: u32_at(b, 24),
             name,
+            args,
         })
     }
 }
@@ -281,6 +302,22 @@ mod tests {
         let e = Event::decode(&d).unwrap();
         assert!(e.write && e.bits == 1 && e.ino == 7 && e.name.is_empty());
         assert!(Event::decode(&[0; 8]).is_none());
+        // Execução: o pid no lugar do inode, o tamanho dos argumentos no do
+        // dispositivo.
+        let mut x = vec![0u8; EV_HEADER + EV_NAME + EXEC_ARGS];
+        x[0..4].copy_from_slice(&EV_EXEC.to_le_bytes());
+        x[16..24].copy_from_slice(&777u64.to_le_bytes());
+        let argv = b"ls\0-la\0/tmp\0";
+        x[24..28].copy_from_slice(&(argv.len() as u32).to_le_bytes());
+        x[28..32].copy_from_slice(&12u32.to_le_bytes());
+        x[32..43].copy_from_slice(b"/usr/bin/ls");
+        x[EV_HEADER + EV_NAME..EV_HEADER + EV_NAME + argv.len()].copy_from_slice(argv);
+        let e = Event::decode(&x).unwrap();
+        assert_eq!(
+            (e.kind, e.ino, e.name.as_str()),
+            (EV_EXEC, 777, "/usr/bin/ls")
+        );
+        assert_eq!(e.args, ["ls", "-la", "/tmp"]);
         assert!(Event::decode(&[9; EV_HEADER]).is_none());
     }
 }

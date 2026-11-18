@@ -575,7 +575,7 @@ fn command_process(spec: &LaunchSpec, err_w: &OwnedFd, files_w: &OwnedFd) -> ! {
     }
     // As aberturas de arquivo passam pelo supervisor. O descritor vai logo
     // depois da instalação: uma abertura antes dele esperaria o supervisor.
-    match seccomp::install_notify() {
+    match seccomp::install_notify(spec.files.as_ref().is_some_and(|f| f.exec_log)) {
         Ok(listener) => {
             if let Err(e) = net::send_fd(files_w, &listener) {
                 fail(

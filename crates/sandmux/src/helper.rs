@@ -33,6 +33,8 @@ pub const MAX_FDS: usize = 200;
 pub const MAX_CONFINE_PER_UID: usize = 16;
 /// Marcas por confinamento.
 pub const MAX_MARKS: usize = 16384;
+/// Observações de execução ativas por usuário (uma por aba).
+pub const MAX_OBSERVE_PER_UID: usize = 64;
 
 const CGROUP2_SUPER_MAGIC: i64 = 0x6367_7270;
 
@@ -222,6 +224,9 @@ pub trait Backend: Send + Sync {
     /// Liga o confinamento no cgroup. `dev` é o `s_dev` do superbloco da
     /// pasta de trabalho (0 quando não se sabe), que filtra as criações.
     fn confine(&self, cgroup: &OwnedFd, dev: u32) -> Result<Box<dyn Confined>, String>;
+    /// Observa as execuções do cgroup, sem regras de arquivos. Devolve a
+    /// fonte dos eventos.
+    fn observe(&self, cgroup: &OwnedFd) -> Result<Box<dyn Events>, String>;
     /// Confere que o descritor é um cgroup v2 de `uid` (o root pode
     /// qualquer um).
     fn check_cgroup(&self, cgroup: &OwnedFd, uid: u32) -> Result<(), String> {
@@ -266,11 +271,16 @@ pub fn check_cgroup(cgroup: &OwnedFd, uid: u32) -> Result<(), String> {
 pub struct Server {
     backend: Box<dyn Backend>,
     active: Mutex<HashMap<u32, usize>>,
+    observing: Mutex<HashMap<u32, usize>>,
 }
 
 struct Conn {
     uid: u32,
     confined: Option<Box<dyn Confined>>,
+    /// A observação pedida nesta conexão (os eventos vão pela thread).
+    observing: bool,
+    /// Eventos de uma observação nova, para a thread que os manda.
+    new_events: Option<Box<dyn Events>>,
 }
 
 fn err(msg: impl Into<String>) -> Value {
@@ -282,6 +292,7 @@ impl Server {
         Arc::new(Server {
             backend,
             active: Mutex::new(HashMap::new()),
+            observing: Mutex::new(HashMap::new()),
         })
     }
 
@@ -298,7 +309,7 @@ impl Server {
                 json!({"ok": true, "version": env!("CARGO_PKG_VERSION"), "lsm": lsm, "reason": reason})
             }
             Some("confine") => {
-                if c.confined.is_some() {
+                if c.confined.is_some() || c.observing {
                     return err(tr!(
                         "esta conexão já tem um confinamento",
                         "this connection already has a confinement"
@@ -346,6 +357,46 @@ impl Server {
                     }
                 }
             }
+            Some("observe") => {
+                if c.observing || c.confined.is_some() {
+                    return err(tr!(
+                        "esta conexão já tem um confinamento ou uma observação",
+                        "this connection already has a confinement or an observation"
+                    ));
+                }
+                let Ok([cg]) = <[OwnedFd; 1]>::try_from(fds) else {
+                    return err(tr!(
+                        "observe leva um descritor, o do cgroup",
+                        "observe takes one descriptor, the cgroup's"
+                    ));
+                };
+                if let Err(e) = self.backend.check_cgroup(&cg, c.uid) {
+                    return err(e);
+                }
+                {
+                    let mut a = self.observing.lock().unwrap_or_else(|e| e.into_inner());
+                    let n = a.entry(c.uid).or_default();
+                    if *n >= MAX_OBSERVE_PER_UID {
+                        return err(trf!(
+                            "limite de {MAX_OBSERVE_PER_UID} observações ativas por usuário",
+                            "limit of {MAX_OBSERVE_PER_UID} active observations per user"
+                        ));
+                    }
+                    *n += 1;
+                }
+                match self.backend.observe(&cg) {
+                    Ok(src) => {
+                        c.observing = true;
+                        c.new_events = Some(src);
+                        json!({"ok": true})
+                    }
+                    Err(e) => {
+                        self.release_observe(c.uid);
+                        eprintln!("sandmux-helper: uid {}: {e}", c.uid);
+                        err(e)
+                    }
+                }
+            }
             Some(op @ ("mark" | "unmark")) => {
                 let Some(kind) = v
                     .get("kind")
@@ -382,6 +433,13 @@ impl Server {
         }
     }
 
+    fn release_observe(&self, uid: u32) {
+        let mut a = self.observing.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = a.get_mut(&uid) {
+            *n = n.saturating_sub(1);
+        }
+    }
+
     fn release(&self, uid: u32) {
         let mut a = self.active.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(n) = a.get_mut(&uid) {
@@ -399,6 +457,8 @@ impl Server {
         let mut c = Conn {
             uid,
             confined: None,
+            observing: false,
+            new_events: None,
         };
         let mut bad = 0;
         loop {
@@ -408,6 +468,9 @@ impl Server {
                     let had = c.confined.is_some();
                     let r = self.handle(&mut c, &msg, fds);
                     if !had && let Some(src) = c.confined.as_ref().and_then(|x| x.events()) {
+                        forward_events(src, sock.clone(), send_lock.clone(), stop.clone());
+                    }
+                    if let Some(src) = c.new_events.take() {
                         forward_events(src, sock.clone(), send_lock.clone(), stop.clone());
                     }
                     r
@@ -429,6 +492,9 @@ impl Server {
         stop.store(true, std::sync::atomic::Ordering::SeqCst);
         if c.confined.take().is_some() {
             self.release(uid);
+        }
+        if c.observing {
+            self.release_observe(uid);
         }
     }
 }
@@ -481,12 +547,14 @@ fn forward_events(
 /// A carga real, pelo `sandmux-ebpf`.
 pub struct Ebpf {
     layout: Mutex<Option<Result<sandmux_ebpf::prog::Layout, String>>>,
+    exec: Mutex<Option<Result<sandmux_ebpf::exec::ExecLayout, String>>>,
 }
 
 impl Ebpf {
     pub fn new() -> Ebpf {
         Ebpf {
             layout: Mutex::new(None),
+            exec: Mutex::new(None),
         }
     }
 }
@@ -497,7 +565,12 @@ impl Default for Ebpf {
     }
 }
 
-struct Real(sandmux_ebpf::prog::Confinement);
+struct Real(
+    sandmux_ebpf::prog::Confinement,
+    /// O programa de execução, na fila do confinamento (programa e link).
+    #[allow(dead_code)]
+    Option<(OwnedFd, OwnedFd)>,
+);
 
 impl Confined for Real {
     fn mark(&mut self, fd: OwnedFd, bits: u32) -> Result<(), String> {
@@ -530,6 +603,9 @@ struct RealEvents {
 
 /// Um evento do kernel como JSON, com o nome do gancho.
 pub fn event_json(e: &sandmux_ebpf::ring::Event) -> Value {
+    if e.kind == sandmux_ebpf::ring::EV_EXEC {
+        return json!({"kind": "exec", "pid": e.ino, "path": e.name, "args": e.args});
+    }
     let hook = sandmux_ebpf::prog::HOOKS
         .get(e.hook as usize)
         .map(|h| h.name())
@@ -588,9 +664,76 @@ fn cgroup2_mount() -> Option<PathBuf> {
     })
 }
 
+impl Ebpf {
+    fn exec_layout(&self) -> Result<sandmux_ebpf::exec::ExecLayout, String> {
+        let mut g = self.exec.lock().unwrap_or_else(|e| e.into_inner());
+        g.get_or_insert_with(|| {
+            sandmux_ebpf::btf::Btf::vmlinux()
+                .and_then(|b| sandmux_ebpf::exec::ExecLayout::new(&b))
+                .map_err(|e| e.to_string())
+        })
+        .clone()
+    }
+
+    /// O confinamento com o programa de execução na fila dele. Sem o
+    /// programa, o confinamento vale do mesmo jeito (com um aviso no log).
+    fn with_exec(&self, c: sandmux_ebpf::prog::Confinement, cg: &OwnedFd) -> Real {
+        let exec = (|| -> Result<(OwnedFd, OwnedFd), String> {
+            let l = self.exec_layout()?;
+            let (level, id) = cgroup_level_id(cg)?;
+            let ring = c.ring().map_err(|e| e.to_string())?;
+            let drops = c.drops().map_err(|e| e.to_string())?;
+            sandmux_ebpf::exec::Observation::attach(&l, level, id, &ring, &drops)
+                .map_err(|e| e.to_string())
+        })();
+        let exec = match exec {
+            Ok(x) => Some(x),
+            Err(e) => {
+                eprintln!(
+                    "{}",
+                    trf!(
+                        "sandmux-helper: confinamento sem o registro de execuções: {e}",
+                        "sandmux-helper: confinement without the exec log: {e}"
+                    )
+                );
+                None
+            }
+        };
+        Real(c, exec)
+    }
+}
+
+struct ObsEvents {
+    _obs: sandmux_ebpf::exec::Observation,
+    inner: RealEvents,
+}
+
+impl Events for ObsEvents {
+    fn poll(&mut self, timeout_ms: i32) -> (Vec<Value>, u64) {
+        self.inner.poll(timeout_ms)
+    }
+}
+
 impl Backend for Ebpf {
     fn lsm(&self) -> Result<bool, String> {
         sandmux_ebpf::lsm_active()
+    }
+
+    fn observe(&self, cg: &OwnedFd) -> Result<Box<dyn Events>, String> {
+        let l = self.exec_layout()?;
+        let (level, id) = cgroup_level_id(cg)?;
+        let obs =
+            sandmux_ebpf::exec::Observation::load(&l, level, id).map_err(|e| e.to_string())?;
+        let reader = sandmux_ebpf::ring::Reader::new(
+            obs.ring().map_err(|e| e.to_string())?,
+            sandmux_ebpf::ring::RING_SIZE,
+        )
+        .map_err(|e| e.to_string())?;
+        let drops = obs.drops().map_err(|e| e.to_string())?;
+        Ok(Box::new(ObsEvents {
+            _obs: obs,
+            inner: RealEvents { reader, drops },
+        }))
     }
 
     fn confine(&self, cg: &OwnedFd, dev: u32) -> Result<Box<dyn Confined>, String> {
@@ -612,11 +755,11 @@ impl Backend for Ebpf {
             .map_err(Clone::clone)?;
         use sandmux_ebpf::prog::{Attach, Confinement};
         match Confinement::load(l, cg.as_raw_fd(), Attach::Cgroup, dev) {
-            Ok(c) => Ok(Box::new(Real(c))),
+            Ok(c) => Ok(Box::new(self.with_exec(c, cg))),
             Err(first) => {
                 let (level, cgroup_id) = cgroup_level_id(cg)?;
                 Confinement::load(l, -1, Attach::Global { level, cgroup_id }, dev)
-                    .map(|c| Box::new(Real(c)) as Box<dyn Confined>)
+                    .map(|c| Box::new(self.with_exec(c, cg)) as Box<dyn Confined>)
                     .map_err(|e| {
                         trf!(
                             "{first}\nrecuo global: {e}",
@@ -782,6 +925,13 @@ impl Client {
                 .unwrap_or(tr!("erro sem texto", "error without text"))
                 .to_string())
         }
+    }
+
+    /// Liga a observação das execuções no cgroup do diretório `dir`.
+    pub fn observe(&self, dir: &Path) -> Result<(), String> {
+        let f = std::fs::File::open(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        self.call(json!({"op": "observe"}), &[f.as_raw_fd()])?;
+        Ok(())
     }
 
     /// O canal dos eventos (só uma vez). Ele fecha quando a conexão com o
@@ -974,6 +1124,24 @@ mod tests {
             Some(Box::new(FakeEvents(0)))
         }
     }
+    /// Uma execução na primeira volta; depois, nada.
+    struct ExecEvents(u32);
+    impl Events for ExecEvents {
+        fn poll(&mut self, _timeout_ms: i32) -> (Vec<Value>, u64) {
+            self.0 += 1;
+            if self.0 == 1 {
+                (
+                    vec![
+                        json!({"kind": "exec", "pid": 7, "path": "/usr/bin/ls", "args": ["ls", "-la"]}),
+                    ],
+                    0,
+                )
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                (vec![], 0)
+            }
+        }
+    }
     /// Um bloqueio na primeira volta, com 2 descartados; depois, nada.
     struct FakeEvents(u32);
     impl Events for FakeEvents {
@@ -990,6 +1158,9 @@ mod tests {
     impl Backend for Fake {
         fn lsm(&self) -> Result<bool, String> {
             Ok(true)
+        }
+        fn observe(&self, _cg: &OwnedFd) -> Result<Box<dyn Events>, String> {
+            Ok(Box::new(ExecEvents(0)))
         }
         fn confine(&self, _cg: &OwnedFd, _dev: u32) -> Result<Box<dyn Confined>, String> {
             self.loaded.fetch_add(1, Ordering::SeqCst);
@@ -1191,6 +1362,33 @@ mod tests {
                 _ => assert!(std::time::Instant::now() < fim, "o canal não fechou"),
             }
         }
+    }
+
+    #[test]
+    fn observacao_das_execucoes() {
+        let (d, p, _, _) = start(true);
+        let c = Client::connect(&p).unwrap();
+        let ev = c.take_events().unwrap();
+        c.observe(d.path()).unwrap();
+        // Uma por conexão, e sem confinamento junto.
+        assert!(c.observe(d.path()).unwrap_err().contains("já tem"));
+        assert!(c.confine(d.path(), 0).is_err());
+        let v = ev.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(v["ev"][0]["kind"], "exec");
+        assert_eq!(v["ev"][0]["args"][1], "-la");
+        // O limite por usuário.
+        let mut keep = Vec::new();
+        for _ in 1..MAX_OBSERVE_PER_UID {
+            let x = Client::connect(&p).unwrap();
+            x.observe(d.path()).unwrap();
+            keep.push(x);
+        }
+        let x = Client::connect(&p).unwrap();
+        assert!(x.observe(d.path()).unwrap_err().contains("limite"));
+        // Um cgroup alheio é recusado antes de qualquer carga.
+        let (d2, p2, _, _) = start(false);
+        let y = Client::connect(&p2).unwrap();
+        assert!(y.observe(d2.path()).unwrap_err().contains("outro uid"));
     }
 
     #[test]

@@ -11,6 +11,7 @@ mod conn;
 mod db;
 mod docker;
 mod dockerfiles;
+mod execlog;
 mod folders;
 mod history;
 mod keyring;

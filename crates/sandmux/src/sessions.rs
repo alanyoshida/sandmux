@@ -557,6 +557,13 @@ pub fn policy_lines(p: &sandmux_proto::msg::PolicySummary) -> Vec<String> {
             tr!("bloqueado", "blocked")
         }
     ));
+    if let Some(e) = &p.exec {
+        let e = match e.as_str() {
+            "kernel" => tr!("pelo kernel", "by the kernel").to_string(),
+            x => x.to_string(),
+        };
+        l.push(trf!("execuções: {e}", "executions: {e}"));
+    }
     if p.pass_env.is_empty() {
         l.push(tr!("pass-env: nenhuma", "pass-env: none").into());
     } else {

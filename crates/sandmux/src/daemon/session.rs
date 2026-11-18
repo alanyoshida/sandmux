@@ -67,6 +67,8 @@ pub struct Session {
     pub limits: Option<Limits>,
     /// cgroup do escopo do lançamento atual, quando já conhecido.
     pub cgroup: Option<std::path::PathBuf>,
+    /// A observação das execuções pelo kernel (o auxiliar root).
+    pub exec_obs: Option<super::execlog::ExecObs>,
     /// Mortes por falta de memória e recusas de processo do último lançamento.
     pub oom_kills: u64,
     /// Chaves reais movidas ao cofre pelo vigia desde o lançamento.
@@ -146,6 +148,7 @@ impl Session {
             pass_env,
             limits: None,
             cgroup: None,
+            exec_obs: None,
             oom_kills: 0,
             keys_moved: 0,
             hist_buf: Vec::new(),
@@ -1055,6 +1058,7 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
                 s.tags.drain(..extra);
             }
             s.cgroup = None;
+            s.exec_obs = None;
             s.oom_kills = 0;
             s.keys_moved = 0;
             s.fork_refusals = 0;
@@ -1217,6 +1221,8 @@ fn monitor(shared: Arc<Shared>, id: u32, pid: i32) {
             s.cgroup = Some(cg.clone());
         }
     }
+    // O registro de execuções pelo kernel, no escopo achado.
+    super::execlog::start(shared.clone(), id, pid, cg.clone());
     let Ok(ino) = Inotify::init(InitFlags::IN_CLOEXEC) else {
         return;
     };

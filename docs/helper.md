@@ -31,6 +31,10 @@ A decisão é pelo arquivo (o inode), e não pelo caminho. Por isso, desmontar u
 - **Desmarcar:** o daemon também pede `unmark`, quando a política de arquivos da pasta muda e um caminho deixa de ser negado. O auxiliar tira a marca e solta o descritor do arquivo.
 - **Eventos:** os programas mandam um evento por uma fila do kernel quando negam uma operação e quando um contêiner cria um arquivo no sistema de arquivos da pasta. O auxiliar lê a fila e manda os eventos ao daemon pela mesma conexão do confinamento. O evento tem o tipo, o gancho, o inode e o nome do arquivo criado, nunca o conteúdo de um arquivo. Com a fila cheia, os eventos a mais são descartados e contados, e os contêineres não esperam.
 
+## Observação das execuções
+
+O pedido `observe` liga só a observação das execuções num cgroup do usuário (o escopo de uma aba), sem regras de arquivos nem marcas. Um programa no tracepoint `sched_process_exec` manda o caminho executado, o processo e os argumentos pela mesma conexão. O confinamento do Docker (`confine`) inclui a mesma observação. São até 64 observações ativas por usuário, além dos 16 confinamentos. A observação só registra: nenhuma execução é negada nem atrasada.
+
 ## Quanto tempo as regras duram
 
 As regras e as marcas valem enquanto a conexão do daemon com o auxiliar estiver aberta. Elas somem quando:

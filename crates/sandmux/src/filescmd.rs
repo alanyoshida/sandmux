@@ -24,6 +24,19 @@ fn session_of(tag: &str) -> Option<u32> {
     tag.strip_prefix('s')?.split('-').next()?.parse().ok()
 }
 
+/// O caminho, com os argumentos de uma execução (até 80 caracteres).
+fn with_args(l: &FileEntry) -> String {
+    let p = l.path.display().to_string();
+    if l.args.is_empty() {
+        return p;
+    }
+    let mut a = l.args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
+    if a.chars().count() > 80 {
+        a = a.chars().take(79).collect::<String>() + "…";
+    }
+    if a.is_empty() { p } else { format!("{p} {a}") }
+}
+
 /// Linhas da tabela, das mais velhas às mais novas.
 pub fn table(lines: &[FileEntry]) -> Vec<String> {
     let rows: Vec<[String; 5]> = lines
@@ -44,7 +57,7 @@ pub fn table(lines: &[FileEntry]) -> Vec<String> {
                     |s| s.to_string(),
                 ),
                 l.access.clone(),
-                l.path.display().to_string(),
+                with_args(l),
                 l.blocked
                     .as_deref()
                     .map(|b| trf!("bloqueado: {b}", "blocked: {b}"))
@@ -162,6 +175,8 @@ mod tests {
             access: "r".into(),
             blocked: None,
             new: false,
+            args: Vec::new(),
+            via: None,
         }
     }
 
@@ -180,5 +195,13 @@ mod tests {
         assert_eq!(got, ["/w/a", "/w/.env"]);
         let t = table(&[e("docker-ab12", "/w", "/w/.env")]);
         assert!(t[1].contains("docker"), "{t:?}");
+        let mut x = e("s3-1", "/w", "/usr/bin/curl");
+        x.access = "exec".into();
+        x.args = vec!["curl".into(), "-s".into(), "https://exemplo.com".into()];
+        let t = table(&[x]);
+        assert!(
+            t[1].contains("/usr/bin/curl -s https://exemplo.com"),
+            "{t:?}"
+        );
     }
 }

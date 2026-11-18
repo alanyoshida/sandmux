@@ -342,6 +342,44 @@ impl Logger {
 }
 
 impl Logger {
+    /// Uma execução: toda execução vira uma linha, de qualquer pasta.
+    fn record_exec(&mut self, path: &Path, args: Vec<String>) {
+        let (day, ts) = sandmux_net::log::now_local();
+        let e = FileEntry {
+            ts,
+            tag: self.spec.tag.clone(),
+            workdir: self.spec.workdir.clone(),
+            path: path.to_path_buf(),
+            access: "exec".into(),
+            blocked: None,
+            new: false,
+            args,
+            via: Some("supervisor".into()),
+        };
+        self.write(&day, &e);
+    }
+
+    fn write(&mut self, day: &str, e: &FileEntry) {
+        if self.file.as_ref().is_none_or(|(d, _)| *d != day) {
+            let _ = std::fs::create_dir_all(&self.spec.log_dir);
+            let _ = std::fs::set_permissions(
+                &self.spec.log_dir,
+                std::os::unix::fs::PermissionsExt::from_mode(0o700),
+            );
+            self.file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .mode(0o600)
+                .open(self.spec.log_dir.join(format!("{day}.jsonl")))
+                .ok()
+                .map(|f| (day.to_string(), f));
+        }
+        if let (Some((_, f)), Ok(mut line)) = (self.file.as_mut(), serde_json::to_string(e)) {
+            line.push('\n');
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
+
     fn record(&mut self, path: &Path, access: &'static str, blocked: Option<&str>) {
         if !self.spec.roots.iter().any(|r| under(path, r))
             || self.spec.exclude.iter().any(|r| under(path, r))
@@ -360,6 +398,8 @@ impl Logger {
             access: access.into(),
             blocked: blocked.map(String::from),
             new: blocked.is_none() && self.known.insert(path.to_path_buf()),
+            args: Vec::new(),
+            via: None,
         };
         if e.new
             && let Some(f) = self.known_file.as_mut()
@@ -1014,8 +1054,112 @@ fn handle_name(ctx: &Ctx, n: &Notif, call: NameCall) {
     }
 }
 
+/// Teto dos argumentos de uma execução no registro.
+const EXEC_ARGS_MAX: usize = 1024;
+const EXEC_ARGC_MAX: usize = 64;
+
+/// Lê o `argv` (vetor de ponteiros terminado em nulo) na memória do
+/// processo, até [`EXEC_ARGC_MAX`] argumentos e [`EXEC_ARGS_MAX`] bytes.
+pub fn read_argv(mem: &impl std::os::unix::fs::FileExt, addr: u64) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut total = 0;
+    for i in 0..EXEC_ARGC_MAX as u64 {
+        let mut p = [0u8; 8];
+        if addr == 0 || mem.read_at(&mut p, addr + i * 8).ok() != Some(8) {
+            break;
+        }
+        let ptr = u64::from_ne_bytes(p);
+        if ptr == 0 {
+            break;
+        }
+        let mut s = Vec::new();
+        let mut buf = [0u8; 256];
+        let mut off = ptr;
+        while let Ok(n) = mem.read_at(&mut buf, off) {
+            if n == 0 {
+                break;
+            }
+            match buf[..n].iter().position(|&b| b == 0) {
+                Some(z) => {
+                    s.extend_from_slice(&buf[..z]);
+                    break;
+                }
+                None => s.extend_from_slice(&buf[..n]),
+            }
+            off += n as u64;
+            if s.len() > EXEC_ARGS_MAX {
+                break;
+            }
+        }
+        let room = EXEC_ARGS_MAX.saturating_sub(total);
+        if room == 0 {
+            break;
+        }
+        s.truncate(room);
+        total += s.len() + 1;
+        out.push(String::from_utf8_lossy(&s).into_owned());
+    }
+    out
+}
+
+/// Uma execução (`execve` ou `execveat`): lê o caminho e os argumentos,
+/// grava a linha quando a política ao vivo deixa, e deixa o kernel seguir.
+/// A leitura não decide nada: outra thread pode trocar a memória antes da
+/// execução, e a linha diz que a fonte é o supervisor.
+fn handle_exec(ctx: &Ctx, n: &Notif, mem: Option<&File>) {
+    let fd = ctx.listener.as_raw_fd();
+    let r = Resp {
+        id: n.id,
+        val: 0,
+        error: 0,
+        flags: USER_NOTIF_FLAG_CONTINUE,
+    };
+    let Some(mem) = mem else {
+        // SAFETY: estrutura do tamanho que o ioctl espera.
+        unsafe { libc::ioctl(fd, IOCTL_SEND as _, &r) };
+        return;
+    };
+    let a = n.data.args;
+    let (path, argv) = if n.data.nr as i64 == libc::SYS_execve {
+        (read_cstr(mem, a[0]), a[1])
+    } else {
+        let p = read_cstr(mem, a[1]);
+        // Com `AT_EMPTY_PATH` e caminho vazio, o programa é o próprio
+        // descritor.
+        let p = match p {
+            Some(p) if p.is_empty() => {
+                std::fs::read_link(format!("/proc/{}/fd/{}", n.pid, a[0] as i32))
+                    .ok()
+                    .map(|l| std::os::unix::ffi::OsStringExt::into_vec(l.into_os_string()))
+            }
+            x => x,
+        };
+        (p, a[2])
+    };
+    let args = read_argv(mem, argv);
+    let allowed = {
+        let mut live = ctx.live.lock().unwrap_or_else(|e| e.into_inner());
+        live.refresh();
+        live.policy.exec_log != Some(false)
+    };
+    if allowed && let (Some(log), Some(path)) = (ctx.log.as_ref(), path) {
+        log.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_exec(Path::new(std::ffi::OsStr::from_bytes(&path)), args);
+    }
+    // SAFETY: estrutura do tamanho que o ioctl espera.
+    unsafe { libc::ioctl(fd, IOCTL_SEND as _, &r) };
+}
+
 fn handle(ctx: &Ctx, n: &Notif) {
     let fd = ctx.listener.as_raw_fd();
+    let nr = n.data.nr as i64;
+    // Uma execução segue sempre, mesmo sem dar para ler a memória do
+    // processo (o primeiro `exec` do lançador): o registro nunca a impede.
+    if nr == libc::SYS_execve || nr == libc::SYS_execveat {
+        let mem = File::open(format!("/proc/{}/mem", n.pid)).ok();
+        return handle_exec(ctx, n, mem.as_ref());
+    }
     let Ok(mem) = File::open(format!("/proc/{}/mem", n.pid)) else {
         return respond_error(fd, n.id, libc::ESRCH);
     };
@@ -1157,6 +1301,67 @@ fn handle(ctx: &Ctx, n: &Notif) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chave_do_registro_de_execucoes_ao_vivo() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("p.json");
+        let spec = FilesSpec {
+            log_dir: d.path().into(),
+            tag: "t".into(),
+            workdir: d.path().into(),
+            roots: vec![],
+            exclude: vec![],
+            policy: FilePolicy::default(),
+            policy_file: Some(f.clone()),
+            state_dir: None,
+            control_socket: None,
+            folders: vec![],
+            exec_log: true,
+        };
+        let mut live = Live::new(Some(&spec));
+        assert_eq!(live.policy.exec_log, None);
+        let p = FilePolicy {
+            exec_log: Some(false),
+            ..Default::default()
+        };
+        std::fs::write(&f, serde_json::to_vec(&p).unwrap()).unwrap();
+        live.refresh();
+        assert_eq!(live.policy.exec_log, Some(false));
+    }
+
+    #[test]
+    fn argumentos_da_execucao() {
+        // A memória de um processo: o vetor de ponteiros e as strings.
+        struct Mem(Vec<u8>);
+        impl std::os::unix::fs::FileExt for Mem {
+            fn read_at(&self, buf: &mut [u8], off: u64) -> io::Result<usize> {
+                let o = off as usize;
+                if o >= self.0.len() {
+                    return Ok(0);
+                }
+                let n = buf.len().min(self.0.len() - o);
+                buf[..n].copy_from_slice(&self.0[o..o + n]);
+                Ok(n)
+            }
+            fn write_at(&self, _: &[u8], _: u64) -> io::Result<usize> {
+                Ok(0)
+            }
+        }
+        // O vetor começa no endereço 8 (o 0 é o ponteiro nulo).
+        let mut m = vec![0u8; 64];
+        let strs: &[&[u8]] = &[b"ls\0", b"-la\0", b"/tmp\0"];
+        let mut at = 64u64;
+        for (i, s) in strs.iter().enumerate() {
+            m[8 + i * 8..16 + i * 8].copy_from_slice(&at.to_ne_bytes());
+            at += s.len() as u64;
+        }
+        for s in strs {
+            m.extend_from_slice(s);
+        }
+        assert_eq!(read_argv(&Mem(m), 8), ["ls", "-la", "/tmp"]);
+        assert!(read_argv(&Mem(vec![0; 8]), 0).is_empty());
+    }
 
     fn req(dirfd: i32, path: &str) -> Request {
         Request {

@@ -9,7 +9,7 @@ O registro de arquivos MUST ter uma linha para cada programa executado por um pr
 
 #### Scenario: Contêiner executa um programa
 - **WHEN** um contêiner do Docker privado da pasta roda `sh -c 'ls /'`
-- **THEN** o registro tem linhas `exec` com a etiqueta `docker-<id>` para o `sh` e o `ls`
+- **THEN** o registro tem uma linha `exec` com a etiqueta `docker-<id>` para o `sh`, com os argumentos `sh`, `-c` e `ls /`
 
 #### Scenario: Fora das abas
 - **WHEN** o usuário roda `ls` num terminal do host

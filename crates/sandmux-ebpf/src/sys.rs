@@ -14,6 +14,7 @@ const BPF_MAP_LOOKUP_ELEM: i64 = 1;
 const BPF_MAP_UPDATE_ELEM: i64 = 2;
 const BPF_MAP_DELETE_ELEM: i64 = 3;
 const BPF_PROG_LOAD: i64 = 5;
+const BPF_RAW_TRACEPOINT_OPEN: i64 = 17;
 const BPF_BTF_LOAD: i64 = 18;
 const BPF_LINK_CREATE: i64 = 28;
 
@@ -204,6 +205,21 @@ pub fn link_create(prog: &impl AsRawFd, target: RawFd, attach_type: u32) -> Resu
         .map(fd)
         .map_err(|e| Error::Sys {
             what: "LINK_CREATE".into(),
+            err: e,
+            log: String::new(),
+        })
+}
+
+/// Prende um programa `tp_btf` ao seu tracepoint pelo comando antigo
+/// (`BPF_RAW_TRACEPOINT_OPEN`, sem nome: o tracepoint vem do
+/// `attach_btf_id`), para kernels em que o `LINK_CREATE` recusa.
+pub fn raw_tracepoint_open(prog: &impl AsRawFd) -> Result<OwnedFd, Error> {
+    let mut a = Attr::new();
+    a.u64(0, 0).u32(8, prog.as_raw_fd() as u32);
+    bpf(BPF_RAW_TRACEPOINT_OPEN, &mut a)
+        .map(fd)
+        .map_err(|e| Error::Sys {
+            what: "RAW_TRACEPOINT_OPEN".into(),
             err: e,
             log: String::new(),
         })

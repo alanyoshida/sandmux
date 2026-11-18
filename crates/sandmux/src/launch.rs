@@ -499,6 +499,14 @@ pub fn prepare_with(
         network: eff.network.value.describe().into(),
         window: eff.window.value,
         portal: portal.is_some(),
+        // O daemon troca por `kernel` quando o auxiliar assume a aba.
+        exec: Some(
+            tr!(
+                "supervisor: aguardando o escopo da aba",
+                "supervisor: waiting for the tab's scope"
+            )
+            .into(),
+        ),
     };
     for d in &composed.dirs_to_create {
         if d.starts_with(&host.data_dir) {

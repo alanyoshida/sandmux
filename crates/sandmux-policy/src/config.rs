@@ -1969,6 +1969,7 @@ impl Effective {
             secrets,
             secret_exceptions,
             workdir: workdir.to_path_buf(),
+            exec_log: None,
         }
     }
 }

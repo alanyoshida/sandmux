@@ -134,6 +134,10 @@ pub struct FilesSpec {
     /// Pastas montadas no lançamento em `/mnt/sandmux`.
     #[serde(default)]
     pub folders: Vec<LiveFolder>,
+    /// O supervisor também recebe `execve` e `execveat` e registra as
+    /// execuções (o recuo do registro de execuções pelo kernel).
+    #[serde(default)]
+    pub exec_log: bool,
 }
 
 /// Uma linha do registro de arquivos.
@@ -151,6 +155,12 @@ pub struct FileEntry {
     /// O caminho apareceu pela primeira vez nesta pasta de trabalho.
     #[serde(default)]
     pub new: bool,
+    /// Os argumentos de uma execução (`access` = `exec`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// A fonte de uma execução: `kernel` ou `supervisor`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
 }
 
 /// Modo de rede.

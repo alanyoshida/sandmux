@@ -147,6 +147,10 @@ pub struct FilePolicy {
     pub secret_exceptions: Vec<FilePattern>,
     /// Pasta de trabalho: só nela os segredos ficam escondidos.
     pub workdir: PathBuf,
+    /// O supervisor registra as execuções? `None` vale como sim; o daemon
+    /// grava `false` quando o kernel (o auxiliar root) assumiu o registro.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec_log: Option<bool>,
 }
 
 /// Decisão sobre uma abertura.
@@ -263,6 +267,7 @@ mod tests {
             secrets,
             secret_exceptions,
             workdir: "/w".into(),
+            exec_log: None,
         };
         let none = |_: &Path| false;
         assert_eq!(

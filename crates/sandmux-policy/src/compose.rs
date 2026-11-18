@@ -1204,6 +1204,7 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
                 state_dir: Some(dir.clone()),
                 control_socket: opts.control_socket.clone(),
                 folders: opts.folders.clone(),
+                exec_log: true,
             })
         }
         _ => None,
@@ -1873,6 +1874,7 @@ mod docker_view_tests {
             secrets,
             secret_exceptions,
             workdir: w.clone(),
+            exec_log: None,
         };
         let created: std::collections::HashSet<PathBuf> = [w.join("chave.pem")].into();
         let covers = docker_covers(&policy, &created, &w).unwrap();
