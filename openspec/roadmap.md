@@ -466,6 +466,8 @@ Release `v0.1.19` (2026-11-17), com o change 69 (etapa 14). Decisão do usuário
 
 Release `v0.1.20` (2026-11-17), com o change 70 (etapa 14). Pela ordem do usuário (2026-11-17: propose, apply, commit e push num branch novo, PR, merge e release nova), publicada depois do `check.sh` e do `check-root.sh` verdes, sem o teste do build local pelo usuário.
 
+Release `v0.1.21` (2026-11-17), com o change 71 (etapa 14). Pela ordem do usuário (2026-11-17), publicada depois do `check.sh` e do `check-root.sh` verdes, sem o teste do build local pelo usuário.
+
 ### Etapa 14 - Confinamento do Docker privado
 
 Objetivo: o Docker privado sob as mesmas regras do sandbox do agente. Hoje o que limita o `dockerd` e os contêineres é só a visão de arquivos (achados de 2026-11-16, na seção 6). Decisões do usuário (2026-11-16), na exploração do backend eBPF: o eBPF entra para dar uma capacidade nova, o confinamento do Docker privado e de outros processos que rodam fora do Landlock; o confinamento cobre os arquivos e as chamadas de sistema; o trabalho se divide em dois changes, com o endurecimento sem privilégio primeiro.
