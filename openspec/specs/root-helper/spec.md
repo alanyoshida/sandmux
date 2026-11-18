@@ -5,7 +5,7 @@ O auxiliar root (`sandmux-helper`): o serviço do sistema que prende ao cgroup d
 
 ## Requirements
 ### Requirement: Pedidos ao auxiliar root
-O `sandmux-helper` MUST rodar como serviço do sistema, com root, num socket Unix local que qualquer usuário alcança. Ele MUST aceitar só quatro pedidos: a consulta de estado (versão e BPF LSM ativo), o confinamento de um cgroup v2 que pertence a quem pede, e a marcação e a desmarcação de arquivos desse confinamento, os três últimos com descritores abertos por quem pede. Qualquer outro pedido, ou um cgroup de outro usuário, MUST ser recusado com erro, sem efeito.
+O `sandmux-helper` MUST rodar como serviço do sistema, com root, num socket Unix local que qualquer usuário alcança. Ele MUST aceitar só cinco pedidos: a consulta de estado (versão e BPF LSM ativo), o confinamento e a observação de um cgroup v2 que pertence a quem pede, e a marcação e a desmarcação de arquivos de um confinamento, os quatro últimos com descritores abertos por quem pede. Qualquer outro pedido, ou um cgroup de outro usuário, MUST ser recusado com erro, sem efeito.
 
 #### Scenario: cgroup de outro usuário
 - **WHEN** um usuário comum pede o confinamento passando o diretório de um cgroup que pertence ao root
@@ -57,3 +57,14 @@ O auxiliar MUST mandar a quem pediu o confinamento, pela mesma conexão, um even
 #### Scenario: Fila cheia
 - **WHEN** um contêiner cria arquivos mais depressa do que o daemon lê os eventos
 - **THEN** as criações seguem sem atraso, e o próximo evento entregue diz quantos foram descartados
+
+### Requirement: Observação das execuções
+O pedido `observe` MUST carregar só a observação das execuções no cgroup pedido e nos de baixo, sem regra de arquivos nem marca. O confinamento (`confine`) MUST incluir a mesma observação. Cada execução MUST virar um evento com o caminho que o kernel executou, o pid e os argumentos, mandado pela conexão que fez o pedido. A observação MUST NOT negar nem atrasar uma execução, e MUST terminar quando a conexão fecha.
+
+#### Scenario: Aba observada
+- **WHEN** o daemon pede o `observe` do escopo de uma aba e o agente roda `ls -la`
+- **THEN** o daemon recebe um evento com o caminho do `ls` e os argumentos `ls` e `-la`
+
+#### Scenario: Conexão fechada
+- **WHEN** o daemon que pediu o `observe` termina
+- **THEN** o auxiliar solta o programa, e as execuções daquele cgroup deixam de gerar eventos
