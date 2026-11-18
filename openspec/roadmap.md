@@ -480,6 +480,16 @@ Objetivo: o Docker privado sob as mesmas regras do sandbox do agente. Hoje o que
 
 Verificações: as listadas em "Decisões ainda não tomadas" (seção 6), e os dois achados, que vêm da leitura do código e ainda não foram testados.
 
+### Etapa 15 - Observação pelo kernel
+
+Objetivo: usar a base do backend eBPF (etapa 14) para o que o sandmux hoje não vê. Pedido do usuário (2026-11-17), entre as opções do agente: o registro de execuções, depois o processo de cada conexão e depois o Ubuntu 24.04, nessa ordem.
+
+| # | Change | Situação | Conteúdo |
+|---|---|---|---|
+| 72 | `add-exec-log` | Proposta, specs, design e tarefas validados (`openspec validate --strict`) em 2026-11-17. Muda `file-access-log` (três requisitos novos) e `root-helper` (um modificado e um novo); muda o protocolo (`PolicySummary.exec`, `FileEntry.args` e `via`). Decisões do usuário (2026-11-17): os dois mecanismos, o eBPF pelo auxiliar e o supervisor como recuo, com a linha marcando a fonte; as execuções no registro de arquivos, com o acesso `exec`; o alcance são as abas e o Docker privado. Decisões do agente: o programa fica no tracepoint `sched_process_exec` (o gancho LSM não alcança os argumentos), filtrado pelo id do cgroup como constante; o evento é reservado na fila, por não caber na pilha; o supervisor registra desde o começo da aba e para quando o daemon avisa, pela chave `exec_log` da política ao vivo, que o kernel assumiu; o pedido novo `observe`, com até 64 por usuário | Registro de cada execução das abas e do Docker privado, com o caminho, os argumentos e a fonte (`kernel` ou `supervisor`), no registro de arquivos |
+| 73 | (a propor) | A propor | O processo de cada conexão no registro de rede |
+| 74 | (a propor) | A propor | O Ubuntu 24.04 (kernel 6.8): os escopos de sockets abstratos e de sinais em BPF LSM, onde o Landlock não os tem |
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
@@ -521,7 +531,7 @@ Levantadas pelo agente em 2026-11-17, a pedido do usuário, pela leitura das spe
 | O Ubuntu 24.04 com o kernel 6.8 fica de fora, por faltar o escopo de sockets abstratos e de sinais do Landlock | Os dois escopos em BPF LSM. Seria uma regra obrigatória: nessa máquina a aba só subiria com eBPF | Depende de o `bpf` estar entre os LSMs ativos do 24.04 (a verificar, seção 6) |
 | A interceptação de arquivos do próprio agente custa de 3,1x a 3,5x em leitura em massa e depende de emulação (tradução do `/proc/self`, namespaces aninhados, `lsof` limitado) | A decisão e o registro dentro do kernel, sem ida e volta ao supervisor | É a otimização, o motivo original deste item, que o usuário deixou em segundo plano em 2026-11-16 |
 
-Sugestão do agente, ainda não decidida pelo usuário: depois do change 70, o registro de execuções e o processo de cada conexão. Os dois usam a mesma base do change 70 (programas presos ao cgroup e uma fila de eventos) e só observam.
+Sugestão do agente, aceita pelo usuário em 2026-11-17 (etapa 15, changes 72 e 73): depois do change 70, o registro de execuções e o processo de cada conexão. Os dois usam a mesma base do change 70 (programas presos ao cgroup e uma fila de eventos) e só observam.
 
 O que parece caso de eBPF e não é:
 
