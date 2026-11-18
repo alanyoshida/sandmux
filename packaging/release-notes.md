@@ -1,17 +1,16 @@
-sandmux 0.1.21, antes da v1: o Docker confinado acompanha a pasta ao vivo.
+sandmux 0.1.22, antes da v1: o registro de execuções.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-Com o confinamento do Docker privado por eBPF ligado (o auxiliar `sandmux-helper`, da 0.1.20):
+- **Registro de execuções:** cada programa executado numa aba, pelo agente ou num shell, aparece no registro de arquivos (`sandmux files <id>`, Ctrl+b `f`), com o caminho e os argumentos. Um `curl` lançado por uma ferramenta, um script baixado e rodado, um compilador: agora deixam linha.
+  - Com o auxiliar root (`sandmux-helper`) e o BPF LSM ativos, o registro vem do kernel e não dá para falsificar. As execuções do Docker privado da pasta também entram.
+  - Sem eles, o supervisor do sandbox registra, lendo o que o processo pediu. Esse registro pode ser enganado, e a linha diz a fonte (`via`).
+  - O `sandmux stats` e o painel dizem de onde vêm as execuções da aba.
+  - Detalhes em [docs/files.md](https://github.com/alanyoshida/sandmux/blob/main/docs/files.md#execuções).
 
-- **Arquivos novos negados na hora:** um `.env` ou outro segredo criado com o Docker rodando, e qualquer arquivo que aparece numa pasta de `file-deny`, ficam negados aos contêineres em até 1 segundo, sem subir o Docker de novo. Um segredo que o próprio agente cria continua legível.
-- **Política de arquivos ao vivo:** uma mudança em `file-deny`, `file-allow`, `secret-files` ou `secret-files-off` vale no Docker que já está rodando.
-- **Registro dos contêineres:** as tentativas negadas e os arquivos criados pelos contêineres aparecem no registro de arquivos e em `sandmux files <id>`, com o caminho do host.
-- Detalhes em [docs/docker.md](https://github.com/alanyoshida/sandmux/blob/main/docs/docker.md#ao-vivo).
-
-Esta versão muda o protocolo entre o cliente e o daemon (40) e o auxiliar root. Depois de atualizar, rode `sandmux setup` (que reinicia o auxiliar) e `sandmux daemon restart`, e abra a TUI de novo.
+Esta versão muda o protocolo entre o cliente e o daemon (41) e o auxiliar root. Depois de atualizar, rode `sandmux setup` (que reinicia o auxiliar) e `sandmux daemon restart`, e abra a TUI de novo.
 
 ## Instalar
 
