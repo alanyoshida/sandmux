@@ -11,7 +11,7 @@ use std::os::fd::AsFd;
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::{ForkResult, fork, getgid, getuid, pipe};
 
-use crate::landlock_rules::REQUIRED_ABI;
+use crate::landlock_rules::{MIN_ABI, REQUIRED_ABI};
 use crate::sys::{self, FsContext, MOUNT_ATTR_NODEV, MOUNT_ATTR_NOSUID};
 
 /// Resultado das verificações.
@@ -25,10 +25,21 @@ pub struct SupportReport {
     pub overlay: Result<(), String>,
     /// Valor de `kernel.apparmor_restrict_unprivileged_userns`, quando existe.
     pub apparmor_restrict_userns: Option<bool>,
+    /// Com o Landlock abaixo do ABI 6: o auxiliar root completa o
+    /// confinamento? (`None` quando não foi preciso perguntar.)
+    pub helper: Option<Result<(), String>>,
 }
 
 impl SupportReport {
+    /// O escopo de sockets abstratos e de sinais existe: pelo Landlock, ou
+    /// pelo auxiliar root num kernel com o ABI 4 ou 5.
     pub fn landlock_ok(&self) -> bool {
+        self.landlock_full()
+            || (self.landlock_abi >= MIN_ABI && matches!(self.helper, Some(Ok(()))))
+    }
+
+    /// O Landlock sozinho dá tudo (ABI 6).
+    pub fn landlock_full(&self) -> bool {
         self.landlock_abi >= REQUIRED_ABI
     }
 
@@ -50,8 +61,12 @@ impl SupportReport {
             Some(false) => "0",
             None => "-",
         };
+        let helper = match &self.helper {
+            None => "-".to_string(),
+            Some(r) => s(r),
+        };
         format!(
-            "landlock:{}\nuserns:{}\noverlay:{}\napparmor:{aa}\n",
+            "landlock:{}\nuserns:{}\noverlay:{}\napparmor:{aa}\nhelper:{helper}\n",
             self.landlock_abi,
             s(&self.userns),
             s(&self.overlay)
@@ -64,8 +79,12 @@ impl SupportReport {
         let (userns, overlay) = parse_probe(out);
         let mut landlock_abi = -1;
         let mut apparmor_restrict_userns = None;
+        let mut helper = None;
         for line in out.lines() {
             match line.split_once(':') {
+                Some(("helper", "-")) => {}
+                Some(("helper", "ok")) => helper = Some(Ok(())),
+                Some(("helper", e)) => helper = Some(Err(e.to_string())),
                 Some(("landlock", v)) => landlock_abi = v.trim().parse().unwrap_or(-1),
                 Some(("apparmor", "1")) => apparmor_restrict_userns = Some(true),
                 Some(("apparmor", "0")) => apparmor_restrict_userns = Some(false),
@@ -77,6 +96,7 @@ impl SupportReport {
             userns,
             overlay,
             apparmor_restrict_userns,
+            helper,
         }
     }
 }
@@ -111,6 +131,7 @@ fn check_with(runner: &std::path::Path, stderr: std::process::Stdio) -> SupportR
             )),
             overlay: Err(sandmux_spec::tr!("não verificado", "not checked").into()),
             apparmor_restrict_userns: apparmor_restricts_userns(),
+            helper: None,
         },
     }
 }
@@ -125,11 +146,15 @@ pub fn apparmor_restricts_userns() -> Option<bool> {
 /// thread.
 pub fn check() -> SupportReport {
     let (userns, overlay) = probe_namespaces();
+    let abi = crate::landlock_rules::effective_abi();
     SupportReport {
-        landlock_abi: sys::landlock_abi(),
+        landlock_abi: abi,
         userns,
         overlay,
         apparmor_restrict_userns: apparmor_restricts_userns(),
+        helper: (MIN_ABI..REQUIRED_ABI)
+            .contains(&abi)
+            .then(crate::scope::status),
     }
 }
 
@@ -273,12 +298,35 @@ mod tests {
             userns: Ok(()),
             overlay: Err("sem\noverlay".into()),
             apparmor_restrict_userns: Some(true),
+            helper: None,
         };
         let back = SupportReport::from_wire(&r.to_wire());
         assert_eq!(back.landlock_abi, 8);
         assert!(back.userns.is_ok());
         assert_eq!(back.overlay, Err("sem overlay".into()));
         assert_eq!(back.apparmor_restrict_userns, Some(true));
+        assert_eq!(back.helper, None);
+        assert!(back.landlock_ok());
+    }
+
+    #[test]
+    fn kernel_antigo_com_e_sem_o_auxiliar() {
+        let mut r = SupportReport {
+            landlock_abi: 4,
+            userns: Ok(()),
+            overlay: Ok(()),
+            apparmor_restrict_userns: None,
+            helper: Some(Err("o BPF LSM não\nestá ativo".into())),
+        };
+        let back = SupportReport::from_wire(&r.to_wire());
+        assert_eq!(back.helper, Some(Err("o BPF LSM não está ativo".into())));
+        assert!(!back.landlock_ok());
+        assert!(!back.can_launch());
+        r.helper = Some(Ok(()));
+        let back = SupportReport::from_wire(&r.to_wire());
+        assert!(back.landlock_ok() && !back.landlock_full() && back.can_launch());
+        r.landlock_abi = 3;
+        assert!(!r.landlock_ok());
     }
 
     #[test]

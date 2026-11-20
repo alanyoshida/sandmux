@@ -645,6 +645,18 @@ mod tests {
         fn check_cgroup(&self, _: &std::os::fd::OwnedFd, _: u32) -> Result<(), String> {
             Ok(())
         }
+        fn scope_supported(&self) -> Result<(), String> {
+            Err("sem escopo".into())
+        }
+        fn scope(
+            &self,
+            _: &std::os::fd::OwnedFd,
+            _: u32,
+            _: u32,
+            _: &[(u32, u32)],
+        ) -> Result<Box<dyn crate::helper::Scoped>, String> {
+            Err("sem escopo".into())
+        }
     }
 
     /// Uma pasta de trabalho, um auxiliar falso e o `Files` ligado a ele.

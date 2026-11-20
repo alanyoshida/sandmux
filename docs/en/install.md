@@ -4,7 +4,23 @@
 
 sandmux ships as static binaries for Linux `x86_64` that do not depend on the distro's glibc: `sandmux`, `sandmuxd`, `sandmux-run`, `sandmux-chat` and `sandmux-db-mcp`. They live in the same folder, because the client finds the others next to it.
 
-Requirements: kernel 6.12 or newer (Landlock ABI 6), unprivileged user namespaces and `/dev/net/tun`. The tested distros are Ubuntu 26.04, Debian 13, current Fedora and Arch.
+Requirements: kernel 6.12 or newer (Landlock ABI 6), unprivileged user namespaces and `/dev/net/tun`. A kernel with Landlock ABI 4 or 5 (6.7 to 6.11) also works with the [root helper](helper.md#sandbox-scope) and the BPF LSM on (see [Ubuntu 24.04](#ubuntu-2404)). The tested distros are Ubuntu 26.04, Ubuntu 24.04, Debian 13, current Fedora and Arch.
+
+## Ubuntu 24.04
+
+The original Ubuntu 24.04 kernel, 6.8, has Landlock ABI 4. It lacks the abstract socket and signal scoping the sandbox requires. `sandmux doctor` shows the two paths, with the commands:
+
+1. **The HWE kernel (recommended):** `sudo apt install linux-generic-hwe-24.04` and reboot. The HWE kernel has the full Landlock (in 2026-11, it was 7.0), and sandmux runs as on any new kernel.
+2. **The 6.8 kernel with the root helper:** the helper completes Landlock through the BPF LSM. The BPF LSM ships in the Ubuntu kernel, but outside the list of LSMs enabled at boot. To enable it:
+
+   ```bash
+   echo "GRUB_CMDLINE_LINUX_DEFAULT=\"\$GRUB_CMDLINE_LINUX_DEFAULT lsm=$(cat /sys/kernel/security/lsm),bpf\"" | sudo tee /etc/default/grub.d/99-sandmux-lsm.cfg
+   sudo update-grub
+   ```
+
+   Then reboot and run `sandmux setup`, which installs the helper. `sandmux setup` does not change the boot. Without the helper or without the BPF LSM, the sandbox does not start on 6.8.
+
+The private Docker needs `rootlesskit` 2.0 or newer, and Ubuntu 24.04 ships 1.1.1. It comes in the `docker-ce-rootless-extras` package from [Docker's repository](https://docs.docker.com/engine/install/ubuntu/), which replaces Ubuntu's. Without it, `sandmux doctor` shows the private Docker as unavailable, and the rest of sandmux works.
 
 ## Install script
 
@@ -103,3 +119,10 @@ Publishing to the AUR, to a Homebrew tap and to crates.io is up to the maintaine
 On Fedora, the script also builds the `.rpm` into `dist/`.
 
 The kernel, Landlock and AppArmor are those of the machine running the containers: the test proves the binaries, the packages and each distro's user space.
+
+Ubuntu 24.04 is tested in a VM, with its own kernel, by `scripts/vm-ubuntu-2404.sh`:
+- the script downloads the official cloud image to `~/.cache/sandmux-vm/` and checks the sum;
+- it boots the VM with QEMU/KVM (4 GB), with a guard that shuts it down if the host runs low on memory;
+- it has the `doctor` steps: `lsm-bpf` turns on the BPF LSM at boot, and `hwe` installs the HWE kernel.
+
+New BPF programs are tested only in the VM: a bug in them takes down the whole kernel.

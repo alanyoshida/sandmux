@@ -72,6 +72,13 @@ pub fn runner_path() -> PathBuf {
 /// Motivo curto de uma máquina sem suporte.
 pub fn short_reason(r: &SupportReport) -> String {
     if !r.landlock_ok() {
+        if let Some(Err(e)) = &r.helper {
+            return trf!(
+                "Landlock ABI {} encontrado, e o auxiliar root não completa o confinamento: {e}",
+                "Landlock ABI {} found, and the root helper does not complete the confinement: {e}",
+                r.landlock_abi
+            );
+        }
         return trf!(
             "Landlock ABI {} encontrado, exige {}",
             "Landlock ABI {} found, requires {}",

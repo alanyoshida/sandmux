@@ -239,8 +239,8 @@ The development order, the decisions and the accepted risks are in the [roadmap]
 ## Requirements
 
 - Linux. There is no support for macOS or Windows.
-- Kernel 6.12 or newer (Landlock with abstract socket scoping), with unprivileged user namespaces and `/dev/net/tun`. overlayfs in a user namespace is optional: without it, the caches start empty and the toolchains stay read-only.
-- Tested and supported distros: Ubuntu 26.04, Debian 13, current Fedora and Arch (the last three in containers, with the test machine's kernel).
+- Kernel 6.12 or newer (Landlock with abstract socket scoping), with unprivileged user namespaces and `/dev/net/tun`. On Ubuntu 24.04, the HWE kernel, or 6.8 with the root helper and the BPF LSM on ([docs/en/install.md](docs/en/install.md#ubuntu-2404)). overlayfs in a user namespace is optional: without it, the caches start empty and the toolchains stay read-only.
+- Tested and supported distros: Ubuntu 26.04, Ubuntu 24.04 (in a VM, with the 6.8 and HWE kernels), Debian 13, current Fedora and Arch (the last three in containers, with the test machine's kernel).
 - Binaries published only for `x86_64`; on another architecture, build with `cargo install`.
 - The harnesses (opencode, hermes, Claude Code, oh-my-pi, Antigravity CLI) are installed by you, on the host. sandmux does not install harnesses; `sandmux update <harness>` runs the official updater outside the sandbox.
 

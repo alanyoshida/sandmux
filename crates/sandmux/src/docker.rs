@@ -47,6 +47,18 @@ pub fn has_subid(text: &str, user: &str, uid: u32) -> bool {
     })
 }
 
+/// A ajuda do `rootlesskit` lista a rede `none`? Sem a linha do `--net`
+/// (outro formato), conta como sim.
+pub fn net_none(help: &str) -> bool {
+    match help
+        .lines()
+        .find(|l| l.contains("--net ") && l.contains("network driver"))
+    {
+        Some(l) => l.split(['[', ']', ',']).any(|d| d.trim() == "none"),
+        None => true,
+    }
+}
+
 /// A máquina tem o necessário? `Err` diz o que falta.
 pub fn support(user: &str, uid: u32) -> Result<Support, String> {
     let missing: Vec<&str> = [
@@ -64,6 +76,28 @@ pub fn support(user: &str, uid: u32) -> Result<Support, String> {
             "faltam no PATH: {}",
             "missing from PATH: {}",
             missing.join(", ")
+        ));
+    }
+    // A rede do Docker privado é a do gateway do sandmux: o rootlesskit
+    // sobe com `--net=none`, que só existe a partir do 2.0 (o do Ubuntu
+    // 24.04 é o 1.1.1).
+    if let Ok(out) = std::process::Command::new("rootlesskit")
+        .arg("--help")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        && !net_none(&String::from_utf8_lossy(&out.stdout))
+    {
+        let version = std::process::Command::new("rootlesskit")
+            .arg("--version")
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .and_then(|v| v.rsplit(' ').next().map(str::to_string))
+            .unwrap_or_default();
+        return Err(sandmux_spec::trf!(
+            "o rootlesskit {version} não tem a rede `none`, que o Docker privado usa (exige o 2.0 ou mais novo; no Ubuntu 24.04, o pacote docker-ce-rootless-extras do repositório do Docker)",
+            "rootlesskit {version} lacks the `none` network the private Docker uses (requires 2.0 or newer; on Ubuntu 24.04, the docker-ce-rootless-extras package from Docker's repository)"
         ));
     }
     for f in ["/etc/subuid", "/etc/subgid"] {
@@ -252,6 +286,15 @@ pub fn scope_prefix(workdir: &Path, slice: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rede_none_do_rootlesskit() {
+        let v1 = "   --net value                  network driver [host, slirp4netns, vpnkit, lxc-user-nic(experimental)] (default: \"host\")";
+        let v3 = "   --net value   network driver [host, none, pasta(experimental), slirp4netns, vpnkit] (default: \"host\")";
+        assert!(!net_none(v1));
+        assert!(net_none(v3));
+        assert!(net_none("outro formato"));
+    }
 
     #[test]
     fn faixas_subordinadas() {

@@ -852,3 +852,126 @@ for i in range(200):
         t.wait_exit();
     }
 }
+
+/// O teste do escopo dentro de um user namespace: espera uma linha na entrada
+/// antes de cada rodada e escreve o resultado de cada tentativa.
+const ESCOPO_PY: &str = r#"
+import os, socket, sys, fcntl, termios, json
+host_pid = int(sys.argv[1]); name = sys.argv[2]
+def tenta(f):
+    try:
+        f(); return "ok"
+    except OSError as e:
+        return e.errno
+def abstrato_host():
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect("\0" + name); s.close()
+def abstrato_proprio():
+    l = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); l.bind("\0" + name + "-dentro"); l.listen(1)
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect("\0" + name + "-dentro"); s.close(); l.close()
+def datagrama_host():
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM); s.sendto(b"x", "\0" + name + "-dg"); s.close()
+def ioctl(dev, cmd):
+    fd = os.open(dev, os.O_RDONLY)
+    try:
+        fcntl.ioctl(fd, cmd, b"\0" * 8)
+    finally:
+        os.close(fd)
+for linha in sys.stdin:
+    r = {
+        "abstrato_host": tenta(abstrato_host),
+        "abstrato_proprio": tenta(abstrato_proprio),
+        "datagrama_host": tenta(datagrama_host),
+        "sinal_host": tenta(lambda: os.kill(host_pid, 0)),
+        "sinal_proprio": tenta(lambda: os.kill(os.getpid(), 0)),
+        "ioctl_zero": tenta(lambda: ioctl("/dev/zero", termios.FIONREAD)),
+        "ioctl_null": tenta(lambda: ioctl("/dev/null", termios.FIONREAD)),
+        "fioclex_zero": tenta(lambda: ioctl("/dev/zero", termios.FIOCLEX)),
+    }
+    print(json.dumps(r), flush=True)
+"#;
+
+/// O escopo de sandbox (`scope`), para os kernels sem o Landlock ABI 6: um
+/// processo num user namespace registrado não alcança um socket abstrato do
+/// host, não sinaliza um processo de fora e não faz `ioctl` num dispositivo
+/// fora da lista; o resto da máquina não muda, e tudo volta quando a conexão
+/// fecha.
+#[test]
+fn escopo_de_sandbox_no_kernel() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::fd::OwnedFd;
+    use std::os::linux::net::SocketAddrExt;
+    let Some(sock) = std::env::var_os("SANDMUX_HELPER_SOCKET").map(PathBuf::from) else {
+        return;
+    };
+    let name = format!("sandmux-escopo-{}", std::process::id());
+    let addr = |n: &str| std::os::unix::net::SocketAddr::from_abstract_name(n.as_bytes()).unwrap();
+    let l = std::os::unix::net::UnixListener::bind_addr(&addr(&name)).unwrap();
+    let dg = std::os::unix::net::UnixDatagram::bind_addr(&addr(&format!("{name}-dg"))).unwrap();
+    std::thread::spawn(move || {
+        for c in l.incoming() {
+            drop(c)
+        }
+    });
+    std::thread::spawn(move || {
+        let mut b = [0u8; 8];
+        while dg.recv(&mut b).is_ok() {}
+    });
+    let mut kid = Command::new("unshare")
+        .args(["-U", "python3", "-c", ESCOPO_PY])
+        .arg(std::process::id().to_string())
+        .arg(&name)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = kid.stdin.take().unwrap();
+    let mut out = BufReader::new(kid.stdout.take().unwrap());
+    let mut round = || -> serde_json::Value {
+        input.write_all(b"\n").unwrap();
+        let mut s = String::new();
+        out.read_line(&mut s).unwrap();
+        serde_json::from_str(&s).unwrap_or_else(|e| panic!("{e}: {s:?}"))
+    };
+    // Sem o escopo, só o `ioctl` do driver falha (ENOTTY).
+    let antes = round();
+    assert_eq!(antes["abstrato_host"], "ok", "{antes}");
+    assert_eq!(antes["sinal_host"], "ok", "{antes}");
+    assert_eq!(antes["ioctl_zero"], libc::ENOTTY, "{antes}");
+    // O user namespace do filho, registrado.
+    let own = std::fs::metadata("/proc/self/ns/user").unwrap();
+    let ns = loop {
+        let f = std::fs::File::open(format!("/proc/{}/ns/user", kid.id())).unwrap();
+        if std::os::unix::fs::MetadataExt::ino(&f.metadata().unwrap())
+            != std::os::unix::fs::MetadataExt::ino(&own)
+        {
+            break OwnedFd::from(f);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let c = sandmux::helper::Client::connect(&sock).unwrap();
+    let st = c.status().unwrap();
+    assert!(st.scope, "{:?}", st.scope_reason);
+    let null = (1 << 20) | 3;
+    c.scope(&ns, true, &[(null, u32::MAX)]).unwrap();
+    let dentro = round();
+    eprintln!("ESCOPO {dentro}");
+    assert_eq!(dentro["abstrato_host"], libc::EPERM, "{dentro}");
+    assert_eq!(dentro["datagrama_host"], libc::EPERM, "{dentro}");
+    assert_eq!(dentro["abstrato_proprio"], "ok", "{dentro}");
+    assert_eq!(dentro["sinal_host"], libc::EPERM, "{dentro}");
+    assert_eq!(dentro["sinal_proprio"], "ok", "{dentro}");
+    assert_eq!(dentro["ioctl_zero"], libc::EACCES, "{dentro}");
+    assert_eq!(dentro["ioctl_null"], libc::ENOTTY, "{dentro}");
+    assert_eq!(dentro["fioclex_zero"], "ok", "{dentro}");
+    // Fora do namespace, nada muda.
+    let s = std::os::unix::net::UnixStream::connect_addr(&addr(&name));
+    assert!(s.is_ok(), "{s:?}");
+    // A conexão fecha: o escopo sai.
+    drop(c);
+    std::thread::sleep(Duration::from_millis(200));
+    let depois = round();
+    assert_eq!(depois["abstrato_host"], "ok", "{depois}");
+    assert_eq!(depois["sinal_host"], "ok", "{depois}");
+    drop(input);
+    let _ = kid.wait();
+}

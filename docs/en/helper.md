@@ -2,7 +2,7 @@
 
 > Português: [helper.md](../helper.md)
 
-`sandmux-helper` is the only part of sandmux that runs as root. It exists for one thing: to attach to the cgroup of a folder's [private Docker](docker.md) the BPF LSM programs that decide, in the kernel, what containers can open and change. Without it, the rest of sandmux works the same, and the private Docker starts with the unprivileged protections only.
+`sandmux-helper` is the only part of sandmux that runs as root. It exists for one thing: to attach to the cgroup of a folder's [private Docker](docker.md) the BPF LSM programs that decide, in the kernel, what containers can open and change. Without it, the rest of sandmux works the same, and the private Docker starts with the unprivileged protections only. On a kernel with Landlock below ABI 6 (Ubuntu 24.04 with 6.8), it also completes the confinement of each tab ([sandbox scope](#sandbox-scope)), and then the sandbox only starts with it.
 
 ## What it does
 
@@ -24,7 +24,8 @@ The decision is by file (the inode), not by path. That is why unmounting a cover
 - A user can only confine a cgroup whose directory belongs to them. Root can confine any.
 - A rule only denies. It never grants access, and it applies only to the processes of the requested cgroup. Marking a system file, such as `/etc/hostname`, only stops that user's Docker from opening it.
 - The helper never opens a path. Files arrive as descriptors opened by the user, who thereby proves they can reach the file.
-- **Per-user limits:** 16 active confinements, each with up to 16384 marks. A request above that is refused, without affecting the others.
+- A user only asks for the scope of a user namespace that belongs to them, and never the helper's own.
+- **Per-user limits:** 16 active confinements, each with up to 16384 marks, and 256 sandbox scopes. A request above that is refused, without affecting the others.
 
 ## Live and events
 
@@ -34,6 +35,20 @@ The decision is by file (the inode), not by path. That is why unmounting a cover
 ## Execution and connection observation
 
 The `observe` request turns on only the observation of executions in a user cgroup (a tab's scope), without file rules or marks. A program on the `sched_process_exec` tracepoint sends the executed path, the process and the arguments over the same connection. Two `fexit` programs, on the exit of `tcp_v4_connect` and `tcp_v6_connect`, send each TCP connection a process in the cgroup opens: the pid, the source port and the destination. The daemon uses these events for the [process of each connection](network.md#process-of-each-connection) in the network log. The Docker confinement (`confine`) includes the same observation. There are up to 64 active observations per user, besides the 16 confinements. The observation only logs: no execution or connection is denied or delayed.
+
+## Sandbox scope
+
+On a kernel with Landlock ABI 4 or 5, Landlock lacks the abstract socket and signal scoping and, on ABI 4, the device `ioctl` restriction. The launcher (`sandmux-run`) then asks the helper for the sandbox `scope`, before the command runs, with:
+- the user namespace each launch creates;
+- the sandbox's process 1;
+- the list of devices in the sandbox's `/dev`.
+
+Global BPF LSM programs, loaded with the first scope and released when none is left, deny a process in that user namespace (and the ones below it):
+- a connection to an abstract socket created outside the sandbox;
+- a signal to a process outside, or to the sandbox's process 1;
+- an `ioctl` on a device outside the list, with the same commands Landlock allows.
+
+The scope lasts while the launcher's connection is open, that is, while the sandbox lives. Without the helper or without the BPF LSM, the launch is refused, and `sandmux doctor` shows the paths ([Ubuntu 24.04](install.md#ubuntu-2404)). On a kernel with ABI 6, the launcher does not ask for the scope.
 
 ## How long the rules last
 
@@ -98,4 +113,4 @@ The tests that need root run through `scripts/check-root.sh`, outside `check.sh`
 sudo scripts/check-root.sh
 ```
 
-The script starts the helper as root on a temporary socket and runs `crates/sandmux/tests/docker_ebpf.rs` as the user who called `sudo`. It runs binaries compiled by that user. That is why allowing it in `sudoers` without a password gives root to whoever runs as that user. If you do that, do it only while you need it.
+The script starts the helper as root on a temporary socket and runs `crates/sandmux/tests/docker_ebpf.rs` as the user who called `sudo`. New or changed BPF programs run first in a VM (`scripts/vm-ubuntu-2404.sh`), never directly on the host: a bug in a global program takes down the whole kernel. It runs binaries compiled by that user. That is why allowing it in `sudoers` without a password gives root to whoever runs as that user. If you do that, do it only while you need it.

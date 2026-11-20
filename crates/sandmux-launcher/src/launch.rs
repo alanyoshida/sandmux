@@ -61,9 +61,19 @@ fn forwarded_signals() -> SigSet {
     s
 }
 
+/// Como o kernel confina o sandbox.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KernelLevel {
+    /// O Landlock dá tudo (ABI 6 ou mais).
+    Landlock,
+    /// O Landlock na ABI dada (4 ou 5), com o auxiliar root completando os
+    /// escopos e, na ABI 4, a restrição de `ioctl` em dispositivos.
+    Helper { abi: i32 },
+}
+
 /// Confere o suporte mínimo do kernel antes de qualquer montagem.
-pub fn check_kernel() -> Result<(), LaunchError> {
-    let abi = sys::landlock_abi();
+pub fn check_kernel() -> Result<KernelLevel, LaunchError> {
+    let abi = landlock_rules::effective_abi();
     // Só pode tornar a exigência mais rígida; usado pelos testes para simular um
     // kernel antigo.
     let required = std::env::var("SANDMUX_RUN_REQUIRE_LANDLOCK_ABI")
@@ -72,18 +82,22 @@ pub fn check_kernel() -> Result<(), LaunchError> {
         .map_or(landlock_rules::REQUIRED_ABI, |v| {
             v.max(landlock_rules::REQUIRED_ABI)
         });
-    if abi < required {
-        let found = if abi < 0 {
-            sandmux_spec::tr!("ausente", "missing").to_string()
-        } else {
-            format!("ABI {abi}")
-        };
-        return Err(LaunchError::Unsupported(sandmux_spec::trf!(
-            "o kernel não oferece Landlock com escopo de sockets abstratos e de sinais (exige ABI {required}, encontrado: {found}); rode `sandmux doctor`",
-            "the kernel does not offer Landlock with abstract socket and signal scoping (requires ABI {required}, found: {found}); run `sandmux doctor`"
-        )));
+    if abi >= required {
+        return Ok(KernelLevel::Landlock);
     }
-    Ok(())
+    if required == landlock_rules::REQUIRED_ABI && abi >= landlock_rules::MIN_ABI {
+        return Ok(KernelLevel::Helper { abi });
+    }
+    let found = if abi < 0 {
+        sandmux_spec::tr!("ausente", "missing").to_string()
+    } else {
+        format!("ABI {abi}")
+    };
+    Err(LaunchError::Unsupported(sandmux_spec::trf!(
+        "o kernel não oferece Landlock com escopo de sockets abstratos e de sinais (exige ABI {required}, ou a {} com o auxiliar root; encontrado: {found}); rode `sandmux doctor`",
+        "the kernel does not offer Landlock with abstract socket and signal scoping (requires ABI {required}, or {} with the root helper; found: {found}); run `sandmux doctor`",
+        landlock_rules::MIN_ABI
+    )))
 }
 
 /// Lança o comando da especificação dentro do sandbox e devolve o código de
@@ -91,7 +105,7 @@ pub fn check_kernel() -> Result<(), LaunchError> {
 ///
 /// Precisa ser chamado num processo com uma única thread.
 pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
-    check_kernel()?;
+    let level = check_kernel()?;
     // Valida o filtro antes de criar qualquer processo.
     seccomp::build(&spec.seccomp).map_err(LaunchError::Setup)?;
 
@@ -159,6 +173,23 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
             "could not map the user in the user namespace ({e}); run `sandmux doctor`"
         )));
     }
+    // Sem o Landlock ABI 6, o auxiliar root completa o confinamento: o
+    // sandbox é registrado antes de o comando rodar, e a conexão fica aberta
+    // até o fim (fechada, o registro sai).
+    let _scope = match level {
+        KernelLevel::Landlock => None,
+        KernelLevel::Helper { abi } => match crate::scope::register(child, abi, spec) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                let _ = kill(child, Signal::SIGKILL);
+                let _ = waitpid(child, None);
+                return Err(LaunchError::Unsupported(sandmux_spec::trf!(
+                    "o kernel tem o Landlock ABI {abi}, e o auxiliar root não completou o confinamento: {e}; rode `sandmux doctor`",
+                    "the kernel has Landlock ABI {abi}, and the root helper did not complete the confinement: {e}; run `sandmux doctor`"
+                )));
+            }
+        },
+    };
     // O auxiliar de conexão das portas precisa de uma só thread e do /proc
     // do processo 1 aberto, antes de ele se fechar: nasce antes da liberação.
     let connector = if open {
