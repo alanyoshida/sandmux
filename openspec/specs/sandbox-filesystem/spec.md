@@ -333,6 +333,14 @@ Quando o diretório `.git` fica acima da pasta de trabalho, o `run` MUST lançar
 - **WHEN** o caminho passado não existe
 - **THEN** o `run` termina com erro e não lança o sandbox
 
+#### Scenario: Pipe com nome
+- **WHEN** o usuário passa `--ro` com um FIFO
+- **THEN** o lançador aplica a regra sem abrir o pipe, e o sandbox sobe
+
+#### Scenario: Arquivo que o usuário só alcança pelo caminho
+- **WHEN** o usuário passa `--ro` com uma pasta que ele atravessa mas não lista
+- **THEN** a regra do Landlock vale para ela, nos binários das releases e nos de desenvolvimento
+
 ### Requirement: Aviso ao montar uma credencial conhecida
 Quando um caminho de `--ro` ou `--rw` é uma credencial conhecida, está dentro de uma ou contém uma, o `run` MUST avisar a cada execução que a credencial real fica ao alcance do agente, e prosseguir com o lançamento.
 

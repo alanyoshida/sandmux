@@ -571,9 +571,13 @@ fn clique_no_menu_da_barra_e_projeto_na_pagina() {
 // ---- painel lateral ----
 
 fn tui_cols(e: &Env, cols: u16) -> Term {
+    tui_size(e, cols, 30)
+}
+
+fn tui_size(e: &Env, cols: u16, rows: u16) -> Term {
     let mut cmd = e.cmd(&e.work, &[]);
     cmd.env("SHELL", "/bin/bash");
-    Term::spawn_answering(cmd, cols, 30)
+    Term::spawn_answering(cmd, cols, rows)
 }
 
 #[test]
@@ -654,7 +658,10 @@ fn rede_no_painel_e_marca_de_dominio_novo_na_barra() {
     std::fs::create_dir_all(&outra).unwrap();
     sessao(&e, &outra);
 
-    let mut t = tui_cols(&e, 120);
+    // 50 linhas: o painel cabe inteiro, com as duas linhas do domínio (a do
+    // DNS e a da conexão). Só a primeira gravada ganha o "novo"; com 30
+    // linhas, o da linha do DNS ficava cortado embaixo.
+    let mut t = tui_size(&e, 120, 50);
     t.wait_text(&tab(2, "shell:outra"));
     t.wait_text("Rede");
     t.wait_text("sem conexões registradas");
