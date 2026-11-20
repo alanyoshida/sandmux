@@ -3073,7 +3073,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sandmux"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3120,7 +3120,7 @@ dependencies = [
 
 [[package]]
 name = "sandmux-ebpf"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "libc",
  "sandmux-spec",
@@ -3129,7 +3129,7 @@ dependencies = [
 
 [[package]]
 name = "sandmux-import"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "regex",
  "sandmux-spec",
@@ -3141,7 +3141,7 @@ dependencies = [
 
 [[package]]
 name = "sandmux-launcher"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "landlock",
  "libc",
@@ -3156,7 +3156,7 @@ dependencies = [
 
 [[package]]
 name = "sandmux-net"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "base64",
  "bytes",
@@ -3180,7 +3180,7 @@ dependencies = [
 
 [[package]]
 name = "sandmux-policy"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "base64",
  "hmac 0.12.1",
@@ -3195,7 +3195,7 @@ dependencies = [
 
 [[package]]
 name = "sandmux-proto"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "sandmux-spec",
  "serde",
@@ -3205,7 +3205,7 @@ dependencies = [
 
 [[package]]
 name = "sandmux-spec"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "serde",
  "serde_json",
@@ -3214,7 +3214,7 @@ dependencies = [
 
 [[package]]
 name = "sandmux-vault"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "argon2",
  "base64",
