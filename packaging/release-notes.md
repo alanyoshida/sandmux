@@ -1,16 +1,16 @@
-sandmux 0.1.25, antes da v1: correções do lançador nos binários das releases.
+sandmux 0.1.26, antes da v1: o Claude Code e o bubblewrap dentro do sandbox.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
-## Correções
+## Novidades
 
-- **Caminhos acrescentados ao sandbox** (`--ro`, `--rw` e a configuração): nos binários das releases, o lançador abria cada caminho das regras do Landlock para leitura.
-  - Um caminho que o usuário não consegue listar ficava sem regra e sem acesso dentro do sandbox.
-  - Um pipe com nome (FIFO) travava o lançamento.
+- **bubblewrap dentro do sandbox:** o `bwrap` de uma aba é um substituto do sandmux. Ele executa o comando sem montar nada, já dentro do confinamento da aba, e aplica do pedido as pastas liberadas (um Landlock a mais só naquele comando), a rede e os processos próprios e o filtro seccomp. O sandbox do bash do Claude Code (`/sandbox`) funciona dentro do sandmux. Nenhuma aba perde proteção. Detalhes em [docs/claude.md](https://github.com/alanyoshida/sandmux/blob/main/docs/claude.md#sandbox-do-bash).
 
-  Agora o caminho é aberto sem ler o conteúdo, como nos binários de desenvolvimento.
+## Correção
 
-Esta versão muda só o lançador. O protocolo entre o cliente e o daemon não muda (42), nem o auxiliar root.
+- **Claude Code numa aba:** ele não subia (`EINVAL` ao abrir a pasta temporária dele). O supervisor de arquivos recusava a abertura de um diretório que trazia um `mode` sem `O_CREAT`, como o Bun faz em toda abertura.
+
+Esta versão muda o lançador. O protocolo entre o cliente e o daemon não muda (42), nem o auxiliar root.
 
 ## Instalar
 
