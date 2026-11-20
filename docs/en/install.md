@@ -123,6 +123,7 @@ The kernel, Landlock and AppArmor are those of the machine running the container
 Ubuntu 24.04 is tested in a VM, with its own kernel, by `scripts/vm-ubuntu-2404.sh`:
 - the script downloads the official cloud image to `~/.cache/sandmux-vm/` and checks the sum;
 - it boots the VM with QEMU/KVM (4 GB), with a guard that shuts it down if the host runs low on memory;
-- it has the `doctor` steps: `lsm-bpf` turns on the BPF LSM at boot, and `hwe` installs the HWE kernel.
+- it has the `doctor` steps: `lsm-bpf` turns on the BPF LSM at boot, and `hwe` installs the HWE kernel;
+- it runs the root tests in there: `docker` prepares the rootless Docker, and `check-root` runs the tests (see [helper.md](helper.md#tests)).
 
 New BPF programs are tested only in the VM: a bug in them takes down the whole kernel.

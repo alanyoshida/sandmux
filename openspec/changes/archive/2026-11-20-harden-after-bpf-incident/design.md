@@ -43,7 +43,7 @@ Um teste unitário abre um FIFO e uma pasta sem leitura e aplica as regras num p
 
 ### 4. O aviso do `check-root.sh`
 
-Antes de subir o auxiliar, o script diz que vai carregar programas BPF no kernel desta máquina, aponta o passo da VM e pergunta. Com `SANDMUX_CHECK_ROOT_HOST=1`, segue sem perguntar.
+Antes de subir o auxiliar, o script diz que vai carregar programas BPF no kernel desta máquina, aponta o passo da VM e pergunta no terminal. Com `--host` (o primeiro argumento), segue sem perguntar; sem terminal e sem `--host`, recusa. Uma variável de ambiente não serviria: o `sudo` limpa o ambiente.
 
 ## Risks / Trade-offs
 

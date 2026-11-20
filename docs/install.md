@@ -121,6 +121,7 @@ O kernel, o Landlock e o AppArmor são os da máquina que roda os contêineres: 
 O Ubuntu 24.04 é testado numa VM, com o kernel dele, por `scripts/vm-ubuntu-2404.sh`:
 - o script baixa a imagem de nuvem oficial para `~/.cache/sandmux-vm/` e confere a soma;
 - sobe a VM com QEMU/KVM (4 GB), com um vigia que a desliga se a memória do host ficar baixa;
-- tem os passos do `doctor`: `lsm-bpf` liga o BPF LSM no boot, e `hwe` instala o kernel HWE.
+- tem os passos do `doctor`: `lsm-bpf` liga o BPF LSM no boot, e `hwe` instala o kernel HWE;
+- roda os testes com root lá dentro: `docker` prepara o Docker sem root, e `check-root` roda os testes (veja [helper.md](helper.md#testes)).
 
 Os programas BPF novos são testados só na VM: um erro neles derruba o kernel inteiro.

@@ -10,7 +10,7 @@
 use std::os::fd::AsFd;
 
 use landlock::{
-    ABI, Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset, RulesetAttr,
+    ABI, Access, AccessFs, CompatLevel, Compatible, PathBeneath, Ruleset, RulesetAttr,
     RulesetCreatedAttr, RulesetStatus, Scope,
 };
 use nix::sys::stat::{SFlag, fstat};
@@ -32,6 +32,25 @@ pub fn effective_abi() -> i32 {
         .ok()
         .and_then(|v| v.parse::<i32>().ok())
         .map_or(k, |v| v.min(k))
+}
+
+/// Abre o caminho com `O_PATH | O_CLOEXEC`, seguindo links, como o `PathFd`
+/// do crate `landlock`, mas pelo `open` direto: no musl (os binários das
+/// releases), o `O_ACCMODE` inclui o `O_PATH`, e o `custom_flags` do
+/// `OpenOptions` o tira. O caminho era aberto para leitura: um caminho sem
+/// leitura ficava sem regra, e um FIFO travava o lançador.
+pub fn open_path(p: &std::path::Path) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(p.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    // SAFETY: caminho terminado em NUL; o descritor devolvido é nosso.
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: descritor recém-aberto.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
 }
 
 fn abi_of(n: i32) -> ABI {
@@ -72,7 +91,7 @@ pub fn apply(rules: &LandlockRules) -> Result<(), String> {
     for (paths, access) in groups {
         for p in paths {
             // Um caminho que não existe não concede nada; ignorá-lo só reduz acesso.
-            let Ok(fd) = PathFd::new(p) else { continue };
+            let Ok(fd) = open_path(p) else { continue };
             let is_dir = fstat(fd.as_fd())
                 .map(|st| st.st_mode & SFlag::S_IFMT.bits() == SFlag::S_IFDIR.bits())
                 .unwrap_or(false);
@@ -100,6 +119,65 @@ pub fn apply(rules: &LandlockRules) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caminho_sem_leitura_e_fifo_abrem_sem_conteudo() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let fifo = d.path().join("cano");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        // Um FIFO sem ninguém do outro lado: o `open` para leitura travaria.
+        let fd = open_path(&fifo).unwrap();
+        let st = nix::sys::stat::fstat(&fd).unwrap();
+        assert_eq!(st.st_mode & libc::S_IFMT, libc::S_IFIFO);
+        // Uma pasta que o usuário atravessa mas não lista.
+        let fechada = d.path().join("fechada");
+        std::fs::create_dir(&fechada).unwrap();
+        std::fs::set_permissions(&fechada, std::fs::Permissions::from_mode(0o111)).unwrap();
+        if std::fs::read_dir(&fechada).is_err() {
+            assert!(open_path(&fechada).is_ok());
+        }
+        std::fs::set_permissions(&fechada, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn regra_vale_numa_pasta_sem_leitura() {
+        use std::os::unix::fs::PermissionsExt;
+        if crate::sys::landlock_abi() < MIN_ABI {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let fechada = d.path().join("fechada");
+        std::fs::create_dir(&fechada).unwrap();
+        std::fs::write(fechada.join("dentro"), "ok").unwrap();
+        std::fs::set_permissions(&fechada, std::fs::Permissions::from_mode(0o311)).unwrap();
+        if std::fs::read_dir(&fechada).is_ok() {
+            std::fs::set_permissions(&fechada, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return; // root lista tudo; o teste não diz nada
+        }
+        let rules = LandlockRules {
+            read: vec![fechada.clone()],
+            write: vec![],
+        };
+        // Num filho: o Landlock vale para o processo inteiro.
+        match unsafe { nix::unistd::fork() }.unwrap() {
+            nix::unistd::ForkResult::Child => {
+                let ok = apply(&rules).is_ok()
+                    && std::fs::read_to_string(fechada.join("dentro"))
+                        .ok()
+                        .as_deref()
+                        == Some("ok")
+                    && std::fs::read_to_string("/etc/hostname").is_err();
+                unsafe { libc::_exit(if ok { 0 } else { 1 }) };
+            }
+            nix::unistd::ForkResult::Parent { child } => {
+                let st = nix::sys::wait::waitpid(child, None).unwrap();
+                std::fs::set_permissions(&fechada, std::fs::Permissions::from_mode(0o755)).unwrap();
+                assert_eq!(st, nix::sys::wait::WaitStatus::Exited(child, 0));
+            }
+        }
+    }
 
     #[test]
     fn abi_escolhida() {

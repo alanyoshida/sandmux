@@ -20,7 +20,7 @@ Decisão do usuário (2026-11-20): a VM passa a ser o padrão para os testes com
   - o reinício pelo `.restart` funciona como no `check-root.sh`.
 
   Um passo `docker` prepara o Docker sem root na VM, com o `rootlesskit` do repositório do Docker.
-- **`scripts/check-root.sh`:** avisa que carrega BPF no kernel do host e pede confirmação. Uma variável a dispensa, para quem já decidiu.
+- **`scripts/check-root.sh`:** avisa que carrega BPF no kernel do host e pede confirmação. O argumento `--host` a dispensa, para quem já decidiu.
 - **Documentação:** `docs/helper.md` (os testes) e os pares em inglês.
 
 ## Capabilities

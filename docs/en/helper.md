@@ -107,10 +107,21 @@ The programs are assembled by sandmux itself, from the BTF of the running kernel
 
 ## Tests
 
-The tests that need root run through `scripts/check-root.sh`, outside `check.sh`:
+The tests that need root (`crates/sandmux/tests/docker_ebpf.rs`) stay outside `check.sh`. They load BPF programs into the kernel, and a bug in a global program takes down the whole machine. That is why the default is to run them in an Ubuntu 24.04 VM:
+
+```bash
+scripts/vm-ubuntu-2404.sh up
+scripts/vm-ubuntu-2404.sh docker
+scripts/vm-ubuntu-2404.sh check-root
+```
+
+- `up` boots the VM, and `docker` installs the rootless Docker in it, once.
+- `check-root` compiles the tests and the helper with musl and copies them into the VM, at the same path. Then it starts the helper as root in there, restarting it when a test asks, and runs the tests as the VM's user. A test filter can follow `check-root`.
+
+`scripts/check-root.sh` runs the same tests on this machine's kernel:
 
 ```bash
 sudo scripts/check-root.sh
 ```
 
-The script starts the helper as root on a temporary socket and runs `crates/sandmux/tests/docker_ebpf.rs` as the user who called `sudo`. New or changed BPF programs run first in a VM (`scripts/vm-ubuntu-2404.sh`), never directly on the host: a bug in a global program takes down the whole kernel. It runs binaries compiled by that user. That is why allowing it in `sudoers` without a password gives root to whoever runs as that user. If you do that, do it only while you need it.
+It warns and asks before loading BPF on the host; `--host` skips the question. The script starts the helper as root on a temporary socket and runs the tests as the user who called `sudo`, with binaries compiled by that user. That is why allowing it in `sudoers` without a password gives root to whoever runs as that user. If you do that, do it only while you need it.

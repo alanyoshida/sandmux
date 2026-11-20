@@ -504,7 +504,7 @@ Pedido do usuário (2026-11-20), nessa ordem, com o ciclo propor → implementar
 
 | # | Change | Situação | Conteúdo |
 |---|---|---|---|
-| 76 | `harden-after-bpf-incident` | Proposta, specs, design e tarefas validados (`openspec validate --strict`) em 2026-11-20. Muda `sandbox-filesystem` (um requisito modificado). Decisão do usuário (2026-11-20): a VM é o padrão para os testes com root, e o `scripts/check-root.sh` avisa e pede confirmação antes de carregar BPF no host | O `O_PATH` das regras do Landlock no musl, o teste de TUI instável do painel de rede e os testes com root na VM |
+| 76 | `harden-after-bpf-incident` | Arquivado em 2026-11-20 em `openspec/changes/archive/2026-11-20-harden-after-bpf-incident/`, com a spec sincronizada (um requisito modificado em `sandbox-filesystem`). Implementado em 2026-11-20 (6 de 6 tarefas): `./scripts/check.sh` com 726 testes no host; `scripts/vm-ubuntu-2404.sh check-root` na VM com 12 testes (3 ignorados de medida), com o do escopo e os dois do reinício do auxiliar. Achado: compilar em musl com a VM ligada levou a memória livre do host a 6 GB, e o vigia desligou a VM; o `check-root` passou a compilar antes de subir a VM. O aviso do `check-root.sh` é dispensado por `--host`, e não por variável, porque o `sudo` limpa o ambiente. Proposta, specs, design e tarefas validados (`openspec validate --strict`) em 2026-11-20. Muda `sandbox-filesystem` (um requisito modificado). Decisão do usuário (2026-11-20): a VM é o padrão para os testes com root, e o `scripts/check-root.sh` avisa e pede confirmação antes de carregar BPF no host | O `O_PATH` das regras do Landlock no musl, o teste de TUI instável do painel de rede e os testes com root na VM |
 | 77 | (a propor) | A propor | A política de arquivos decidida pelo arquivo, para ferramentas que montam (bubblewrap, podman sem root) rodarem no sandbox (seção 5, "Outras lacunas do backend eBPF") |
 | 78 | (a propor) | A propor | A decisão e o registro das aberturas de arquivo no kernel, para tirar o custo de 3,1x a 3,5x da interceptação (seção 5) |
 
@@ -676,7 +676,7 @@ Achados do change 74 na VM do Ubuntu 24.04 (2026-11-20), sem change ainda:
 - ~~**O Docker privado no 24.04**~~: resolvido no próprio change 74 (o `doctor` pede o `rootlesskit` 2.0, e o `O_PATH` das marcas no musl).
 - ~~**A publicação de portas no 24.04**~~: não reproduzido em 17 rodadas seguidas na VM. As falhas vieram com a VM ocupada (logo depois do boot ou de instalar pacotes). Os dois testes tinham prazos curtos (a espera de 4 ou 5 s e o servidor do sandbox vivendo 4 ou 8 s). O change 75 corrigiu os prazos.
 - ~~**Os testes com root do Docker por eBPF (changes 70 a 73) no 24.04**~~: rodaram na VM depois da correção, 10 de 12 (as 2 falhas param no reinício do auxiliar, que só o `check-root.sh` faz).
-- **O `PathFd` do crate `landlock` no musl:** usa o mesmo `custom_flags` com `O_PATH`, que o musl perde. Um caminho da allowlist que o usuário não lê é pulado, o que só tira acesso. Sem change.
+- ~~**O `PathFd` do crate `landlock` no musl**~~: corrigido no change 76 (as regras do Landlock pelo `open` direto; além do caminho sem leitura, um FIFO na allowlist travava o lançador).
 
 As verificações do change 69 estão nas tarefas dele, cada uma com o recuo escrito no design: o filtro seccomp sem `no_new_privs` (que quebraria o `sudo` dentro dos contêineres), o `runc` com o chaveiro negado, com o `/dev` mínimo e dentro do cgroup namespace.
 
