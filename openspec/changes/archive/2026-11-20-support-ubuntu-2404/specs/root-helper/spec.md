@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Pedidos ao auxiliar root
-O `sandmux-helper` MUST rodar como serviço do sistema, com root, num socket Unix local que qualquer usuário alcança. Ele MUST aceitar só seis pedidos: a consulta de estado (versão e BPF LSM ativo), o confinamento e a observação de um cgroup v2 que pertence a quem pede, a marcação e a desmarcação de arquivos de um confinamento, e o escopo de um user namespace de quem pede, os cinco últimos com descritores abertos por quem pede. Qualquer outro pedido, ou um cgroup ou namespace de outro usuário, MUST ser recusado com erro, sem efeito.
+O `sandmux-helper` MUST rodar como serviço do sistema, com root, num socket Unix local que qualquer usuário alcança. Ele MUST aceitar só seis pedidos: o estado (versão e BPF LSM ativo), o confinamento e a observação de um cgroup v2 de quem pede, a marcação e a desmarcação de arquivos, e o escopo de um user namespace de quem pede, os cinco últimos com descritores abertos por quem pede. Outro pedido, ou um cgroup ou namespace de outro usuário, MUST ser recusado com erro, sem efeito.
 
 #### Scenario: cgroup de outro usuário
 - **WHEN** um usuário comum pede o confinamento passando o diretório de um cgroup que pertence ao root
