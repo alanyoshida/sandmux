@@ -2,7 +2,7 @@
 
 > English: [helper.md](en/helper.md)
 
-O `sandmux-helper` é o único pedaço do sandmux que roda como root. Ele existe para uma coisa: prender ao cgroup do [Docker privado](docker.md) de uma pasta os programas BPF LSM que decidem, no kernel, o que os contêineres podem abrir e alterar. Sem ele, o resto do sandmux funciona igual, e o Docker privado sobe só com as proteções sem privilégio.
+O `sandmux-helper` é o único pedaço do sandmux que roda como root. Ele existe para uma coisa: prender ao cgroup do [Docker privado](docker.md) de uma pasta os programas BPF LSM que decidem, no kernel, o que os contêineres podem abrir e alterar. Sem ele, o resto do sandmux funciona igual, e o Docker privado sobe só com as proteções sem privilégio. Num kernel com o Landlock abaixo do ABI 6 (o Ubuntu 24.04 com o 6.8), ele também completa o confinamento de cada aba ([escopo do sandbox](#escopo-do-sandbox)), e aí o sandbox só sobe com ele.
 
 ## O que ele faz
 
@@ -24,7 +24,8 @@ A decisão é pelo arquivo (o inode), e não pelo caminho. Por isso, desmontar u
 - Um usuário só confina um cgroup cujo diretório pertence a ele. O root pode qualquer um.
 - Uma regra só nega. Ela nunca dá acesso, e só vale para os processos do cgroup pedido. Marcar um arquivo do sistema, como `/etc/hostname`, só impede o Docker daquele usuário de abri-lo.
 - O auxiliar nunca abre um caminho. Os arquivos chegam como descritores abertos pelo próprio usuário, que prova assim que alcança o arquivo.
-- **Limites por usuário:** 16 confinamentos ativos, cada um com até 16384 marcas. Um pedido acima disso é recusado, sem afetar os outros.
+- Um usuário só pede o escopo de um user namespace que pertence a ele, e nunca o do próprio auxiliar.
+- **Limites por usuário:** 16 confinamentos ativos, cada um com até 16384 marcas, e 256 escopos de sandbox. Um pedido acima disso é recusado, sem afetar os outros.
 
 ## Ao vivo e eventos
 
@@ -34,6 +35,20 @@ A decisão é pelo arquivo (o inode), e não pelo caminho. Por isso, desmontar u
 ## Observação das execuções e das conexões
 
 O pedido `observe` liga só a observação das execuções num cgroup do usuário (o escopo de uma aba), sem regras de arquivos nem marcas. Um programa no tracepoint `sched_process_exec` manda o caminho executado, o processo e os argumentos pela mesma conexão. Dois programas `fexit`, na saída de `tcp_v4_connect` e `tcp_v6_connect`, mandam cada conexão TCP que um processo do cgroup abre: o pid, a porta de origem e o destino. O daemon usa esses eventos para o [processo de cada conexão](network.md#processo-de-cada-conexão) no registro de rede. O confinamento do Docker (`confine`) inclui a mesma observação. São até 64 observações ativas por usuário, além dos 16 confinamentos. A observação só registra: nenhuma execução ou conexão é negada nem atrasada.
+
+## Escopo do sandbox
+
+Num kernel com o Landlock ABI 4 ou 5, o Landlock não tem o escopo de sockets abstratos e de sinais e, no ABI 4, a restrição de `ioctl` em dispositivos. O lançador (`sandmux-run`) pede então ao auxiliar o `scope` do sandbox, antes de o comando rodar, com:
+- o user namespace que cada lançamento cria;
+- o processo 1 do sandbox;
+- a lista dos dispositivos do `/dev` do sandbox.
+
+Programas BPF LSM globais, carregados no primeiro escopo e soltos quando não resta nenhum, negam a um processo desse user namespace (e dos de baixo):
+- a conexão a um socket abstrato criado fora do sandbox;
+- um sinal a um processo de fora, ou ao processo 1 do sandbox;
+- um `ioctl` num dispositivo fora da lista, com os mesmos comandos liberados pelo Landlock.
+
+O escopo vale enquanto a conexão do lançador está aberta, isto é, enquanto o sandbox vive. Sem o auxiliar ou sem o BPF LSM, o lançamento é recusado, e o `sandmux doctor` mostra os caminhos ([Ubuntu 24.04](install.md#ubuntu-2404)). Num kernel com o ABI 6, o lançador não pede o escopo.
 
 ## Quanto tempo as regras duram
 
@@ -98,4 +113,4 @@ Os testes que exigem root rodam por `scripts/check-root.sh`, fora do `check.sh`:
 sudo scripts/check-root.sh
 ```
 
-O script sobe o auxiliar como root num socket temporário e roda `crates/sandmux/tests/docker_ebpf.rs` como o usuário que chamou o `sudo`. Ele roda binários compilados por esse usuário. Por isso, liberá-lo no `sudoers` sem senha dá root a quem roda como esse usuário. Se fizer isso, faça só enquanto precisa.
+O script sobe o auxiliar como root num socket temporário e roda `crates/sandmux/tests/docker_ebpf.rs` como o usuário que chamou o `sudo`. Programas BPF novos ou alterados rodam primeiro numa VM (`scripts/vm-ubuntu-2404.sh`), nunca direto no host: um erro num programa global derruba o kernel inteiro. Ele roda binários compilados por esse usuário. Por isso, liberá-lo no `sudoers` sem senha dá root a quem roda como esse usuário. Se fizer isso, faça só enquanto precisa.

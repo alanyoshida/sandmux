@@ -35,6 +35,9 @@ pub const MAX_CONFINE_PER_UID: usize = 16;
 pub const MAX_MARKS: usize = 16384;
 /// Observações de execução ativas por usuário (uma por aba).
 pub const MAX_OBSERVE_PER_UID: usize = 64;
+/// Escopos de sandbox ativos por usuário (um por lançamento, nos kernels sem
+/// o Landlock ABI 6).
+pub const MAX_SCOPE_PER_UID: usize = 256;
 
 const CGROUP2_SUPER_MAGIC: i64 = 0x6367_7270;
 
@@ -217,6 +220,9 @@ pub trait Events: Send {
     fn poll(&mut self, timeout_ms: i32) -> (Vec<Value>, u64);
 }
 
+/// Um escopo de sandbox registrado: sai do registro quando é solto.
+pub trait Scoped: Send {}
+
 /// O que carrega os programas. A versão real usa `sandmux-ebpf`; os testes,
 /// uma falsa.
 pub trait Backend: Send + Sync {
@@ -232,6 +238,63 @@ pub trait Backend: Send + Sync {
     fn check_cgroup(&self, cgroup: &OwnedFd, uid: u32) -> Result<(), String> {
         check_cgroup(cgroup, uid)
     }
+    /// Os programas do escopo carregam neste kernel? `Err` com o motivo.
+    fn scope_supported(&self) -> Result<(), String>;
+    /// Registra o user namespace `ns` de um sandbox, com as opções e os
+    /// dispositivos (`(número, máscara)` no formato do kernel).
+    /// `init_pid` é o processo 1 do sandbox, que não recebe sinais dele.
+    fn scope(
+        &self,
+        ns: &OwnedFd,
+        opts: u32,
+        init_pid: u32,
+        devs: &[(u32, u32)],
+    ) -> Result<Box<dyn Scoped>, String>;
+    /// Confere que o descritor é um user namespace de `uid`.
+    fn check_userns(&self, ns: &OwnedFd, uid: u32) -> Result<(), String> {
+        check_userns(ns, uid)
+    }
+}
+
+const NS_GET_NSTYPE: libc::c_ulong = 0xb703;
+const NS_GET_OWNER_UID: libc::c_ulong = 0xb704;
+
+/// A conferência real: um user namespace, que não é o do auxiliar, e cujo
+/// dono é quem pede (o root pode qualquer um).
+pub fn check_userns(ns: &OwnedFd, uid: u32) -> Result<(), String> {
+    // SAFETY: ioctl sem argumento de memória.
+    let t = unsafe { libc::ioctl(ns.as_raw_fd(), NS_GET_NSTYPE as _) };
+    if t != libc::CLONE_NEWUSER {
+        return Err(tr!(
+            "o descritor não é de um user namespace",
+            "the descriptor is not a user namespace"
+        )
+        .into());
+    }
+    let own = std::fs::metadata("/proc/self/ns/user")
+        .map(|m| m.ino())
+        .ok();
+    let f = std::fs::File::from(ns.try_clone().map_err(|e| e.to_string())?);
+    let ino = f.metadata().map_err(|e| e.to_string())?.ino();
+    if Some(ino) == own {
+        return Err(tr!(
+            "o user namespace é o do próprio auxiliar",
+            "the user namespace is the helper's own"
+        )
+        .into());
+    }
+    let mut owner: libc::uid_t = 0;
+    // SAFETY: o kernel escreve um uid_t em `owner`.
+    if unsafe { libc::ioctl(ns.as_raw_fd(), NS_GET_OWNER_UID as _, &mut owner) } < 0 {
+        return Err(format!("NS_GET_OWNER_UID: {}", io::Error::last_os_error()));
+    }
+    if uid != 0 && owner != uid {
+        return Err(trf!(
+            "o user namespace pertence ao uid {owner}, não a quem pede ({uid})",
+            "the user namespace belongs to uid {owner}, not to the requester ({uid})"
+        ));
+    }
+    Ok(())
 }
 
 /// A conferência real: cgroup v2, e o dono do diretório é quem pede.
@@ -272,6 +335,7 @@ pub struct Server {
     backend: Box<dyn Backend>,
     active: Mutex<HashMap<u32, usize>>,
     observing: Mutex<HashMap<u32, usize>>,
+    scoping: Mutex<HashMap<u32, usize>>,
 }
 
 struct Conn {
@@ -281,6 +345,8 @@ struct Conn {
     observing: bool,
     /// Eventos de uma observação nova, para a thread que os manda.
     new_events: Option<Box<dyn Events>>,
+    /// O escopo de sandbox registrado nesta conexão.
+    scoped: Option<Box<dyn Scoped>>,
 }
 
 fn err(msg: impl Into<String>) -> Value {
@@ -293,6 +359,7 @@ impl Server {
             backend,
             active: Mutex::new(HashMap::new()),
             observing: Mutex::new(HashMap::new()),
+            scoping: Mutex::new(HashMap::new()),
         })
     }
 
@@ -306,7 +373,12 @@ impl Server {
                     Ok(b) => (b, Value::Null),
                     Err(e) => (false, Value::String(e)),
                 };
-                json!({"ok": true, "version": env!("CARGO_PKG_VERSION"), "lsm": lsm, "reason": reason})
+                let (scope, scope_reason) = match self.backend.scope_supported() {
+                    Ok(()) => (true, Value::Null),
+                    Err(e) => (false, Value::String(e)),
+                };
+                json!({"ok": true, "version": env!("CARGO_PKG_VERSION"), "lsm": lsm, "reason": reason,
+                    "scope": scope, "scope_reason": scope_reason})
             }
             Some("confine") => {
                 if c.confined.is_some() || c.observing {
@@ -429,7 +501,70 @@ impl Server {
                 }
                 json!({"ok": true, "marks": x.marks()})
             }
+            Some("scope") => {
+                if c.scoped.is_some() || c.observing || c.confined.is_some() {
+                    return err(tr!(
+                        "esta conexão já tem um pedido ativo",
+                        "this connection already has an active request"
+                    ));
+                }
+                let Ok([ns]) = <[OwnedFd; 1]>::try_from(fds) else {
+                    return err(tr!(
+                        "scope leva um descritor, o do user namespace",
+                        "scope takes one descriptor, the user namespace's"
+                    ));
+                };
+                if let Err(e) = self.backend.check_userns(&ns, c.uid) {
+                    return err(e);
+                }
+                let devs: Vec<(u32, u32)> = v
+                    .get("devs")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|d| {
+                                Some((d.get(0)?.as_u64()? as u32, d.get(1)?.as_u64()? as u32))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let opts = if v.get("ioctl") == Some(&Value::Bool(true)) {
+                    sandmux_ebpf::scope::OPT_IOCTL
+                } else {
+                    0
+                };
+                {
+                    let mut a = self.scoping.lock().unwrap_or_else(|e| e.into_inner());
+                    let n = a.entry(c.uid).or_default();
+                    if *n >= MAX_SCOPE_PER_UID {
+                        return err(trf!(
+                            "limite de {MAX_SCOPE_PER_UID} escopos ativos por usuário",
+                            "limit of {MAX_SCOPE_PER_UID} active scopes per user"
+                        ));
+                    }
+                    *n += 1;
+                }
+                let init_pid = v.get("init_pid").and_then(Value::as_u64).unwrap_or(0) as u32;
+                match self.backend.scope(&ns, opts, init_pid, &devs) {
+                    Ok(x) => {
+                        c.scoped = Some(x);
+                        json!({"ok": true})
+                    }
+                    Err(e) => {
+                        self.release_scope(c.uid);
+                        eprintln!("sandmux-helper: uid {}: {e}", c.uid);
+                        err(e)
+                    }
+                }
+            }
             _ => err(tr!("pedido desconhecido", "unknown request")),
+        }
+    }
+
+    fn release_scope(&self, uid: u32) {
+        let mut a = self.scoping.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = a.get_mut(&uid) {
+            *n = n.saturating_sub(1);
         }
     }
 
@@ -459,6 +594,7 @@ impl Server {
             confined: None,
             observing: false,
             new_events: None,
+            scoped: None,
         };
         let mut bad = 0;
         loop {
@@ -495,6 +631,9 @@ impl Server {
         }
         if c.observing {
             self.release_observe(uid);
+        }
+        if c.scoped.take().is_some() {
+            self.release_scope(uid);
         }
     }
 }
@@ -548,6 +687,49 @@ fn forward_events(
 pub struct Ebpf {
     layout: Mutex<Option<Result<sandmux_ebpf::prog::Layout, String>>>,
     exec: Mutex<Option<Result<sandmux_ebpf::exec::ExecLayout, String>>>,
+    scopes: Arc<Mutex<ScopeState>>,
+}
+
+/// Os programas do escopo, carregados no primeiro registro e soltos quando
+/// não resta nenhum.
+#[derive(Default)]
+struct ScopeState {
+    layout: Option<Result<sandmux_ebpf::scope::ScopeLayout, String>>,
+    loaded: Option<sandmux_ebpf::scope::Scopes>,
+    inums: std::collections::HashSet<u32>,
+}
+
+impl ScopeState {
+    fn layout(&mut self) -> Result<sandmux_ebpf::scope::ScopeLayout, String> {
+        self.layout
+            .get_or_insert_with(|| {
+                sandmux_ebpf::btf::Btf::vmlinux()
+                    .and_then(|b| sandmux_ebpf::scope::ScopeLayout::new(&b))
+                    .map_err(|e| e.to_string())
+            })
+            .clone()
+    }
+}
+
+/// Um escopo registrado no mapa.
+struct RealScope {
+    st: Arc<Mutex<ScopeState>>,
+    inum: u32,
+}
+
+impl Scoped for RealScope {}
+
+impl Drop for RealScope {
+    fn drop(&mut self) {
+        let mut st = self.st.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(s) = &st.loaded {
+            let _ = s.unregister(self.inum);
+        }
+        st.inums.remove(&self.inum);
+        if st.inums.is_empty() {
+            st.loaded = None;
+        }
+    }
 }
 
 impl Ebpf {
@@ -555,6 +737,7 @@ impl Ebpf {
         Ebpf {
             layout: Mutex::new(None),
             exec: Mutex::new(None),
+            scopes: Arc::new(Mutex::new(ScopeState::default())),
         }
     }
 }
@@ -729,6 +912,58 @@ impl Backend for Ebpf {
         sandmux_ebpf::lsm_active()
     }
 
+    fn scope_supported(&self) -> Result<(), String> {
+        if !sandmux_ebpf::lsm_active()? {
+            return Err(tr!(
+                "o BPF LSM não está ativo no kernel",
+                "the BPF LSM is not active in the kernel"
+            )
+            .into());
+        }
+        let mut st = self.scopes.lock().unwrap_or_else(|e| e.into_inner());
+        st.layout().map(|_| ())
+    }
+
+    fn scope(
+        &self,
+        ns: &OwnedFd,
+        opts: u32,
+        init_pid: u32,
+        devs: &[(u32, u32)],
+    ) -> Result<Box<dyn Scoped>, String> {
+        self.scope_supported()?;
+        let f = std::fs::File::from(ns.try_clone().map_err(|e| e.to_string())?);
+        let inum = f.metadata().map_err(|e| e.to_string())?.ino() as u32;
+        let devs: Vec<sandmux_ebpf::scope::Dev> = devs
+            .iter()
+            .map(|&(dev, mask)| sandmux_ebpf::scope::Dev { dev, mask })
+            .collect();
+        let mut st = self.scopes.lock().unwrap_or_else(|e| e.into_inner());
+        if st.inums.contains(&inum) {
+            return Err(tr!(
+                "esse user namespace já tem um escopo",
+                "that user namespace already has a scope"
+            )
+            .into());
+        }
+        if st.loaded.is_none() {
+            let l = st.layout()?;
+            st.loaded = Some(sandmux_ebpf::scope::Scopes::load(&l).map_err(|e| e.to_string())?);
+        }
+        let s = st.loaded.as_ref().expect("carregado acima");
+        if let Err(e) = s.register(inum, opts, init_pid, &devs) {
+            if st.inums.is_empty() {
+                st.loaded = None;
+            }
+            return Err(e.to_string());
+        }
+        st.inums.insert(inum);
+        Ok(Box::new(RealScope {
+            st: self.scopes.clone(),
+            inum,
+        }))
+    }
+
     fn observe(&self, cg: &OwnedFd) -> Result<Box<dyn Events>, String> {
         let l = self.exec_layout()?;
         let (level, id) = cgroup_level_id(cg)?;
@@ -793,12 +1028,37 @@ pub struct Client {
     events: Mutex<Option<std::sync::mpsc::Receiver<Value>>>,
 }
 
+/// Abre o caminho com `O_PATH | O_NOFOLLOW`, sem precisar de permissão de
+/// leitura no arquivo. Pelo `open` direto: no musl (os binários das releases),
+/// o `O_ACCMODE` inclui o `O_PATH`, e o `custom_flags` do `OpenOptions` o tira;
+/// o arquivo era aberto para leitura, e um `/etc/gshadow` dava `EACCES`.
+pub fn open_path(p: &Path) -> io::Result<OwnedFd> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(p.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: caminho terminado em NUL; o descritor devolvido é nosso.
+    let fd = unsafe {
+        libc::open(
+            c.as_ptr(),
+            libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: descritor recém-aberto.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
 /// Resposta do `status`.
 #[derive(Clone, Debug)]
 pub struct Status {
     pub version: String,
     pub lsm: bool,
     pub reason: Option<String>,
+    /// Os programas do escopo de sandbox carregam (o pedido `scope`).
+    pub scope: bool,
+    pub scope_reason: Option<String>,
 }
 
 fn seqpacket() -> io::Result<OwnedFd> {
@@ -956,7 +1216,19 @@ impl Client {
             version: v["version"].as_str().unwrap_or("").to_string(),
             lsm: v["lsm"] == true,
             reason: v["reason"].as_str().map(str::to_string),
+            scope: v["scope"] == true,
+            scope_reason: v["scope_reason"].as_str().map(str::to_string),
         })
+    }
+
+    /// Registra o user namespace `ns` de um sandbox: o escopo vale até esta
+    /// conexão fechar.
+    pub fn scope(&self, ns: &OwnedFd, ioctl: bool, devs: &[(u32, u32)]) -> Result<(), String> {
+        self.call(
+            json!({"op": "scope", "ioctl": ioctl, "devs": devs}),
+            &[ns.as_raw_fd()],
+        )
+        .map(|_| ())
     }
 
     /// Liga o confinamento no cgroup do diretório `dir`. Devolve o anexo
@@ -979,16 +1251,11 @@ impl Client {
     }
 
     fn send_paths(&self, op: &str, kind: MarkKind, paths: &[PathBuf]) -> Result<usize, String> {
-        use std::os::unix::fs::OpenOptionsExt;
         let mut n = 0;
         for chunk in paths.chunks(MAX_FDS) {
             let mut files = Vec::new();
             for p in chunk {
-                match std::fs::OpenOptions::new()
-                    .read(true)
-                    .custom_flags(libc::O_PATH | libc::O_NOFOLLOW)
-                    .open(p)
-                {
+                match open_path(p) {
                     Ok(f) => files.push(f),
                     Err(e) if e.kind() == io::ErrorKind::NotFound => {}
                     Err(e) => return Err(format!("{}: {e}", p.display())),
@@ -1187,6 +1454,102 @@ mod tests {
                 Err("o cgroup pertence a outro uid".into())
             }
         }
+        fn scope_supported(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn scope(
+            &self,
+            _ns: &OwnedFd,
+            opts: u32,
+            _init_pid: u32,
+            devs: &[(u32, u32)],
+        ) -> Result<Box<dyn Scoped>, String> {
+            self.loaded.fetch_add(1, Ordering::SeqCst);
+            *self.asked.lock().unwrap() = Some(opts * 1000 + devs.len() as u32);
+            Ok(Box::new(FakeScope(self.loaded.clone())))
+        }
+    }
+    struct FakeScope(Arc<AtomicUsize>);
+    impl Scoped for FakeScope {}
+    impl Drop for FakeScope {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Um processo num user namespace novo, do usuário do teste.
+    fn child_userns() -> Option<(std::process::Child, OwnedFd)> {
+        let mut c = std::process::Command::new("unshare")
+            .args(["-U", "sleep", "30"])
+            .spawn()
+            .ok()?;
+        let own = std::fs::metadata("/proc/self/ns/user").ok()?.ino();
+        for _ in 0..200 {
+            if let Ok(f) = std::fs::File::open(format!("/proc/{}/ns/user", c.id()))
+                && f.metadata().ok()?.ino() != own
+            {
+                return Some((c, OwnedFd::from(f)));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let _ = c.kill();
+        None
+    }
+
+    #[test]
+    fn marca_abre_arquivo_sem_leitura() {
+        // O `O_PATH` não exige leitura: um arquivo 000 abre (o `/etc/gshadow`
+        // das marcas do Docker). No musl, o `OpenOptions` perdia o `O_PATH`.
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("fechado");
+        std::fs::write(&f, "x").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&f).is_ok() {
+            return; // root lê tudo; o teste não diz nada
+        }
+        let fd = open_path(&f).unwrap();
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::fstat(fd.as_raw_fd(), &mut st) }, 0);
+        // E um link simbólico não é seguido.
+        let l = d.path().join("link");
+        std::os::unix::fs::symlink(&f, &l).unwrap();
+        let fd = open_path(&l).unwrap();
+        assert_eq!(unsafe { libc::fstat(fd.as_raw_fd(), &mut st) }, 0);
+        assert_eq!(st.st_mode & libc::S_IFMT, libc::S_IFLNK);
+    }
+
+    #[test]
+    fn escopo_de_um_user_namespace() {
+        let (_d, p, loaded, asked) = start(true);
+        let c = Client::connect(&p).unwrap();
+        assert!(c.status().unwrap().scope);
+        // O user namespace do próprio auxiliar (e do teste) é recusado.
+        let own = OwnedFd::from(std::fs::File::open("/proc/self/ns/user").unwrap());
+        let e = c.scope(&own, true, &[]).unwrap_err();
+        assert!(e.contains("próprio auxiliar"), "{e}");
+        // Um arquivo qualquer não é user namespace.
+        let f = OwnedFd::from(std::fs::File::open("/proc/self/stat").unwrap());
+        let e = c.scope(&f, true, &[]).unwrap_err();
+        assert!(e.contains("não é de um user namespace"), "{e}");
+        let Some((mut kid, ns)) = child_userns() else {
+            return;
+        };
+        c.scope(
+            &ns,
+            true,
+            &[(1 << 20 | 3, u32::MAX), (136 << 20, 0xfff0_0000)],
+        )
+        .unwrap();
+        assert_eq!(loaded.load(Ordering::SeqCst), 1);
+        assert_eq!(*asked.lock().unwrap(), Some(1002));
+        // Um por conexão.
+        let e = c.scope(&ns, false, &[]).unwrap_err();
+        assert!(e.contains("já tem"), "{e}");
+        drop(c);
+        wait_for(|| loaded.load(Ordering::SeqCst) == 0);
+        let _ = kid.kill();
+        let _ = kid.wait();
     }
 
     type Started = (

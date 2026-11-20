@@ -5,7 +5,7 @@ O Ubuntu 24.04 é a LTS mais usada, e hoje o sandmux não sobe nele com o kernel
 Achados do agente ao propor (2026-11-20):
 
 - O kernel 6.8 do 24.04 tem o Landlock ABI 4. Faltam a restrição de `ioctl` em dispositivos (ABI 5) e os escopos de sockets abstratos e de sinais (ABI 6).
-- O kernel HWE do 24.04 (`linux-generic-hwe-24.04`, 6.14 desde o 24.04.3) já tem o ABI 6, e deve rodar o sandmux como ele é hoje. Isso nunca foi testado.
+- O kernel HWE do 24.04 (`linux-generic-hwe-24.04`; o 7.0 em 2026-11, visto na VM) já tem o ABI 6, e roda o sandmux como ele é hoje.
 - O BPF LSM vem compilado no kernel do 24.04 (`CONFIG_BPF_LSM=y`), mas fica desligado: a lista padrão é `CONFIG_LSM="landlock,lockdown,yama,integrity,apparmor"`, sem `bpf`. A informação vem da configuração do kernel do Ubuntu (`debian.master/config/annotations` do noble), e o kernel 6.11 é igual. Para ligar, o usuário põe `bpf` no parâmetro `lsm=` do boot e reinicia.
 
 Decisões do usuário (2026-11-20), ao propor:
@@ -24,6 +24,9 @@ Decisões do usuário (2026-11-20), ao propor:
   O registro dura enquanto a conexão do pedido está aberta, como os outros pedidos.
 - **`sandmux doctor`:** no Ubuntu 24.04 com o kernel abaixo do 6.12, recomenda o kernel HWE e mostra o outro caminho: o auxiliar (`sandmux setup`) e o `bpf` no `lsm=` do GRUB, com os comandos.
 - **Documentação:** o Ubuntu 24.04 entra nas distros testadas, com o kernel HWE ou com o 6.8 pelo auxiliar.
+- **Docker privado no 24.04** (decisão do usuário, 2026-11-20, depois do teste na VM):
+  - o `sandmux doctor` e o Docker privado conferem se o `rootlesskit` tem a rede `none` (2.0 ou mais novo). O do Ubuntu 24.04 (1.1.1) não tem, e a solução é o `docker-ce-rootless-extras` do repositório do Docker;
+  - a marcação dos arquivos negados ao Docker abre cada arquivo com `O_PATH` pelo `open` direto. No musl (os binários das releases), o `OpenOptions` do Rust tirava o `O_PATH`, e uma cobertura que o usuário não lê (o `/etc/gshadow`) impedia o Docker confinado de subir, em qualquer distro, desde a 0.1.20.
 
 Decisões do agente:
 
@@ -47,6 +50,7 @@ Limites, escritos na proposta:
 - `sandbox-isolation`: a falha fechada sem suporte do kernel aceita o Landlock ABI 4 ou 5 quando o auxiliar root completa os escopos e a restrição de `ioctl`.
 - `root-helper`: o pedido novo `scope`, que confina o user namespace de um sandbox.
 - `installation`: o `sandmux doctor` no Ubuntu 24.04 com o kernel 6.8.
+- `container-engine`: o `rootlesskit` sem a rede `none` conta como falta, e uma cobertura que o usuário não lê é marcada.
 
 ## Impact
 

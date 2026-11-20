@@ -62,12 +62,16 @@ Os programas são `BPF_LSM_MAC` (ligados por `BPF_LINK_CREATE` ou `raw_tracepoin
 ### 4. Os ganchos
 
 - **Socket abstrato** (`unix_stream_connect(sock, other, newsk)` e `unix_may_send(sock, other)`): se o processo atual está num sandbox S e o endereço de `other` é abstrato (`unix_sock.addr` com `sun_path[0] == 0`), o socket só passa quando quem o criou também está em S. A origem do socket é o user namespace das credenciais do arquivo do socket (`other->sk_socket->file->f_cred`). O mesmo teste do processo atual vale para esse namespace, que precisa ser S ou um descendente. Um socket por caminho passa: o caminho já é decidido pela visão de arquivos e pelo Landlock.
-- **Sinal** (`task_kill(p, info, sig, cred)`): se o processo atual está em S, o sinal só passa quando o alvo `p` também está em S ou abaixo. O sinal 0 também é negado, como no Landlock: ele revela se o processo existe. A notificação de E/S (`file_send_sigiotask`) fica de fora, como no Landlock com o dono do arquivo dentro do sandbox.
+- **Sinal** (`task_kill(p, info, sig, cred)`): se o processo atual está em S, o sinal só passa quando o alvo `p` também está em S ou abaixo e não é o processo 1 do sandbox. O sinal 0 também é negado, como no Landlock: ele revela se o processo existe. O processo 1 (a cópia do supervisor) está no user namespace do sandbox, mas fora do domínio do Landlock: o pedido leva o pid dele no host, e o programa o compara com o `tgid` do alvo (a suíte de fuga pegou esse caso na VM). Os auxiliares do lançador que entram no user namespace (nomes, montagem, conexão) não entram no namespace de pid do sandbox: o agente não os alcança por pid. O argumento `cred` só existe nos sinais de E/S assíncrona do USB, que passam. A notificação de E/S (`file_send_sigiotask`) fica de fora, como no Landlock com o dono do arquivo dentro do sandbox.
+- **Argumentos que podem ser nulos:** o verificador trata os argumentos dos ganchos como ponteiros que nunca são nulos e apaga a conferência `!= 0` deles. O `cred` do `task_kill` é nulo em quase todo `kill()`, e a leitura de `cred->user_ns` derrubou o kernel do host duas vezes (no 7.0) e o da VM (no 6.8, com o *oops* no `dmesg`). Esse argumento é lido do contexto por `bpf_probe_read_kernel`, como número. Os campos alcançados por ponteiros sem a marca de confiável (`user_namespace.parent`, `sock.sk_socket`) são lidos com a proteção do verificador, e as conferências de nulo deles valem.
 - **`ioctl` em dispositivo** (`file_ioctl(file, cmd, arg)`), só no ABI 4: se o processo atual está em S e o inode do arquivo é de caractere ou de bloco, o `ioctl` só passa quando o número do dispositivo (`i_rdev`) está na lista do pedido ou quando o comando está na lista fixa do Landlock (`FIOCLEX`, `FIONCLEX`, `FIONBIO`, `FIOASYNC`, `FIOQSIZE`, `FIFREEZE`, `FITHAW`, `FS_IOC_FIEMAP`, `FIGETBSZ`, `FIONREAD`, `FS_IOC_GETFLAGS` e afins). O `ioctl` de 32 bits (`file_ioctl_compat`, 6.10+) não existe no 6.8. No 6.8, o `compat_ioctl` também passa por `file_ioctl`.
 
 A negação é `-EPERM` nos ganchos de socket e de sinal, e `-EACCES` no `ioctl`, como no Landlock.
 
-**A lista de dispositivos** é a dos nós que o lançador monta no `/dev` do sandbox e que o Landlock libera para escrita. O lançador lê o `st_rdev` de cada um antes do pedido. Os terminais do `devpts` do sandbox entram pelo número principal (136 a 143) e pelo `ptmx` (5:2).
+**A lista de dispositivos** é a dos nós que o lançador monta no `/dev` do sandbox. O Landlock libera o `/dev` inteiro para escrita, `IOCTL_DEV` incluído, e a restrição do ABI 5 só pega os dispositivos de fora dele. O lançador lê o `st_rdev` de cada nó antes do pedido. Também entram:
+- os terminais do `devpts` do sandbox, pelo número principal (136 a 143), o `tty` (5:0) e o `ptmx` (5:2);
+- o TUN (10:200), que o filho configura antes de o comando rodar. O BPF vale desde o registro, e o Landlock só nos arquivos abertos depois das regras. O sandbox não abre o TUN, que não está no `/dev` dele;
+- os consoles de texto (número principal 4), que chegam como a entrada herdada de um `sandmux run` num console.
 
 ### 5. O auxiliar
 
@@ -91,13 +95,21 @@ No Ubuntu 24.04 (pelo `/etc/os-release`), o primeiro caminho é `sudo apt instal
 
 ### 7. O teste no 24.04
 
-Um roteiro (`scripts/vm-ubuntu-2404.sh`) baixa a imagem de nuvem oficial do noble para a pasta de cache do usuário (`~/.cache/sandmux-vm/`, fora do repositório) e confere o `SHA256SUMS` assinado do mesmo lugar. Depois sobe a VM com QEMU/KVM e cloud-init, copia os pacotes `.deb` do `scripts/dist.sh` e roda dentro da VM:
+Os programas BPF deste change só rodam na VM. No host, o primeiro teste com root derrubou a máquina do usuário duas vezes (decisão 4, os argumentos que podem ser nulos).
 
-1. no 6.8 sem o `bpf`: o `doctor` mostra os dois caminhos, e o lançamento é recusado;
-2. no 6.8 com `lsm=...,bpf` e o auxiliar: a suíte de fuga do sandbox (socket abstrato, sinal, `ioctl`) e uma sessão com o Docker privado;
-3. no HWE: o `doctor` limpo e a mesma suíte, sem o auxiliar.
+O roteiro `scripts/vm-ubuntu-2404.sh`:
+- baixa a imagem de nuvem oficial do noble para `~/.cache/sandmux-vm/`, fora do repositório, e confere a soma pelo `SHA256SUMS` do mesmo lugar, por https;
+- sobe a VM com QEMU/KVM e cloud-init (4 GB, 4 CPUs, ssh numa porta local), com um vigia que desliga a VM se a memória disponível do host cair abaixo de 6 GB;
+- tem os passos `lsm-bpf` (o `bpf` no `lsm=` do GRUB, como o `doctor` manda) e `hwe` (o kernel HWE pelo `apt`), e `reset` para voltar ao disco da imagem.
 
-A VM roda sob o vigia de memória, com 4 GB.
+Os testes vão para a VM como binários estáticos (musl), no mesmo caminho do host, porque os testes acham os binários pelo caminho da compilação. O fluxo do usuário também roda lá: o `.deb` do `scripts/dist.sh`, o `doctor`, o `lsm=`, o `sandmux setup` e um `sandmux run`.
+
+### 8. O Docker privado no 24.04
+
+A VM mostrou dois problemas, nenhum do escopo:
+
+- **O `rootlesskit` 1.1.1 do Ubuntu** não tem a rede `none` (`unknown network mode: none`). O Docker privado usa essa rede porque o tráfego passa pelo gateway do sandmux. O `docker::support` lê a ajuda do `rootlesskit` (`--help`, a linha do `--net`) e, sem `none`, diz que falta o 2.0 ou mais novo, com o `docker-ce-rootless-extras` do repositório do Docker como solução. Com ele (o `rootlesskit` 3.3), o Docker privado sobe no 24.04.
+- **O `O_PATH` no musl:** o `OpenOptions::custom_flags` do Rust tira os bits de `O_ACCMODE`, e no musl esse valor inclui o `O_PATH` (`O_SEARCH`). As marcas eram abertas para leitura, e uma cobertura que o usuário não lê (o `/etc/gshadow`) dava `EACCES` e parava o Docker confinado. Afeta os binários estáticos das releases em qualquer distro, desde o change 70. Os testes no host usam a glibc e não viam o erro. A abertura passa a ser pelo `open` direto (`helper::open_path`), assim como o `open_proc` do lançador. O `PathFd` do crate `landlock` tem o mesmo padrão: no musl, um caminho da allowlist que o usuário não lê é pulado, o que só tira acesso.
 
 ## Risks / Trade-offs
 
@@ -105,7 +117,8 @@ A VM roda sob o vigia de memória, com 4 GB.
 - **[A lista fixa de comandos de `ioctl` do Landlock muda entre versões]** → a lista copiada é a do kernel 6.12, que define o ABI 5, e fica num teste unitário.
 - **[O usuário liga o `bpf` mas esquece o auxiliar, ou o contrário]** → o lançamento falha fechado, e o `doctor` diz qual dos dois falta.
 - **[Programas globais custam em todo processo da máquina]** → os ganchos são raros (conexão Unix, sinal, `ioctl`), e a primeira coisa de cada programa é procurar o namespace atual no mapa. O custo é medido na VM com um laço de `ioctl` num terminal.
-- **[A imagem de nuvem muda]** → o roteiro usa a imagem `current` e confere a soma. O kernel HWE vem do `apt`, dentro da VM.
+- **[A imagem de nuvem muda]** → o roteiro usa a imagem `current` e confere a soma. O kernel HWE vem do `apt`, dentro da VM. Em 2026-11-20 ele era o 7.0, o mesmo do host.
+- **[Um processo do sandbox fora do domínio do Landlock]** → o processo 1 é protegido pelo pid. O shell de Ctrl+b `t` entra no sandbox com outro domínio do Landlock, e no ABI 6 o agente não o sinaliza; pelo BPF, sinaliza (o mesmo user namespace). É o shell do próprio usuário dentro do mesmo sandbox.
 
 ## Migration Plan
 

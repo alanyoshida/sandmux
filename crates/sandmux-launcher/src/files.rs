@@ -702,11 +702,22 @@ fn open_how(
 }
 
 fn open_proc(path: &str) -> io::Result<OwnedFd> {
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_PATH | libc::O_DIRECTORY)
-        .open(path)?;
-    Ok(f.into())
+    // Pelo `open` direto: no musl, o `O_ACCMODE` inclui o `O_PATH`, e o
+    // `custom_flags` do `OpenOptions` o tira.
+    let c =
+        std::ffi::CString::new(path).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: caminho terminado em NUL; o descritor devolvido é nosso.
+    let fd = unsafe {
+        libc::open(
+            c.as_ptr(),
+            libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: descritor recém-aberto.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
 /// Abre o pedido como o processo abriria, dentro da raiz do sandbox.

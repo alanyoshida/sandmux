@@ -127,7 +127,7 @@ Each folder's Docker, with all its containers, runs in its own systemd slice (`s
 
 The private Docker needs three things:
 
-- `rootlesskit`, `dockerd`, `containerd`, `newuidmap` and `newgidmap` in the `PATH`;
+- `rootlesskit`, `dockerd`, `containerd`, `newuidmap` and `newgidmap` in the `PATH`, with `rootlesskit` 2.0 or newer (the `none` network). Ubuntu 24.04 ships 1.1.1, and 2.0 or newer comes in the `docker-ce-rootless-extras` package from [Docker's repository](https://docs.docker.com/engine/install/ubuntu/);
 - a range of 65536 of the user's IDs in `/etc/subuid`;
 - an equal range in `/etc/subgid`.
 
