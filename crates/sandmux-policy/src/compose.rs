@@ -134,6 +134,8 @@ pub const DB_MCP: &str = "/run/sandmux/bin/sandmux-db-mcp";
 pub const DB_MCP_NAME: &str = "sandmux-db";
 /// Programa das abas de chat, dentro do sandbox.
 pub const CHAT_BIN: &str = "/run/sandmux/bin/sandmux-chat";
+/// O `bwrap` do sandmux dentro do sandbox (o `sandmux-run` com outro nome).
+pub const BWRAP_SHIM: &str = "/run/sandmux/bin/bwrap";
 
 /// Onde fica a camada de escrita de toolchains e caches nesta execução.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,6 +187,9 @@ pub struct RunOptions {
     pub db_mcp: Option<PathBuf>,
     /// Binário `sandmux-chat` e as variáveis da aba de chat.
     pub chat_bin: Option<PathBuf>,
+    /// O `sandmux-run`, montado como o `bwrap` do sandbox (o substituto do
+    /// bubblewrap, que não monta).
+    pub bwrap_bin: Option<PathBuf>,
     pub chat_env: Vec<(String, String)>,
     /// Modelos descobertos nos servidores locais do opencode: (provedor,
     /// modelos), somados ao `OPENCODE_CONFIG_CONTENT`.
@@ -253,6 +258,7 @@ impl RunOptions {
             db_socket: None,
             db_mcp: None,
             chat_bin: None,
+            bwrap_bin: None,
             chat_env: Vec::new(),
             opencode_models: Vec::new(),
             network: crate::config::NetworkMode::Aberta,
@@ -871,6 +877,9 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     // Toolchains e caches.
     let chains = toolchains::detect(host);
     let mut path_dirs = vec![host.h(".local/bin")];
+    if opts.bwrap_bin.is_some() {
+        path_dirs.insert(0, PathBuf::from("/run/sandmux/bin"));
+    }
     for t in &chains {
         for d in &t.dirs {
             b.layered(d, false);
@@ -1011,6 +1020,16 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     if let (Some(sock), Some(bin)) = (&opts.db_socket, &opts.db_mcp) {
         b.bind(sock, Path::new(DB_SOCKET), true);
         b.bind(bin, Path::new(DB_MCP), false);
+    }
+    // O `bwrap` do sandmux, na frente do `PATH` e por cima do `bwrap` do
+    // sistema, se a visão tiver um.
+    if let Some(bin) = &opts.bwrap_bin {
+        b.bind(bin, Path::new(BWRAP_SHIM), false);
+        for sys in ["/usr/bin/bwrap", "/usr/local/bin/bwrap"] {
+            if host.sys(sys).is_file() {
+                b.bind(bin, Path::new(sys), false);
+            }
+        }
     }
     // Aba de chat: o programa, em somente leitura.
     if let Some(bin) = &opts.chat_bin {

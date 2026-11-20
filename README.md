@@ -217,7 +217,7 @@ Os dados do sandmux (HOMEs sintéticos, camadas de escrita, pasta de entrada, ma
 
 ## O que está planejado para a v1
 
-- **Confinamento**: user, mount, pid e network namespaces, Landlock e seccomp, sem precisar de root. Sem o suporte de kernel exigido, o agente não sobe; não existe aba sem sandbox.
+- **Confinamento**: user, mount, pid e network namespaces, Landlock e seccomp, sem precisar de root. Sem o suporte de kernel exigido, o agente não sobe; não existe aba sem sandbox. O `bwrap` dentro da aba é um substituto do sandmux, que não monta: o sandbox do bash do Claude Code funciona ([docs/claude.md](docs/claude.md#sandbox-do-bash)).
 - **Sessões persistentes**: um daemon mantém os agentes vivos quando o terminal fecha.
 - **Interface**: abas com terminal confinado, painel lateral com o registro de acessos, tecla de prefixo (Ctrl+b por padrão), mouse e temas.
 - **Rede**: todo o tráfego passa por um gateway que registra cada domínio. Quatro modos por aba: aberta (padrão), só inferência, sem rede e custom (bloqueado por padrão, com allowlist).

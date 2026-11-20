@@ -217,7 +217,7 @@ sandmux's data (synthetic HOMEs, write layers, inbox folder, import manifests) l
 
 ## What is planned for v1
 
-- **Confinement**: user, mount, pid and network namespaces, Landlock and seccomp, without needing root. Without the required kernel support, the agent does not start; there is no tab without a sandbox.
+- **Confinement**: user, mount, pid and network namespaces, Landlock and seccomp, without needing root. Without the required kernel support, the agent does not start; there is no tab without a sandbox. The `bwrap` inside a tab is a sandmux shim that does not mount: Claude Code's bash sandbox works ([docs/en/claude.md](docs/en/claude.md#bash-sandbox)).
 - **Persistent sessions**: a daemon keeps the agents alive when the terminal closes.
 - **Interface**: tabs with a confined terminal, side panel with the access log, prefix key (Ctrl+b by default), mouse and themes.
 - **Network**: all traffic goes through a gateway that logs each domain. Four modes per tab: open (default), inference only, no network and custom (blocked by default, with an allowlist).

@@ -137,7 +137,7 @@ fn pastas_fora_da_visao_nao_existem() {
     let mnt = stdout(&e.shell(&[], "ls -A /mnt"));
     assert_eq!(mnt.trim(), "sandmux", "{mnt}");
     // /tmp só tem o caminho até a pasta de trabalho do teste (que vive em /tmp);
-    // /run só tem o resolv.conf montado.
+    // /run só tem o resolv.conf montado e o `bwrap` do sandmux.
     let out = e.shell(&[], "ls -A /tmp; echo ---; find /run -type f");
     let s = stdout(&out);
     let (tmp, run) = s.split_once("---\n").unwrap();
@@ -150,8 +150,9 @@ fn pastas_fora_da_visao_nao_existem() {
         .unwrap();
     assert_eq!(tmp.trim(), first.as_os_str().to_str().unwrap(), "{s}");
     for f in run.lines() {
+        // O `bwrap` do sandmux (o substituto do bubblewrap) também.
         assert!(
-            f.starts_with("/run/systemd/resolve/"),
+            f.starts_with("/run/systemd/resolve/") || f == "/run/sandmux/bin/bwrap",
             "arquivo inesperado em /run: {f}"
         );
     }
