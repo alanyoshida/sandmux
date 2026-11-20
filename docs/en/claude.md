@@ -61,6 +61,20 @@ The "Console" login (pay-per-use API billing) creates an API key (`/api/oauth/cl
 
 **Other providers' keys:** Claude Code does not get the fake keys of the vault's providers (`ANTHROPIC_API_KEY` and the like). With an `ANTHROPIC_API_KEY`, it would switch from the subscription to API billing.
 
+## Bash sandbox
+
+Claude Code's bash sandbox (`/sandbox`) uses bubblewrap on Linux. Inside sandmux, `bwrap` is sandmux's own, mounted at `/run/sandmux/bin/bwrap`, first in the `PATH`, and over the system `bwrap`. It runs the command without mounting anything, already inside the tab's confinement, and applies from the request whatever needs no mount:
+
+- **The requested folders:** a `--ro-bind` or `--bind` on the same path becomes an extra Landlock rule, only for that command. The tab's file supervisor applies those rules too. A write outside the folders Claude Code allowed fails.
+- **Namespaces without mounts:** its own network (`--unshare-net`), its own process 1 (`--unshare-pid`), the hostname, the environment, the directory and the request's seccomp filter.
+
+What bubblewrap would mount and the shim skips, because the command already sees the tab's view:
+- a new `/proc` (with `--unshare-pid`, the command still lists the tab's processes);
+- a minimal `/dev`;
+- files covered by a bind from elsewhere, like a `/dev/null` over a file. The folder's secrets stay protected by sandmux.
+
+sandmux never allows mounts inside a tab. Tools that depend on the tree bubblewrap mounts, like `flatpak-builder`, don't work.
+
 ## Network
 
 `platform.claude.com` is in the inference catalog, so inference-only mode lets the renewal through. The first login needs the open network (the default) or `platform.claude.com` allowed.

@@ -6,6 +6,7 @@
 //! seccomp) e executa o comando dentro dele. Não conhece harnesses nem
 //! política.
 
+pub mod bwrap;
 mod connector;
 pub mod enter;
 pub mod files;

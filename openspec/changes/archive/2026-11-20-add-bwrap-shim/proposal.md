@@ -16,6 +16,7 @@ Decisão do usuário (2026-11-20), depois de comparar com o modo de montagens:
   - responde ao `--info-fd`, ao `--json-status-fd`, ao `--sync-fd` e ao `--block-fd` como o bubblewrap, para quem os espera não travar;
   - ignora as montagens em si (`--proc`, `--dev`, `--dir`, `--symlink`, `--remount-ro`, `--chmod`, os `--*-fd` de montagem), porque o comando já vê a visão da aba;
   - registra a chamada no registro de execuções, como qualquer execução.
+- **Correção achada no teste:** o Claude Code não subia em nenhuma aba. O supervisor de arquivos recusava com `EINVAL` um `openat` de diretório com `mode` e sem `O_CREAT` (o Bun passa 0666 em toda abertura): ele tratava o `O_DIRECTORY` como `O_TMPFILE`.
 - **Presets dos harnesses:** a documentação diz como cada um isola os comandos dentro do sandmux.
 - **Roadmap:** o modo de montagens e o podman ficam em "Depois da v1", com o motivo.
 

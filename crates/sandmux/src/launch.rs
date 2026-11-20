@@ -428,6 +428,11 @@ pub fn prepare_with(
             ));
         }
     }
+    // O substituto do bubblewrap: o próprio lançador, com outro nome.
+    let shim = runner_path();
+    if shim.is_file() {
+        run.bwrap_bin = Some(shim);
+    }
     if opts.harness == sandmux_policy::assistant::HARNESS {
         let bin = runner_path().with_file_name("sandmux-chat");
         if !bin.is_file() {
