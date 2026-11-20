@@ -31,7 +31,7 @@ Os programas BPF deste change só rodam na VM (`scripts/vm-ubuntu-2404.sh`), nun
 ## 6. Documentação e fechamento
 
 - [x] 6.1 Atualizar `docs/install.md` (requisitos, o Ubuntu 24.04 com o HWE ou com o 6.8 pelo auxiliar), `docs/helper.md` (o pedido `scope`), `README.md` (a lista de distros) e os pares em inglês, com os testes de `docs.rs`
-- [ ] 6.2 Rodar `./scripts/check.sh` e `scripts/check-root.sh` inteiros sob o vigia
+- [x] 6.2 Rodar `./scripts/check.sh` e `scripts/check-root.sh` inteiros sob o vigia (no host, o `check-root.sh` sem o teste do escopo, por decisão do usuário; o teste do escopo rodou na VM, no 6.8 e no 7.0)
 
 ## Workflow follow-up
 
