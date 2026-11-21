@@ -15,7 +15,8 @@ pub struct Term {
     master: Arc<Mutex<Option<File>>>,
     parser: Arc<Mutex<vt100::Parser>>,
     raw: Arc<Mutex<Vec<u8>>>,
-    pub child: Child,
+    /// O comando; `None` depois de entregue por [`Term::close`].
+    child: Option<Child>,
 }
 
 fn winsize(cols: u16, rows: u16) -> libc::winsize {
@@ -118,8 +119,13 @@ impl Term {
             master,
             parser,
             raw,
-            child,
+            child: Some(child),
         }
+    }
+
+    /// O PID do comando.
+    pub fn pid(&self) -> i32 {
+        self.child.as_ref().expect("comando").id() as i32
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
@@ -214,13 +220,14 @@ impl Term {
     pub fn wait_exit(&mut self) -> i32 {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            if let Some(st) = self.child.try_wait().unwrap() {
+            let child = self.child.as_mut().expect("comando");
+            if let Some(st) = child.try_wait().unwrap() {
                 // Deixa a leitura terminar de copiar a saída final.
                 std::thread::sleep(Duration::from_millis(100));
                 return st.code().unwrap_or(-1);
             }
             if Instant::now() > deadline {
-                let _ = self.child.kill();
+                let _ = child.kill();
                 panic!("o comando não terminou; tela:\n{}", self.screen());
             }
             std::thread::sleep(Duration::from_millis(30));
@@ -228,9 +235,26 @@ impl Term {
     }
 
     /// Fecha o terminal (o mestre do PTY), como fechar a janela.
-    pub fn close(self) -> Child {
+    pub fn close(mut self) -> Child {
         self.master.lock().unwrap().take();
-        self.child
+        self.child.take().expect("comando")
+    }
+}
+
+impl Drop for Term {
+    /// Largar o terminal mata o comando que ainda roda nele e fecha o mestre
+    /// do PTY. Sem isso, um cliente vivo no fim do teste (a TUI, por exemplo)
+    /// duraria até o processo de teste sair: ao perder a conexão no
+    /// `daemon stop` do `Env`, ele subiria o daemon de novo, e esse daemon
+    /// ficaria vivo depois dos testes.
+    fn drop(&mut self) {
+        if let Some(mut c) = self.child.take() {
+            if matches!(c.try_wait(), Ok(None)) {
+                let _ = c.kill();
+            }
+            let _ = c.wait();
+        }
+        self.master.lock().unwrap_or_else(|e| e.into_inner()).take();
     }
 }
 
