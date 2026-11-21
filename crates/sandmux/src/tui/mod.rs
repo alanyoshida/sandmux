@@ -730,6 +730,18 @@ impl App {
         let count = self.tabs.len();
         let active_id = self.tabs.get(self.active).map(|t| t.id);
         self.tabs.retain(|t| sessions.iter().any(|s| s.id == t.id));
+        // Uma aba encerrada por fora (outro terminal, `sandmux kill`) sai de
+        // `self.tabs`: tira o id correspondente do modal de chaves movidas
+        // também, como `restart_from_vault_modal` já faz ao ter sucesso.
+        if let Some(Modal::VaultRestart { ids, sel }) = self.modal.as_mut() {
+            let live: Vec<u32> = self.tabs.iter().map(|t| t.id).collect();
+            ids.retain(|id| live.contains(id));
+            if ids.is_empty() {
+                self.modal = None;
+            } else {
+                *sel = (*sel).min(ids.len() - 1);
+            }
+        }
         for s in &sessions {
             match self.tabs.iter().position(|t| t.id == s.id) {
                 Some(i) => self.apply_session(i, s),
@@ -2691,7 +2703,10 @@ impl App {
                     }
                 }
                 Key::Char('a' | 'A') => {
-                    for id in std::mem::take(ids) {
+                    // Uma cópia: `restart_from_vault_modal` atualiza a lista
+                    // real a cada id, como já faz ao reiniciar uma só (tira
+                    // a que teve sucesso, deixa a que falhou).
+                    for id in ids.clone() {
                         self.restart_from_vault_modal(id);
                     }
                 }
@@ -3450,6 +3465,83 @@ mod tests {
         });
         app.restart_from_vault_modal(1);
         d.join().unwrap();
+        assert!(matches!(&app.modal, Some(Modal::VaultRestart { ids, .. }) if ids == &vec![1]));
+    }
+
+    #[test]
+    fn reiniciar_todas_mantem_na_lista_a_que_falhou() {
+        let mut app = test_app(vec![
+            test_tab_sem_politica(1, 2, 2),
+            test_tab_sem_politica(2, 2, 2),
+        ]);
+        app.modal = Some(Modal::VaultRestart {
+            ids: vec![1, 2],
+            sel: 0,
+        });
+        let (conn, mut daemon) = fake_conn();
+        app.control = Some(conn);
+        let d = std::thread::spawn(move || {
+            match read_frame(&mut daemon).unwrap() {
+                Some(Frame::Control(Msg::Restart { id, .. })) => {
+                    write_control(
+                        &mut daemon,
+                        &Msg::Created {
+                            id,
+                            name: "x".into(),
+                        },
+                    )
+                    .unwrap();
+                }
+                other => panic!("pedido inesperado: {other:?}"),
+            }
+            match read_frame(&mut daemon).unwrap() {
+                Some(Frame::Control(Msg::Restart { .. })) => {
+                    write_control(
+                        &mut daemon,
+                        &Msg::Error {
+                            message: "falhou".into(),
+                        },
+                    )
+                    .unwrap();
+                }
+                other => panic!("pedido inesperado: {other:?}"),
+            }
+        });
+        // "a" reinicia todas: id 1 tem sucesso (some da lista), id 2 falha
+        // (continua na lista, para nova tentativa) — o modal não pode
+        // fechar sozinho por causa do sucesso do 1.
+        app.modal_key(Key::Char('a'));
+        d.join().unwrap();
+        assert!(matches!(&app.modal, Some(Modal::VaultRestart { ids, .. }) if ids == &vec![2]));
+    }
+
+    #[test]
+    fn sync_tira_do_modal_a_aba_encerrada_por_fora() {
+        let mut app = test_app(vec![test_tab(1, 0, 0), test_tab(2, 0, 0)]);
+        app.modal = Some(Modal::VaultRestart {
+            ids: vec![1, 2],
+            sel: 1,
+        });
+        let (conn, mut daemon) = fake_conn();
+        app.control = Some(conn);
+        let d = std::thread::spawn(move || match read_frame(&mut daemon).unwrap() {
+            Some(Frame::Control(Msg::List)) => {
+                // Só a sessão 1 continua existindo: a 2 foi encerrada por
+                // fora (outro terminal, `sandmux kill`).
+                write_control(
+                    &mut daemon,
+                    &Msg::Sessions {
+                        sessions: vec![session_info(1, 0, SessionState::Viva)],
+                        layouts: Vec::new(),
+                    },
+                )
+                .unwrap();
+            }
+            other => panic!("pedido inesperado: {other:?}"),
+        });
+        app.sync();
+        d.join().unwrap();
+        assert_eq!(app.tabs.len(), 1);
         assert!(matches!(&app.modal, Some(Modal::VaultRestart { ids, .. }) if ids == &vec![1]));
     }
 }
