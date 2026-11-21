@@ -1123,7 +1123,7 @@ pub fn event_json(e: &sandmux_ebpf::ring::Event) -> Value {
         return json!({"kind": "exec", "pid": e.ino, "path": e.name, "args": e.args});
     }
     if e.kind == sandmux_ebpf::ring::EV_OPEN {
-        return json!({"kind": "open", "write": e.write, "ino": e.ino, "mnt": e.dev, "path": e.name});
+        return json!({"kind": "open", "read": e.read, "write": e.write, "ino": e.ino, "mnt": e.dev, "path": e.name});
     }
     let hook = sandmux_ebpf::prog::HOOKS
         .get(e.hook as usize)
@@ -1133,6 +1133,7 @@ pub fn event_json(e: &sandmux_ebpf::ring::Event) -> Value {
         "kind": if e.kind == sandmux_ebpf::ring::EV_CREATE { "create" } else { "deny" },
         "hook": hook,
         "bits": e.bits,
+        "read": e.read,
         "write": e.write,
         "ino": e.ino,
         "dev": e.dev,
@@ -2342,6 +2343,7 @@ mod tests {
             kind: sandmux_ebpf::ring::EV_OPEN,
             hook: 0,
             bits: 0,
+            read: true,
             write: true,
             ino: 42,
             dev: 31,
@@ -2350,7 +2352,7 @@ mod tests {
         };
         assert_eq!(
             event_json(&e),
-            json!({"kind": "open", "write": true, "ino": 42, "mnt": 31, "path": "/home/u/p/novo.txt"})
+            json!({"kind": "open", "read": true, "write": true, "ino": 42, "mnt": 31, "path": "/home/u/p/novo.txt"})
         );
         assert_eq!(MarkKind::Secret.bits(), sandmux_ebpf::prog::SECRET);
         assert_eq!(MarkKind::FileDeny.bits(), sandmux_ebpf::prog::FDENY);

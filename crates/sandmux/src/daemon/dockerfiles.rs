@@ -206,6 +206,17 @@ pub fn tab_policy_fits(policy: &FilePolicy, workdir: &Path) -> Result<(), String
     Ok(())
 }
 
+/// O acesso de uma abertura do kernel (registrada ou negada): `r`, `w` ou
+/// `rw`, como o supervisor. Um auxiliar anterior ao change 82 não manda
+/// `read`, e uma abertura de escrita dele fica `w`.
+fn open_access(e: &Value) -> &'static str {
+    match (e["read"] == true, e["write"] == true) {
+        (true, true) => "rw",
+        (false, true) => "w",
+        _ => "r",
+    }
+}
+
 fn kinds(bits: u32) -> impl Iterator<Item = MarkKind> {
     [
         (DENY, MarkKind::Deny),
@@ -520,8 +531,7 @@ impl Files {
                     let bits = e["bits"].as_u64().unwrap_or(0) as u32;
                     let hook = e["hook"].as_str().unwrap_or("");
                     let access = match hook {
-                        "file_open" if e["write"] == true => "w",
-                        "file_open" => "r",
+                        "file_open" => open_access(e),
                         "inode_create" | "inode_mkdir" | "inode_mknod" | "inode_symlink" => {
                             "create"
                         }
@@ -535,7 +545,7 @@ impl Files {
                     if path.is_empty() || !self.in_view(Path::new(path)) {
                         continue;
                     }
-                    let access = if e["write"] == true { "w" } else { "r" };
+                    let access = open_access(e);
                     let path = PathBuf::from(path);
                     if !st.opened.insert((path.clone(), access)) {
                         continue;
@@ -781,6 +791,17 @@ pub fn write_entry(e: &FileEntry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn acesso_das_aberturas_do_kernel() {
+        let a = |v: Value| open_access(&v);
+        assert_eq!(a(serde_json::json!({"read": true, "write": false})), "r");
+        assert_eq!(a(serde_json::json!({"read": false, "write": true})), "w");
+        assert_eq!(a(serde_json::json!({"read": true, "write": true})), "rw");
+        // Um auxiliar anterior não manda `read`.
+        assert_eq!(a(serde_json::json!({"write": true})), "w");
+        assert_eq!(a(serde_json::json!({"write": false})), "r");
+    }
 
     fn policy(w: &Path) -> FilePolicy {
         let (secrets, secret_exceptions) = sandmux_spec::files::default_secrets();

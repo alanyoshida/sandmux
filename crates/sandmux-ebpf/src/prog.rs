@@ -40,7 +40,10 @@ pub const FDENY: u32 = 16;
 /// Nomes que não podem ser criados num diretório git.
 pub const GIT_RESERVED: [&str; 4] = ["commondir", "hooks", "config", "config.worktree"];
 
+const FMODE_READ: i32 = 0x1;
 const FMODE_WRITE: i32 = 0x2;
+/// Os bits do modo que vão nos eventos de abertura: leitura e escrita.
+const FMODE_RW: i32 = FMODE_READ | FMODE_WRITE;
 
 /// Os ganchos usados e o parâmetro que cada um examina.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -249,7 +252,7 @@ pub struct EventMaps {
 /// Entradas do mapa das aberturas já mandadas de uma aba.
 pub const OPENED_ENTRIES: u32 = 16384;
 /// A chave do mapa: o inode (u64), o `s_dev` do superbloco, o
-/// `i_generation`, o modo (`FMODE_WRITE`) e 4 bytes zerados.
+/// `i_generation`, o modo (`FMODE_READ` e `FMODE_WRITE`) e 4 bytes zerados.
 pub const OPENED_KEY: u32 = 24;
 /// Uma abertura do mesmo arquivo, no mesmo modo, dentro desta janela desde o
 /// último evento não manda outro.
@@ -352,7 +355,7 @@ impl Gen<'_> {
             self.opened_key(R7, skip);
             let a = &mut self.a;
             a.ldx(l.file_mode_size, R1, R8, l.file_mode);
-            a.alu_imm(Alu::And, R1, FMODE_WRITE);
+            a.alu_imm(Alu::And, R1, FMODE_RW);
             a.stx(Size::W, R10, OKEY + 16, R1);
             a.call(l.fn_ktime_get_ns);
             a.stx(Size::DW, R10, NOW, R0);
@@ -373,7 +376,7 @@ impl Gen<'_> {
         a.st(Size::W, R10, EV + 4, self.hook);
         a.st(Size::W, R10, EV + 8, 0);
         a.ldx(l.file_mode_size, R1, R8, l.file_mode);
-        a.alu_imm(Alu::And, R1, FMODE_WRITE);
+        a.alu_imm(Alu::And, R1, FMODE_RW);
         a.stx(Size::W, R10, EV + 12, R1);
         a.ldx(l.inode_ino_size, R2, R7, l.inode_ino);
         a.stx(Size::DW, R10, EV + 16, R2);
@@ -423,7 +426,7 @@ impl Gen<'_> {
         a.st(Size::W, R10, OKEY + 20, 0);
     }
 
-    /// Tira do mapa das aberturas as chaves de leitura e de escrita do inode
+    /// Tira do mapa das aberturas as chaves de todos os modos do inode
     /// em `inode` (confiável, talvez nulo): renomeado ou com um link novo, o
     /// arquivo tem outro caminho, e a abertura seguinte vira evento.
     fn forget_opened(&mut self, inode: Reg) {
@@ -433,7 +436,7 @@ impl Gen<'_> {
         let done = self.a.label();
         self.a.jmp_imm(Cond::Eq, inode, 0, done);
         self.opened_key(inode, done);
-        for mode in [0, FMODE_WRITE] {
+        for mode in 0..=FMODE_RW {
             let a = &mut self.a;
             a.st(Size::W, R10, OKEY + 16, mode);
             a.ld_map_fd(R1, opened);
@@ -445,7 +448,8 @@ impl Gen<'_> {
     }
 
     /// Manda o evento de bloqueio: os bits em R1, o inode marcado em `inode`
-    /// (confiável).
+    /// (confiável). No `file_open`, o modo vem do arquivo em R8 (leitura e
+    /// escrita); nos outros ganchos, `write` dá o `FMODE_WRITE`.
     fn deny_event(&mut self, inode: Reg, write: bool) {
         if self.ev.is_none() {
             return;
@@ -454,7 +458,13 @@ impl Gen<'_> {
         a.st(Size::W, R10, EV, crate::ring::EV_DENY as i32);
         a.st(Size::W, R10, EV + 4, self.hook);
         a.stx(Size::W, R10, EV + 8, R1);
-        a.st(Size::W, R10, EV + 12, i32::from(write));
+        if HOOKS.get(self.hook as usize) == Some(&Hook::FileOpen) {
+            a.ldx(self.l.file_mode_size, R2, R8, self.l.file_mode);
+            a.alu_imm(Alu::And, R2, FMODE_RW);
+            a.stx(Size::W, R10, EV + 12, R2);
+        } else {
+            a.st(Size::W, R10, EV + 12, if write { FMODE_WRITE } else { 0 });
+        }
         a.ldx(self.l.inode_ino_size, R2, inode, self.l.inode_ino);
         a.stx(Size::DW, R10, EV + 16, R2);
         a.st(Size::W, R10, EV + 24, 0);
@@ -1110,6 +1120,46 @@ mod tests {
     }
 
     #[test]
+    fn modo_de_leitura_e_escrita_nos_eventos() {
+        let Some(l) = layout() else { return };
+        let ev = |mnts: Option<i32>| {
+            Some(EventMaps {
+                ring_fd: 4,
+                drops_fd: 5,
+                workdir_dev: 0,
+                open_mnts_fd: mnts,
+                opened_fd: mnts.map(|_| 7),
+            })
+        };
+        // O `f_mode` lido do arquivo e logo depois um `and` com os bits de
+        // leitura e escrita.
+        let and_rw = |p: &[Insn]| {
+            p.windows(2)
+                .filter(|w| {
+                    w[0].code & 0x07 == 0x01
+                        && w[0].off == l.file_mode
+                        && (w[1].code == 0x57 || w[1].code == 0x54)
+                        && w[1].imm == FMODE_RW
+                })
+                .count()
+        };
+        // Sem montagens a registrar (o Docker), só os bloqueios da abertura
+        // (um por marca conferida); na aba, também a chave das repetições e o
+        // evento de abertura.
+        let docker = build(&l, Hook::FileOpen, 3, Attach::Cgroup, ev(None)).unwrap();
+        assert!(and_rw(&docker) >= 1);
+        let aba = build(&l, Hook::FileOpen, 3, Attach::Cgroup, ev(Some(6))).unwrap();
+        assert_eq!(and_rw(&aba), and_rw(&docker) + 2);
+        // Os outros bloqueios gravam o `FMODE_WRITE` como constante.
+        let un = build(&l, Hook::InodeUnlink, 3, Attach::Cgroup, ev(None)).unwrap();
+        assert_eq!(and_rw(&un), 0);
+        assert!(
+            un.iter()
+                .any(|i| i.code == 0x62 && i.off == EV + 12 && i.imm == FMODE_WRITE)
+        );
+    }
+
+    #[test]
     fn aberturas_repetidas_so_na_aba() {
         let Some(l) = layout() else { return };
         let ev = |mnts: Option<i32>, opened: Option<i32>| {
@@ -1140,7 +1190,8 @@ mod tests {
         );
         for h in [Hook::InodeRename, Hook::InodeLink] {
             let p = build(&l, h, 3, Attach::Cgroup, ev(Some(6), Some(7))).unwrap();
-            assert_eq!(calls(&p, l.fn_map_delete_elem), 2, "{h:?}");
+            // As chaves dos quatro modos (0 a 3).
+            assert_eq!(calls(&p, l.fn_map_delete_elem), 4, "{h:?}");
             assert!(usa(&p, 7), "{h:?}");
         }
         let outro = build(
