@@ -1,18 +1,15 @@
-sandmux 0.1.27, antes da v1: os arquivos das abas pelo kernel.
+sandmux 0.1.28, antes da v1: o escopo do sandbox sobrevive a um reinício do auxiliar root.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
-## Novidades
-
-- **Arquivos das abas pelo kernel:** com o [auxiliar root](https://github.com/alanyoshida/sandmux/blob/main/docs/helper.md) e o BPF LSM, o kernel decide e registra as aberturas de arquivo de cada aba, no lugar do supervisor. Os segredos da pasta de trabalho dão `ENOENT` e o `file-deny` dá `EACCES`, como antes, agora por marcas no inode. As aberturas entram no registro pela fila do kernel. Ler muitos arquivos fica bem mais rápido: numa VM do Ubuntu 24.04, ler 13 mil arquivos levou 1,1x (kernel 6.8) a 1,4x (7.0) do tempo fora do sandbox, contra 2,6x a 3,1x com o supervisor. Sem o auxiliar, o BPF LSM ou o escopo próprio da aba, o supervisor continua, e o `sandmux stats` mostra o motivo. Detalhes em [docs/files.md](https://github.com/alanyoshida/sandmux/blob/main/docs/files.md#pelo-kernel).
-- **Reinício do auxiliar sem perder as abas:** se o auxiliar cai ou é reiniciado (uma atualização, por exemplo), a aba fica congelada até o confinamento ser refeito e segue de onde parou. Sem ele de volta em 10 s, a aba para.
-- **`sandmux doctor`:** mostra, como informação, se os arquivos das abas podem ir ao kernel nesta máquina.
-
 ## Correção
 
-- O confinamento de um Docker privado parado podia ficar aberto no auxiliar root (contando no limite de 16 por usuário); agora sai quando o Docker para.
+- **Ubuntu 24.04 com o kernel 6.8:** quando o [auxiliar root](https://github.com/alanyoshida/sandmux/blob/main/docs/helper.md#escopo-do-sandbox) reiniciava (uma atualização, um travamento), as abas que rodavam perdiam o escopo do sandbox sem aviso. Perdiam o bloqueio dos sockets abstratos de fora, dos sinais para fora e para o processo 1, e do `ioctl` em dispositivo. Agora o daemon congela cada aba, registra o escopo de novo no auxiliar seguinte e descongela; a aba segue de onde parou. Sem o escopo de volta em 30 s, a aba para. Num `sandmux run` sem terminal, o próprio lançador registra de novo.
+- **Lançamento durante a troca do auxiliar:** podia ser recusado com "o auxiliar root não respondeu ao pedido". Agora o lançador tenta de novo por até 30 s, e o auxiliar, ao sair, não atende conexões novas. No 6.8, os programas do escopo carregam quando o auxiliar sobe e ficam carregados por 60 s depois da última aba, porque carregá-los leva segundos nesse kernel.
 
-Esta versão muda o lançador, o daemon e o auxiliar root. O protocolo entre o cliente e o daemon sobe para 43: depois de atualizar, rode `sandmux daemon restart`. Atualize também o auxiliar (`sandmux setup`); um auxiliar antigo deixa as abas com o supervisor.
+Nos kernels 6.12 ou mais novos (Landlock ABI 6), o escopo não depende do auxiliar, e nada muda.
+
+Esta versão muda o lançador, o daemon e o auxiliar root. O protocolo entre o cliente e o daemon sobe para 44: depois de atualizar, rode `sandmux daemon restart`, e atualize o auxiliar (`sandmux setup`).
 
 ## Instalar
 
