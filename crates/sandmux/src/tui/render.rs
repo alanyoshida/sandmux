@@ -2703,6 +2703,37 @@ fn draw_modal(f: &mut Frame, full: Rect, m: &Modal, app: &App) {
             ))],
             3,
         ),
+        Modal::VaultRestart { ids, sel } => {
+            let mut l: Vec<Line> = ids
+                .iter()
+                .enumerate()
+                .map(|(i, id)| {
+                    let st = if i == *sel {
+                        selected
+                    } else {
+                        Style::default()
+                    };
+                    let (name, harness) = app
+                        .tabs
+                        .iter()
+                        .find(|t| t.id == *id)
+                        .map(|t| (t.name.clone(), t.opts.harness.clone()))
+                        .unwrap_or_default();
+                    Line::styled(format!(" {id} {name}  {harness}"), st)
+                })
+                .collect();
+            l.push(Line::raw(""));
+            l.push(Line::raw(tr!(
+                "↑ ↓ · r/Enter reinicia a selecionada · a reinicia todas · Esc fecha",
+                "↑ ↓ · r/Enter restarts the selected one · a restarts all · Esc closes"
+            )));
+            let h = l.len() as u16 + 2;
+            (
+                tr!("Chave(s) movida(s) ao cofre", "Key(s) moved to the vault"),
+                l,
+                h,
+            )
+        }
         Modal::Mcp(ms) => {
             let mut l = vec![Line::raw(trf!(
                 "Servidores MCP da sessão {} (valem no próximo lançamento)",
