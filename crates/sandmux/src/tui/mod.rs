@@ -203,6 +203,9 @@ pub struct Tab {
     pub keys: sandmux_proto::msg::KeyNote,
     /// Janela do último lançamento (protocolo 34).
     pub window: sandmux_spec::window::WindowMode,
+    /// Até onde este cliente já mostrou o aviso de chaves movidas
+    /// (`keys.moved`), para o modal de reinício por chave movida.
+    pub vault_seen: u32,
 }
 
 /// Seleção de texto, em coordenadas da tela da aba.
@@ -323,6 +326,12 @@ pub enum Modal {
     Settings(Box<settings::Settings>),
     /// Lista de grupos (Ctrl+b G).
     Groups(GroupsModal),
+    /// Aviso de chaves movidas ao cofre: as abas vivas pendentes e a
+    /// selecionada.
+    VaultRestart {
+        ids: Vec<u32>,
+        sel: usize,
+    },
 }
 
 /// A lista de grupos: o escolhido e o nome sendo digitado (novo, ou o
@@ -625,6 +634,7 @@ impl App {
             started_at: s.started_at,
             keys: s.keys,
             window: s.window,
+            vault_seen: 0,
         }
     }
 
@@ -665,6 +675,30 @@ impl App {
         self.switch_group(next);
     }
 
+    /// Acerta a aba `i` com os dados de sessão `s`, no ciclo de sincronização.
+    fn apply_session(&mut self, i: usize, s: &SessionInfo) {
+        let t = &mut self.tabs[i];
+        t.name = s.name.clone();
+        t.opts = s.opts.clone();
+        t.started_at = s.started_at;
+        if s.keys.moved < t.keys.moved {
+            // A sessão foi reiniciada desde o último ciclo: um aumento
+            // seguinte deve voltar a ser detectado.
+            t.vault_seen = 0;
+        }
+        t.keys = s.keys;
+        t.window = s.window;
+        let was_live = t.state == SessionState::Viva;
+        t.state = s.state.clone();
+        if was_live && matches!(t.state, SessionState::Encerrada { .. }) {
+            t.ask_restart = true;
+        }
+        if !was_live && t.state == SessionState::Viva && t.conn.is_none() {
+            t.parser = new_parser(self.size);
+            self.attach(i);
+        }
+    }
+
     fn sync(&mut self) {
         let (sessions, layouts) = match self.call(&Msg::List) {
             Ok(Msg::Sessions { sessions, layouts }) => (sessions, layouts),
@@ -698,23 +732,7 @@ impl App {
         self.tabs.retain(|t| sessions.iter().any(|s| s.id == t.id));
         for s in &sessions {
             match self.tabs.iter().position(|t| t.id == s.id) {
-                Some(i) => {
-                    let t = &mut self.tabs[i];
-                    t.name = s.name.clone();
-                    t.opts = s.opts.clone();
-                    t.started_at = s.started_at;
-                    t.keys = s.keys;
-                    t.window = s.window;
-                    let was_live = t.state == SessionState::Viva;
-                    t.state = s.state.clone();
-                    if was_live && matches!(t.state, SessionState::Encerrada { .. }) {
-                        t.ask_restart = true;
-                    }
-                    if !was_live && t.state == SessionState::Viva && t.conn.is_none() {
-                        t.parser = new_parser(self.size);
-                        self.attach(i);
-                    }
-                }
+                Some(i) => self.apply_session(i, s),
                 None => {
                     let t = self.tab_from(s);
                     self.tabs.push(t);
@@ -749,6 +767,16 @@ impl App {
 
     fn index_of(&self, id: u32) -> Option<usize> {
         self.tabs.iter().position(|t| t.id == id)
+    }
+
+    /// Ids das abas vivas com uma chave movida ao cofre ainda não mostrada,
+    /// em ordem de id.
+    fn pending_vault_restarts(&self) -> Vec<u32> {
+        self.tabs
+            .iter()
+            .filter(|t| t.state == SessionState::Viva && t.keys.moved > t.vault_seen)
+            .map(|t| t.id)
+            .collect()
     }
 
     /// As abas da barra: o índice da primeira sessão de cada uma e quantos
@@ -927,6 +955,24 @@ impl App {
         if let SessionState::Encerrada { codigo } = t.state {
             self.modal = Some(Modal::Ended(t.id, codigo));
         }
+    }
+
+    /// Abre o aviso de chaves movidas ao cofre, por cima da aba ativa
+    /// independente de qual ela é, quando não há outro modal.
+    fn prompt_vault_restart(&mut self) {
+        if self.modal.is_some() {
+            return;
+        }
+        let ids = self.pending_vault_restarts();
+        if ids.is_empty() {
+            return;
+        }
+        for id in &ids {
+            if let Some(t) = self.tabs.iter_mut().find(|t| t.id == *id) {
+                t.vault_seen = t.keys.moved;
+            }
+        }
+        self.modal = Some(Modal::VaultRestart { ids, sel: 0 });
     }
 
     /// Encerra a sessão da aba `i` e tira a aba da barra.
@@ -1639,6 +1685,7 @@ impl App {
             started_at: None,
             keys: Default::default(),
             window: Default::default(),
+            vault_seen: 0,
         });
         self.tabs.sort_by_key(|t| t.id);
         let i = self.tabs.iter().position(|t| t.id == id).unwrap_or(0);
@@ -1764,6 +1811,67 @@ impl App {
                 self.say(trf!("aba {id} reiniciada", "tab {id} restarted"));
             }
             Err(e) => self.say(trf!("reiniciar: {e:#}", "restart: {e:#}")),
+        }
+    }
+
+    /// Reinicia, pelo modal de chaves movidas ao cofre, a aba `id` (não
+    /// precisa ser a ativa). Com `attach: false`, não amarra a conexão nova:
+    /// a próxima sincronização já re-anexa a aba que volta a ficar viva.
+    /// Os avisos do daemon são guardados e mostrados pela barra de status
+    /// (como em `relaunch`), em vez de passarem por `self.call`: aquele
+    /// caminho os imprime crus na saída, o que atropela a tela alternativa
+    /// da TUI.
+    fn restart_from_vault_modal(&mut self, id: u32) {
+        let Some(opts) = self
+            .tabs
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.opts.clone())
+        else {
+            return;
+        };
+        let r = (|| -> Result<Vec<String>> {
+            let names = if opts.harness == sandmux::launch::ENTER {
+                Vec::new()
+            } else {
+                let host = Host::detect()?;
+                sandmux::launch::effective(&host, &opts)?.pass_env_names()
+            };
+            let vars = client::client_vars(&names)?;
+            let size = self.size;
+            let c = self.control()?;
+            c.send(&Msg::Restart {
+                id,
+                vars,
+                size,
+                attach: false,
+                force: true,
+            })?;
+            let (_, _, warnings) = Self::until_created(&mut c.stream)?;
+            Ok(warnings)
+        })();
+        match r {
+            Ok(warnings) => {
+                if let Some(Modal::VaultRestart { ids, sel }) = self.modal.as_mut() {
+                    ids.retain(|i| *i != id);
+                    if ids.is_empty() {
+                        self.modal = None;
+                    } else {
+                        *sel = (*sel).min(ids.len() - 1);
+                    }
+                }
+                if let Some(t) = self.tabs.iter_mut().find(|t| t.id == id) {
+                    t.vault_seen = t.keys.moved;
+                }
+                for w in warnings {
+                    self.say(w);
+                }
+                self.say(trf!("aba {id} reiniciada", "tab {id} restarted"));
+            }
+            Err(e) => {
+                self.control = None;
+                self.say(trf!("reiniciar {id}: {e:#}", "restart {id}: {e:#}"));
+            }
         }
     }
 
@@ -2572,6 +2680,23 @@ impl App {
                 Key::Char('n' | 'N') | Key::Esc => self.modal = None,
                 _ => {}
             },
+            Modal::VaultRestart { ids, sel } => match k {
+                Key::Esc => self.modal = None,
+                Key::Up => *sel = sel.saturating_sub(1),
+                Key::Down => *sel = (*sel + 1).min(ids.len().saturating_sub(1)),
+                Key::Enter | Key::Char('r' | 'R') => {
+                    let id = ids.get(*sel).copied();
+                    if let Some(id) = id {
+                        self.restart_from_vault_modal(id);
+                    }
+                }
+                Key::Char('a' | 'A') => {
+                    for id in std::mem::take(ids) {
+                        self.restart_from_vault_modal(id);
+                    }
+                }
+                _ => {}
+            },
             Modal::Help => {
                 if matches!(k, Key::Esc | Key::Enter | Key::Char('q')) {
                     self.modal = None;
@@ -3014,6 +3139,7 @@ pub fn run(group: Option<String>) -> Result<i32> {
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         app.prompt_ended();
+        app.prompt_vault_restart();
         app.report_focus();
         if app.pending_split.is_some()
             && !matches!(
@@ -3078,5 +3204,252 @@ mod tests {
         };
         assert!(s.contains(2, 0) && s.contains(1, 2) && s.contains(3, 5));
         assert!(!s.contains(3, 6) && !s.contains(1, 1));
+    }
+
+    // ---- modal de reinício por chave movida ----
+
+    fn test_host() -> Host {
+        Host {
+            home: PathBuf::from("/tmp"),
+            uid: 0,
+            gid: 0,
+            user: String::new(),
+            group: String::new(),
+            user_shell: PathBuf::from("/bin/sh"),
+            data_dir: PathBuf::from("/tmp"),
+            config_dir: PathBuf::from("/tmp"),
+            cwd: PathBuf::from("/tmp"),
+            env: Default::default(),
+            sys_root: PathBuf::from("/"),
+        }
+    }
+
+    fn test_tab(id: u32, moved: u32, vault_seen: u32) -> Tab {
+        Tab {
+            id,
+            name: format!("tab{id}"),
+            state: SessionState::Viva,
+            workdir: PathBuf::from("/"),
+            opts: LaunchOptions::new("shell"),
+            parser: new_parser(Size { cols: 80, rows: 24 }),
+            tracker: ModeTracker::new(),
+            conn: None,
+            scroll: 0,
+            new_domain: false,
+            blocked: false,
+            ask_restart: false,
+            started_at: None,
+            keys: sandmux_proto::msg::KeyNote {
+                moved,
+                waiting_vault: 0,
+                no_domain: 0,
+            },
+            window: Default::default(),
+            vault_seen,
+        }
+    }
+
+    fn test_app(tabs: Vec<Tab>) -> App {
+        let (tx, _rx) = mpsc::channel();
+        App {
+            tabs,
+            group: sandmux_proto::msg::main_group(),
+            groups: Vec::new(),
+            layouts: Vec::new(),
+            zoom: false,
+            pending_split: None,
+            active: 0,
+            modal: None,
+            sel: None,
+            bar_ranges: Vec::new(),
+            close_ranges: Vec::new(),
+            cfg: TuiConfig::default(),
+            status: None,
+            size: Size { cols: 80, rows: 24 },
+            tx,
+            next_uid: 0,
+            control: None,
+            cwd: PathBuf::from("/"),
+            host: test_host(),
+            applied: (Vec::new(), Vec::new()),
+            focused: true,
+            focus_sent: None,
+            quit: false,
+            panel: false,
+            panel_data: None,
+            panel_net: Vec::new(),
+            panel_mcp: Vec::new(),
+            net_since: String::new(),
+            assistant: Default::default(),
+            after_unlock: None,
+            ask_token: 0,
+            modal_button: std::cell::Cell::new(None),
+            menu_button: None,
+            settings_hits: std::cell::RefCell::new(Vec::new()),
+            panel_hits: std::cell::RefCell::new(Vec::new()),
+            picker: None,
+            models: picker::Models::None,
+            clipboard: paste::System::default(),
+            vault: None,
+            bar_row: 1,
+            area_dy: 1,
+        }
+    }
+
+    fn session_info(id: u32, moved: u32, state: SessionState) -> SessionInfo {
+        SessionInfo {
+            id,
+            name: format!("tab{id}"),
+            harness: "shell".into(),
+            workdir: PathBuf::from("/"),
+            state,
+            clients: 0,
+            pass_env: Vec::new(),
+            opts: LaunchOptions::new("shell"),
+            usage: None,
+            oom_kills: 0,
+            started_at: None,
+            keys: sandmux_proto::msg::KeyNote {
+                moved,
+                waiting_vault: 0,
+                no_domain: 0,
+            },
+            group: sandmux_proto::msg::main_group(),
+            window: Default::default(),
+        }
+    }
+
+    #[test]
+    fn vault_seen_zera_quando_a_sessao_reinicia() {
+        let mut app = test_app(vec![test_tab(1, 0, 0)]);
+        // Ciclo 1: moved sobe para 2, ainda não visto.
+        app.apply_session(0, &session_info(1, 2, SessionState::Viva));
+        assert_eq!(app.tabs[0].keys.moved, 2);
+        assert_eq!(app.tabs[0].vault_seen, 0);
+        assert_eq!(app.pending_vault_restarts(), vec![1]);
+        // O modal mostraria o aumento e marcaria vault_seen = moved.
+        app.tabs[0].vault_seen = 2;
+        assert!(app.pending_vault_restarts().is_empty());
+        // Ciclo 2: a sessão reinicia (moved cai a 0 no daemon).
+        app.apply_session(0, &session_info(1, 0, SessionState::Viva));
+        assert_eq!(app.tabs[0].keys.moved, 0);
+        assert_eq!(app.tabs[0].vault_seen, 0, "sem reabrir o pendente no meio");
+        assert!(app.pending_vault_restarts().is_empty());
+        // Ciclo 3: sobe de novo depois do reinício.
+        app.apply_session(0, &session_info(1, 1, SessionState::Viva));
+        assert_eq!(app.tabs[0].keys.moved, 1);
+        assert_eq!(app.tabs[0].vault_seen, 0, "deve voltar a ficar pendente");
+        assert_eq!(app.pending_vault_restarts(), vec![1]);
+    }
+
+    #[test]
+    fn pending_vault_restarts_so_lista_abas_pendentes() {
+        let app = test_app(vec![test_tab(1, 2, 0), test_tab(2, 1, 1)]);
+        assert_eq!(app.pending_vault_restarts(), vec![1]);
+    }
+
+    #[test]
+    fn prompt_vault_restart_nao_sobrescreve_modal_existente() {
+        let mut app = test_app(vec![test_tab(1, 2, 0)]);
+        app.modal = Some(Modal::Ended(1, 0));
+        app.prompt_vault_restart();
+        assert!(matches!(app.modal, Some(Modal::Ended(1, 0))));
+        // A chave pendente não foi marcada como vista: continua pendente.
+        assert_eq!(app.tabs[0].vault_seen, 0);
+        assert_eq!(app.pending_vault_restarts(), vec![1]);
+    }
+
+    #[test]
+    fn esc_fecha_o_modal_sem_reiniciar_e_mantem_visto() {
+        let mut app = test_app(vec![test_tab(1, 2, 0)]);
+        app.prompt_vault_restart();
+        assert!(matches!(app.modal, Some(Modal::VaultRestart { .. })));
+        assert_eq!(app.tabs[0].vault_seen, 2);
+        app.modal_key(Key::Esc);
+        assert!(app.modal.is_none());
+        assert_eq!(app.tabs[0].keys.moved, 2);
+        assert_eq!(app.tabs[0].vault_seen, 2);
+        assert!(app.pending_vault_restarts().is_empty());
+    }
+
+    /// Uma conexão de controle falsa: a outra ponta responde como um
+    /// daemon, sem precisar de um daemon real.
+    fn fake_conn() -> (Conn, UnixStream) {
+        let (a, b) = UnixStream::pair().unwrap();
+        (
+            Conn {
+                stream: a,
+                info: sandmux_proto::msg::DaemonInfo {
+                    protocol: 0,
+                    version: String::new(),
+                    pid: 0,
+                    start_mode: String::new(),
+                },
+            },
+            b,
+        )
+    }
+
+    /// Aba de teste com o harness `dentro`: `restart_from_vault_modal` não
+    /// precisa então detectar o host nem resolver a política, só o pedido
+    /// ao daemon (falso) importa aqui.
+    fn test_tab_sem_politica(id: u32, moved: u32, vault_seen: u32) -> Tab {
+        let mut t = test_tab(id, moved, vault_seen);
+        t.opts = LaunchOptions::new(sandmux::launch::ENTER);
+        t
+    }
+
+    #[test]
+    fn restart_from_vault_modal_sucesso_tira_da_lista() {
+        let mut app = test_app(vec![test_tab_sem_politica(1, 2, 2)]);
+        app.modal = Some(Modal::VaultRestart {
+            ids: vec![1],
+            sel: 0,
+        });
+        let (conn, mut daemon) = fake_conn();
+        app.control = Some(conn);
+        let d = std::thread::spawn(move || match read_frame(&mut daemon).unwrap() {
+            Some(Frame::Control(Msg::Restart { id, .. })) => {
+                write_control(
+                    &mut daemon,
+                    &Msg::Created {
+                        id,
+                        name: "x".into(),
+                    },
+                )
+                .unwrap();
+            }
+            other => panic!("pedido inesperado: {other:?}"),
+        });
+        app.restart_from_vault_modal(1);
+        d.join().unwrap();
+        assert!(app.modal.is_none());
+        assert_eq!(app.tabs[0].vault_seen, app.tabs[0].keys.moved);
+    }
+
+    #[test]
+    fn restart_from_vault_modal_erro_mantem_na_lista() {
+        let mut app = test_app(vec![test_tab_sem_politica(1, 2, 2)]);
+        app.modal = Some(Modal::VaultRestart {
+            ids: vec![1],
+            sel: 0,
+        });
+        let (conn, mut daemon) = fake_conn();
+        app.control = Some(conn);
+        let d = std::thread::spawn(move || match read_frame(&mut daemon).unwrap() {
+            Some(Frame::Control(Msg::Restart { .. })) => {
+                write_control(
+                    &mut daemon,
+                    &Msg::Error {
+                        message: "falhou".into(),
+                    },
+                )
+                .unwrap();
+            }
+            other => panic!("pedido inesperado: {other:?}"),
+        });
+        app.restart_from_vault_modal(1);
+        d.join().unwrap();
+        assert!(matches!(&app.modal, Some(Modal::VaultRestart { ids, .. }) if ids == &vec![1]));
     }
 }
