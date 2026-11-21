@@ -257,6 +257,9 @@ pub trait Backend: Send + Sync {
     }
     /// Os programas do escopo carregam neste kernel? `Err` com o motivo.
     fn scope_supported(&self) -> Result<(), String>;
+    /// Na subida: carrega já o que o primeiro pedido carregaria (os
+    /// programas do escopo, nos kernels em que os sandboxes os pedem).
+    fn preload(&self) {}
     /// Registra o user namespace `ns` de um sandbox, com as opções e os
     /// dispositivos (`(número, máscara)` no formato do kernel).
     /// `init_pid` é o processo 1 do sandbox, que não recebe sinais dele.
@@ -356,6 +359,9 @@ pub struct Server {
     /// As conexões abertas, para a saída limpa ([`Server::close_all`]).
     conns: Mutex<HashMap<u64, Arc<OwnedFd>>>,
     next_conn: std::sync::atomic::AtomicU64,
+    /// A saída limpa começou: as conexões aceitas daqui em diante fecham sem
+    /// ser atendidas, e quem pediu tenta no auxiliar seguinte.
+    closing: std::sync::atomic::AtomicBool,
 }
 
 struct Conn {
@@ -382,13 +388,21 @@ impl Server {
             scoping: Mutex::new(HashMap::new()),
             conns: Mutex::new(HashMap::new()),
             next_conn: std::sync::atomic::AtomicU64::new(0),
+            closing: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// Carrega já o que o backend pode carregar na subida.
+    pub fn preload(&self) {
+        self.backend.preload();
     }
 
     /// A saída limpa (`SIGTERM`): cada conexão recebe o fim (`SHUT_WR`)
     /// enquanto as regras dela ainda valem, e quem pediu reage antes de elas
     /// saírem. Espera as conexões terminarem, até `wait`.
     pub fn close_all(&self, wait: std::time::Duration) {
+        self.closing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         for fd in self
             .conns
             .lock()
@@ -761,13 +775,56 @@ pub struct Ebpf {
     scopes: Arc<Mutex<ScopeState>>,
 }
 
-/// Os programas do escopo, carregados no primeiro registro e soltos quando
-/// não resta nenhum.
+/// Os programas do escopo, carregados no primeiro registro (ou na subida,
+/// [`Backend::preload`]) e soltos depois de [`SCOPE_IDLE`] sem nenhum.
 #[derive(Default)]
 struct ScopeState {
     layout: Option<Result<sandmux_ebpf::scope::ScopeLayout, String>>,
     loaded: Option<sandmux_ebpf::scope::Scopes>,
     inums: std::collections::HashSet<u32>,
+    /// Desde quando não resta escopo nenhum, com os programas carregados.
+    idle_since: Option<std::time::Instant>,
+    /// A thread que solta os programas parados já roda.
+    reaper: bool,
+}
+
+/// Quanto os programas do escopo ficam carregados sem escopo nenhum. No 6.8,
+/// carregar e soltar os quatro programas leva segundos (o `ftrace` espera o
+/// RCU Tasks a cada um); ficar carregado por um tempo poupa a troca de
+/// auxiliar e o relançamento de uma aba.
+const SCOPE_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
+
+impl ScopeState {
+    /// Carrega os programas, se ainda não estão, e liga a thread que os solta
+    /// depois de parados.
+    fn ensure_loaded(&mut self, st: &Arc<Mutex<ScopeState>>) -> Result<(), String> {
+        if self.loaded.is_none() {
+            let l = self.layout()?;
+            self.loaded = Some(sandmux_ebpf::scope::Scopes::load(&l).map_err(|e| e.to_string())?);
+            if self.inums.is_empty() {
+                self.idle_since = Some(std::time::Instant::now());
+            }
+        }
+        if !self.reaper {
+            self.reaper = true;
+            let st = st.clone();
+            let _ = std::thread::Builder::new()
+                .name("helper-escopo-parado".into())
+                .spawn(move || {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(5));
+                        let mut s = st.lock().unwrap_or_else(|e| e.into_inner());
+                        if s.inums.is_empty()
+                            && s.idle_since.is_some_and(|t| t.elapsed() >= SCOPE_IDLE)
+                        {
+                            s.loaded = None;
+                            s.idle_since = None;
+                        }
+                    }
+                });
+        }
+        Ok(())
+    }
 }
 
 impl ScopeState {
@@ -798,9 +855,23 @@ impl Drop for RealScope {
         }
         st.inums.remove(&self.inum);
         if st.inums.is_empty() {
-            st.loaded = None;
+            st.idle_since = Some(std::time::Instant::now());
         }
     }
+}
+
+/// A ABI do Landlock do kernel (0 sem o Landlock).
+fn landlock_abi() -> i64 {
+    // SAFETY: a consulta da versão não usa os ponteiros.
+    let v = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_create_ruleset,
+            std::ptr::null::<u8>(),
+            0usize,
+            1u32,
+        )
+    };
+    v.max(0)
 }
 
 impl Ebpf {
@@ -998,6 +1069,23 @@ impl Backend for Ebpf {
         st.layout().map(|_| ())
     }
 
+    fn preload(&self) {
+        // Só onde os lançadores pedem o escopo: o Landlock abaixo do ABI 6.
+        if !(1..6).contains(&landlock_abi()) || self.scope_supported().is_err() {
+            return;
+        }
+        let mut st = self.scopes.lock().unwrap_or_else(|e| e.into_inner());
+        if let Err(e) = st.ensure_loaded(&self.scopes) {
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmux-helper: os programas do escopo não carregaram: {e}",
+                    "sandmux-helper: the scope programs did not load: {e}"
+                )
+            );
+        }
+    }
+
     fn scope(
         &self,
         ns: &OwnedFd,
@@ -1020,18 +1108,12 @@ impl Backend for Ebpf {
             )
             .into());
         }
-        if st.loaded.is_none() {
-            let l = st.layout()?;
-            st.loaded = Some(sandmux_ebpf::scope::Scopes::load(&l).map_err(|e| e.to_string())?);
-        }
+        st.ensure_loaded(&self.scopes)?;
         let s = st.loaded.as_ref().expect("carregado acima");
-        if let Err(e) = s.register(inum, opts, init_pid, &devs) {
-            if st.inums.is_empty() {
-                st.loaded = None;
-            }
-            return Err(e.to_string());
-        }
+        s.register(inum, opts, init_pid, &devs)
+            .map_err(|e| e.to_string())?;
         st.inums.insert(inum);
+        st.idle_since = None;
         Ok(Box::new(RealScope {
             st: self.scopes.clone(),
             inum,
@@ -1214,6 +1296,10 @@ pub fn accept_loop(server: Arc<Server>, listener: OwnedFd) -> io::Result<()> {
         }
         // SAFETY: descritor recém-aceito.
         let conn = unsafe { OwnedFd::from_raw_fd(fd) };
+        // Na saída limpa, a conexão nova fecha sem resposta.
+        if server.closing.load(std::sync::atomic::Ordering::SeqCst) {
+            continue;
+        }
         let s = server.clone();
         let _ = std::thread::Builder::new()
             .name("helper-conn".into())
@@ -1314,8 +1400,20 @@ impl Client {
     /// Registra o user namespace `ns` de um sandbox: o escopo vale até esta
     /// conexão fechar.
     pub fn scope(&self, ns: &OwnedFd, ioctl: bool, devs: &[(u32, u32)]) -> Result<(), String> {
+        self.scope_with(ns, ioctl, 0, devs)
+    }
+
+    /// Como [`Client::scope`], com o processo 1 do sandbox (o sinal a ele
+    /// também é negado): o registro de novo de uma aba pelo daemon.
+    pub fn scope_with(
+        &self,
+        ns: &OwnedFd,
+        ioctl: bool,
+        init_pid: u32,
+        devs: &[(u32, u32)],
+    ) -> Result<(), String> {
         self.call(
-            json!({"op": "scope", "ioctl": ioctl, "devs": devs}),
+            json!({"op": "scope", "ioctl": ioctl, "init_pid": init_pid, "devs": devs}),
             &[ns.as_raw_fd()],
         )
         .map(|_| ())
@@ -1862,6 +1960,9 @@ mod tests {
         drop(c);
         t.join().unwrap();
         assert_eq!(loaded.load(Ordering::SeqCst), 0);
+        // Uma conexão nova depois da saída começar fecha sem resposta.
+        let c = Client::connect(&path).unwrap();
+        assert!(c.status().is_err());
     }
 
     #[test]

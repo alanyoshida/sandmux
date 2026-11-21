@@ -174,7 +174,7 @@ check_root() {
         sudo sh -c \"while [ ! -e \$d/fim ]; do
             rm -f \$sock; '$rel/sandmux-helper' --socket \$sock >>\$d/helper.log 2>&1 & p=\\\$!
             while kill -0 \\\$p 2>/dev/null; do
-                if [ -e \$sock.restart ] || [ -e \$d/fim ]; then rm -f \$sock.restart; kill \\\$p; wait \\\$p; fi
+                if [ -e \$sock.restart ] || [ -e \$d/fim ]; then rm -f \$sock.restart; t0=\\\$(date +%s%N); kill \\\$p; wait \\\$p; echo vm: o auxiliar saiu em \\\$(( (\\\$(date +%s%N) - t0) / 1000000 )) ms >>\$d/helper.log; fi
                 sleep 0.2
             done
         done\" </dev/null >/dev/null 2>&1 &

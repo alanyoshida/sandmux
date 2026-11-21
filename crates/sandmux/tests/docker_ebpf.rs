@@ -703,6 +703,101 @@ fn arquivos_da_aba_pelo_kernel() {
     limpar(&e);
 }
 
+/// A ABI do Landlock deste kernel.
+fn landlock_abi() -> i64 {
+    // SAFETY: a consulta da versão não usa os ponteiros.
+    unsafe {
+        libc::syscall(
+            libc::SYS_landlock_create_ruleset,
+            std::ptr::null::<u8>(),
+            0usize,
+            1u32,
+        )
+    }
+}
+
+/// O sinal ao processo 1 do sandbox, de dentro: negado pelo escopo.
+const SINAL_1: &str = "kill -0 1 2>/dev/null && echo SINAL-OK || echo SINAL-NEGADO";
+
+/// O escopo do sandbox (Landlock abaixo do ABI 6) volta depois de um
+/// reinício do auxiliar (change 79): nas abas do daemon, com os arquivos pelo
+/// kernel e pelo supervisor, a aba congela e segue com o sinal ao processo 1
+/// ainda negado; um lançamento logo depois do reinício sobe; no `run` sem o
+/// daemon, o lançador registra de novo.
+#[test]
+fn escopo_de_volta_depois_do_reinicio() {
+    let Some(sock) = helper() else { return };
+    if landlock_abi() >= 6 {
+        eprintln!("pulado: o Landlock tem o ABI 6, e o escopo não vem do auxiliar");
+        return;
+    }
+    let restart = || {
+        std::fs::write(format!("{}.restart", sock.display()), "").unwrap();
+    };
+    for supervisor in [false, true] {
+        let e = Env::new();
+        if supervisor {
+            e.write_config(&format!(
+                "[project.\"{}\"]\nfile-deny = [\"*.nunca\"]\n",
+                e.work.display()
+            ));
+        }
+        let mut t = term(&e, &e.work);
+        let s = run_in(&mut t, &e.work, SINAL_1);
+        assert!(s.contains("SINAL-NEGADO"), "{supervisor}: {s}");
+        assert_eq!(
+            stats(&e).contains("aberturas de arquivo: pelo kernel"),
+            !supervisor
+        );
+        restart();
+        std::thread::sleep(Duration::from_millis(500));
+        let s = run_in(&mut t, &e.work, SINAL_1);
+        assert!(s.contains("SINAL-NEGADO"), "{supervisor}, depois: {s}");
+        t.write(b"exit\r");
+        t.wait_exit();
+        limpar(&e);
+    }
+    // Um lançamento logo depois do reinício.
+    let e = Env::new();
+    restart();
+    let mut t = term(&e, &e.work);
+    let s = run_in(&mut t, &e.work, SINAL_1);
+    assert!(s.contains("SINAL-NEGADO"), "lançamento na troca: {s}");
+    t.write(b"exit\r");
+    t.wait_exit();
+    // O `run` sem o daemon: o próprio lançador registra de novo.
+    let e = Env::new();
+    let script = format!("{SINAL_1}; sleep 5; {SINAL_1}");
+    let bins = common::bin_dir();
+    let kid = e
+        .cmd(
+            &e.work,
+            &[
+                "run",
+                "shell",
+                "--ro",
+                bins.to_str().unwrap(),
+                "--",
+                "-c",
+                &script,
+            ],
+        )
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    restart();
+    let o = kid.wait_with_output().unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert_eq!(
+        out.matches("SINAL-NEGADO").count(),
+        2,
+        "{out}\n{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
+
 /// Custo das aberturas de uma aba: ler 13 mil arquivos da pasta e o import
 /// do Python, no host, com os arquivos pelo kernel e pelo supervisor (um
 /// `file-deny` por nome deixa a aba com ele). Só mede; roda com

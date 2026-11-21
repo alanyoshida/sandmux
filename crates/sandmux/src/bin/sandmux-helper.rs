@@ -51,6 +51,10 @@ fn main() {
         }),
     };
     let server = helper::Server::new(Box::new(helper::Ebpf::new()));
+    // Os programas do escopo carregam antes do primeiro pedido, sem segurar
+    // a subida: os pedidos esperam a carga.
+    let s = server.clone();
+    std::thread::spawn(move || s.preload());
     let s = server.clone();
     std::thread::spawn(move || {
         let mut sig = 0;

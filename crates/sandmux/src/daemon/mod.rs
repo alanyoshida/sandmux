@@ -286,6 +286,45 @@ fn prune_layouts(st: &mut State) {
 }
 
 /// PID do processo do outro lado do socket.
+/// O user namespace de um sandbox, num byte com o descritor por
+/// `SCM_RIGHTS` logo depois do quadro: precisa ser um user namespace do
+/// usuário do daemon.
+pub fn recv_userns(s: &UnixStream) -> Result<std::os::fd::OwnedFd, String> {
+    use std::os::fd::FromRawFd;
+    const SPACE: usize = 64;
+    let mut byte = [0u8];
+    let mut iov = libc::iovec {
+        iov_base: byte.as_mut_ptr().cast(),
+        iov_len: 1,
+    };
+    // `u64`: o `cmsghdr` precisa do alinhamento dele.
+    let mut buf = [0u64; SPACE / 8];
+    // SAFETY: msghdr zerado é válido; o kernel preenche o cmsg no buffer.
+    let fd = unsafe {
+        let mut msg: libc::msghdr = std::mem::zeroed();
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = buf.as_mut_ptr().cast();
+        msg.msg_controllen = std::mem::size_of_val(&buf) as _;
+        let n = libc::recvmsg(s.as_raw_fd(), &mut msg, libc::MSG_CMSG_CLOEXEC);
+        if n != 1 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let c = libc::CMSG_FIRSTHDR(&msg);
+        if c.is_null() || (*c).cmsg_level != libc::SOL_SOCKET || (*c).cmsg_type != libc::SCM_RIGHTS
+        {
+            return Err(tr!("sem o descritor", "no descriptor").into());
+        }
+        std::os::fd::OwnedFd::from_raw_fd(std::ptr::read_unaligned(
+            libc::CMSG_DATA(c).cast::<i32>(),
+        ))
+    };
+    // SAFETY: getuid não falha.
+    let uid = unsafe { libc::getuid() };
+    crate::helper::check_userns(&fd, uid)?;
+    Ok(fd)
+}
+
 pub fn peer_pid(s: &UnixStream) -> Option<i32> {
     let mut cred = libc::ucred {
         pid: 0,
@@ -759,5 +798,63 @@ mod tests {
         assert!(!accept_peer(Some(1001), 1000));
         assert!(!accept_peer(Some(0), 1000));
         assert!(!accept_peer(None, 1000));
+    }
+
+    /// O pedido da aba e o user namespace logo depois do quadro, como o
+    /// lançador manda: o quadro sai inteiro, e o descritor chega.
+    #[test]
+    fn namespace_depois_do_quadro() {
+        use sandmux_proto::msg::{Msg, TabScope};
+        use sandmux_proto::{Frame, read_frame, write_control};
+        let (mut a, mut b) = UnixStream::pair().unwrap();
+        let mut child = match std::process::Command::new("unshare")
+            .args(["-U", "sleep", "30"])
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let own = std::fs::metadata("/proc/self/ns/user").unwrap();
+        let mut ns = None;
+        for _ in 0..200 {
+            if let Ok(f) = std::fs::File::open(format!("/proc/{}/ns/user", child.id()))
+                && std::os::unix::fs::MetadataExt::ino(&f.metadata().unwrap())
+                    != std::os::unix::fs::MetadataExt::ino(&own)
+            {
+                ns = Some(std::os::fd::OwnedFd::from(f));
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let Some(ns) = ns else {
+            let _ = child.kill();
+            eprintln!("pulado: sem user namespace sem privilégio");
+            return;
+        };
+        let sc = TabScope {
+            init_pid: child.id(),
+            ioctl: true,
+            devs: vec![(1, 2)],
+        };
+        let msg = Msg::ConfineTab {
+            tag: "s1-1".into(),
+            mounts: vec![7],
+            roots: vec![],
+            exclude: vec![],
+            scope: Some(sc.clone()),
+        };
+        write_control(&mut a, &msg).unwrap();
+        sandmux_net::procinfo::send_fd(&a, &ns).unwrap();
+        let Ok(Some(Frame::Control(Msg::ConfineTab { scope, .. }))) = read_frame(&mut b) else {
+            panic!("sem o quadro");
+        };
+        assert_eq!(scope, Some(sc));
+        recv_userns(&b).unwrap();
+        // O namespace do próprio daemon é recusado.
+        let mine = std::os::fd::OwnedFd::from(std::fs::File::open("/proc/self/ns/user").unwrap());
+        sandmux_net::procinfo::send_fd(&a, &mine).unwrap();
+        assert!(recv_userns(&b).is_err());
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }

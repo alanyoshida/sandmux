@@ -58,6 +58,13 @@ Global BPF LSM programs, loaded with the first scope and released when none is l
 
 The scope lasts while the launcher's connection is open, that is, while the sandbox lives. Without the helper or without the BPF LSM, the launch is refused, and `sandmux doctor` shows the paths ([Ubuntu 24.04](install.md#ubuntu-2404)). On a kernel with ABI 6, the launcher does not ask for the scope.
 
+When the helper restarts (an upgrade, a crash), the scope comes back on the next helper:
+
+- **In a daemon session:** the launcher hands the scope parameters and the sandbox's user namespace to the daemon, and the daemon watches one connection to the helper per tab. On a drop, it freezes the tab, registers the scope again (and the [files by the kernel](files.md#by-the-kernel), when the tab has them) and thaws it. Nothing in the tab runs without the scope.
+- **In `run` without the daemon:** the launcher itself registers again as soon as the next helper answers. In that interval, the sandbox runs without the scope.
+
+Without the scope back within 30 s, the sandbox ends. A launch that finds the helper being swapped tries again for up to 30 s. On 6.8, loading and dropping the scope programs takes seconds; so, on a kernel below ABI 6, the helper loads them when it starts, and they stay loaded for 60 s after the last scope.
+
 ## How long the rules last
 
 The rules and marks apply while the daemon's connection to the helper is open. They go away when:
@@ -66,7 +73,7 @@ The rules and marks apply while the daemon's connection to the helper is open. T
 - the daemon ends, even when killed by `SIGKILL`;
 - the helper stops.
 
-If the helper stops with the Docker running, the daemon stops the folder's Docker, which does not go on without the rules. A tab with its files by the kernel stays frozen until the confinement is redone with the helper back, and stops if it is not back within 10 s. On `SIGTERM` (`systemctl restart`, an upgrade), the helper shuts the writing side of each connection before it exits: whoever asked learns about it with the rules still in force, and they go away when it closes the connection (or after 2 s). The next `docker` starts another Docker and turns the confinement on again, if the helper answers. The systemd socket starts the helper again on the next connection.
+If the helper stops with the Docker running, the daemon stops the folder's Docker, which does not go on without the rules. A tab with its files by the kernel stays frozen until the confinement is redone with the helper back, and stops if it is not back within 30 s. On `SIGTERM` (`systemctl restart`, an upgrade), the helper shuts the writing side of each connection before it exits: whoever asked learns about it with the rules still in force, and they go away when it closes the connection (or after 2 s). Connections that arrive in the meantime close without an answer, and whoever asked tries the next helper. The next `docker` starts another Docker and turns the confinement on again, if the helper answers. The systemd socket starts the helper again on the next connection.
 
 ## Install
 

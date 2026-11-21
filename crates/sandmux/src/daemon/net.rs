@@ -176,7 +176,7 @@ pub fn recompile(shared: &Shared, id: u32) -> anyhow::Result<Recompiled> {
                 .sessions
                 .values()
                 .find(|s| s.tags.last() == Some(tag))
-                .and_then(|s| s.tab_files.as_ref().map(|t| t.files.clone()));
+                .and_then(|s| s.tab_kernel.as_ref().and_then(|t| t.files.clone()));
             if let Some(files) = files {
                 let _ = files.refresh(Some(p.clone()));
             }
