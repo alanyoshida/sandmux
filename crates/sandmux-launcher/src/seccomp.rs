@@ -270,9 +270,35 @@ pub fn install_notify(opens: bool, exec: bool) -> io::Result<std::os::fd::OwnedF
     Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as i32) })
 }
 
+/// Os filtros de notificação de um processo do sandbox (o comando ou um
+/// shell de entrada): `(aberturas, execuções)`, ou `None` sem nenhum. As
+/// aberturas vão ao supervisor, menos com os arquivos pelo kernel; as
+/// execuções, quando o registro delas é pelo supervisor.
+pub fn notify_for(kernel: bool, exec: bool) -> Option<(bool, bool)> {
+    (!kernel || exec).then_some((!kernel, exec))
+}
+
+/// Instala os filtros de [`notify_for`]: o descritor do supervisor, ou
+/// `None` quando não há filtro.
+pub fn install_files_notify(kernel: bool, exec: bool) -> io::Result<Option<std::os::fd::OwnedFd>> {
+    notify_for(kernel, exec)
+        .map(|(opens, exec)| install_notify(opens, exec))
+        .transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filtros_de_notificacao_pelo_modo() {
+        // Pelo supervisor: as aberturas, e as execuções quando pedidas.
+        assert_eq!(notify_for(false, false), Some((true, false)));
+        assert_eq!(notify_for(false, true), Some((true, true)));
+        // Pelo kernel: só as execuções pelo supervisor, ou nada.
+        assert_eq!(notify_for(true, true), Some((false, true)));
+        assert_eq!(notify_for(true, false), None);
+    }
 
     /// Roda o programa BPF sobre um `seccomp_data` mínimo (nr e arch).
     fn eval(p: &[libc::sock_filter], nr: u32, arch: u32) -> u32 {

@@ -76,7 +76,7 @@ Vários terminais podem se anexar à mesma sessão; todos recebem a saída e tod
 `sandmux enter [id]` (sem identificador, a única sessão viva), ou Ctrl+b `t` na TUI, abre uma sessão nova, `dentro:<pasta>`, com um shell dentro do sandbox da aba alvo. O shell vê exatamente o que o agente vê:
 
 - **arquivos:** a mesma visão, a mesma pasta inicial, o mesmo Landlock;
-- **regras de arquivos:** as aberturas passam pelas mesmas regras e entram no mesmo registro (um `.env` continua negado);
+- **regras de arquivos:** as aberturas passam pelas mesmas regras e pelo mesmo caminho do agente, o kernel numa aba confinada pelo kernel e o supervisor nas outras, e entram no mesmo registro (um `.env` continua negado);
 - **rede e restrições:** a mesma rede e o mesmo seccomp;
 - **processos:** os mesmos, porque o shell está no mesmo pid namespace (`ps` mostra o agente).
 

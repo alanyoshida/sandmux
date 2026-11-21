@@ -241,12 +241,18 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
         crate::scope::keep(r, child, keeper.clone());
     }
 
+    // O modo dos arquivos da aba, para os shells de entrada: eles seguem o
+    // comando.
+    let enter_mode =
+        std::sync::Arc::new(std::sync::atomic::AtomicU8::new(crate::enter::MODE_UNKNOWN));
+
     // As aberturas de arquivo do comando: o descritor do filtro chega quando
     // o comando o instala; uma thread espera por ele.
     {
         let spec = spec.clone();
         let child_pid = child.as_raw();
         let keeper = keeper.clone();
+        let enter_mode = enter_mode.clone();
         let _ = std::thread::Builder::new()
             .name("sandmux-files".into())
             .spawn(move || {
@@ -272,9 +278,21 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
                             MODE_SUPERVISOR
                         },
                     );
+                    enter_mode.store(
+                        if a.kernel.is_ok() {
+                            crate::enter::MODE_KERNEL
+                        } else {
+                            crate::enter::MODE_SUPERVISOR
+                        },
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
                 } else {
                     keeper.store(
                         crate::scope::KEEPER_SELF,
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
+                    enter_mode.store(
+                        crate::enter::MODE_SUPERVISOR,
                         std::sync::atomic::Ordering::SeqCst,
                     );
                 }
@@ -340,7 +358,11 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
                     for c in l.incoming().flatten() {
                         let c = OwnedFd::from(c);
                         if let Ok(Some(pty)) = net::recv_fd(&c) {
-                            let _ = en.call(&c, &pty);
+                            // Um pedido antes da resposta do daemon espera o
+                            // modo; sem ele, o supervisor.
+                            let kernel =
+                                crate::enter::wait_mode(&enter_mode, crate::enter::MODE_WAIT);
+                            let _ = en.call(&c, &pty, kernel);
                         }
                     }
                 });
@@ -738,10 +760,7 @@ fn command_process(spec: &LaunchSpec, err_w: &OwnedFd, files_w: &OwnedFd, kernel
     // O descritor vai logo depois da instalação: uma abertura antes dele
     // esperaria o supervisor.
     let exec = spec.files.as_ref().is_some_and(|f| f.exec_log);
-    match (!kernel || exec)
-        .then(|| seccomp::install_notify(!kernel, exec))
-        .transpose()
-    {
+    match seccomp::install_files_notify(kernel, exec) {
         Ok(None) => {}
         Ok(Some(listener)) => {
             if let Err(e) = net::send_fd(files_w, &listener) {

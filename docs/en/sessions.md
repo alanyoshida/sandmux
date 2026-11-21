@@ -78,7 +78,7 @@ Several terminals can attach to the same session; all of them get the output and
 `sandmux enter [id]` (without an identifier, the only live session), or Ctrl+b `t` in the TUI, opens a new session, `dentro:<folder>`, with a shell inside the target tab's sandbox. The shell sees exactly what the agent sees:
 
 - **files:** the same view, the same starting folder, the same Landlock;
-- **file rules:** opens go through the same rules and into the same log (a `.env` is still denied);
+- **file rules:** opens go through the same rules and the same path as the agent's, the kernel in a kernel-confined tab and the supervisor in the others, and into the same log (a `.env` is still denied);
 - **network and restrictions:** the same network and the same seccomp;
 - **processes:** the same ones, because the shell is in the same pid namespace (`ps` shows the agent).
 
