@@ -228,6 +228,11 @@ pub trait Confined: Send {
 /// JSON, e quantos foram descartados com a fila cheia.
 pub trait Events: Send {
     fn poll(&mut self, timeout_ms: i32) -> (Vec<Value>, u64);
+    /// Os bytes que estavam na fila do kernel no último `poll` e o tamanho
+    /// dela; `(0, 0)` sem fila do kernel.
+    fn backlog(&self) -> (u64, u64) {
+        (0, 0)
+    }
 }
 
 /// Um escopo de sandbox registrado: sai do registro quando é solto.
@@ -373,6 +378,9 @@ struct Conn {
     new_events: Option<Box<dyn Events>>,
     /// O escopo de sandbox registrado nesta conexão.
     scoped: Option<Box<dyn Scoped>>,
+    /// O cgroup de uma aba confinada (com montagens a registrar), que a
+    /// thread dos eventos congela com a fila cheia.
+    freeze_cg: Option<OwnedFd>,
 }
 
 fn err(msg: impl Into<String>) -> Value {
@@ -483,6 +491,11 @@ impl Server {
                     .unwrap_or_default();
                 match self.backend.confine(&cg, dev, &open_mnts) {
                     Ok(x) => {
+                        // Uma aba: a thread dos eventos congela o cgroup com
+                        // a fila cheia.
+                        if !open_mnts.is_empty() {
+                            c.freeze_cg = cg.try_clone().ok();
+                        }
                         let attach = x.attach();
                         eprintln!(
                             "{}",
@@ -675,7 +688,13 @@ impl Server {
             observing: false,
             new_events: None,
             scoped: None,
+            freeze_cg: None,
         };
+        // Marcado antes de soltar o confinamento, sob a trava: depois disso a
+        // thread dos eventos não descongela a aba.
+        let ended = Arc::new(Mutex::new(false));
+        let srv = self.clone();
+        let closing = move || srv.closing.load(std::sync::atomic::Ordering::SeqCst);
         let mut bad = 0;
         loop {
             let reply = match recv(&*sock) {
@@ -684,10 +703,16 @@ impl Server {
                     let had = c.confined.is_some();
                     let r = self.handle(&mut c, &msg, fds);
                     if !had && let Some(src) = c.confined.as_ref().and_then(|x| x.events()) {
-                        forward_events(src, sock.clone(), send_lock.clone(), stop.clone());
+                        let freeze = c.freeze_cg.take().map(|cg| Freeze {
+                            cg,
+                            uid,
+                            ended: ended.clone(),
+                            closing: Box::new(closing.clone()),
+                        });
+                        forward_events(src, sock.clone(), send_lock.clone(), stop.clone(), freeze);
                     }
                     if let Some(src) = c.new_events.take() {
-                        forward_events(src, sock.clone(), send_lock.clone(), stop.clone());
+                        forward_events(src, sock.clone(), send_lock.clone(), stop.clone(), None);
                     }
                     r
                 }
@@ -706,6 +731,7 @@ impl Server {
             }
         }
         stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        *ended.lock().unwrap_or_else(|e| e.into_inner()) = true;
         if c.confined.take().is_some() {
             self.release(uid);
         }
@@ -723,49 +749,214 @@ impl Server {
     }
 }
 
-/// Uma thread que lê os eventos do confinamento e os manda em lotes, até a
-/// conexão terminar.
+/// Acima disto na fila do auxiliar (eventos lidos e ainda não mandados), a
+/// aba congela.
+pub const QUEUE_HIGH: usize = 32768;
+/// Abaixo disto, e com a fila do kernel abaixo de 1/4, a aba descongela.
+pub const QUEUE_LOW: usize = 4096;
+
+/// O congelamento de uma aba com a fila cheia: o cgroup, de quem é, a trava
+/// do fim da conexão (com `true`, nada de descongelar) e se a saída limpa do
+/// auxiliar começou.
+pub struct Freeze {
+    pub cg: OwnedFd,
+    pub uid: u32,
+    pub ended: Arc<Mutex<bool>>,
+    pub closing: Box<dyn Fn() -> bool + Send>,
+}
+
+/// A fila passou do limite: a fila do kernel acima de 3/4 no último
+/// esvaziamento, a do auxiliar acima de [`QUEUE_HIGH`], ou um descarte.
+pub fn should_freeze(queued: usize, backlog: (u64, u64), dropped: u64) -> bool {
+    dropped > 0 || queued > QUEUE_HIGH || (backlog.1 > 0 && backlog.0 * 4 > backlog.1 * 3)
+}
+
+/// As duas filas esvaziaram o bastante para a aba seguir.
+pub fn may_thaw(queued: usize, backlog: (u64, u64)) -> bool {
+    queued < QUEUE_LOW && backlog.0 * 4 <= backlog.1
+}
+
+impl Freeze {
+    /// Escreve no `cgroup.freeze` do cgroup.
+    fn write(&self, on: bool) -> io::Result<()> {
+        // SAFETY: openat relativo ao descritor do cgroup, com um nome fixo.
+        let fd = unsafe {
+            libc::openat(
+                self.cg.as_raw_fd(),
+                c"cgroup.freeze".as_ptr(),
+                libc::O_WRONLY | libc::O_TRUNC | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: descritor recém-aberto, nosso.
+        let f = unsafe { OwnedFd::from_raw_fd(fd) };
+        let v: &[u8] = if on { b"1" } else { b"0" };
+        // SAFETY: escrita de um buffer válido num descritor nosso.
+        if unsafe { libc::write(f.as_raw_fd(), v.as_ptr().cast(), v.len()) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Descongela, se a conexão continua aberta e a saída limpa não
+    /// começou: com a trava do fim tomada, o confinamento não sai no meio.
+    /// Devolve se descongelou.
+    fn thaw(&self) -> bool {
+        let ended = self.ended.lock().unwrap_or_else(|e| e.into_inner());
+        if *ended || (self.closing)() {
+            return false;
+        }
+        match self.write(false) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("sandmux-helper: uid {}: cgroup.freeze: {e}", self.uid);
+                false
+            }
+        }
+    }
+}
+
+/// Os eventos lidos e ainda não mandados, entre a thread que esvazia a fila
+/// do kernel e a que manda ao daemon.
+#[derive(Default)]
+struct Queue {
+    items: std::collections::VecDeque<Value>,
+    dropped: u64,
+    /// Tirados da fila pela que manda e ainda não mandados.
+    sending: usize,
+    /// A leitura terminou: a que manda esvazia o que sobrou e sai.
+    done: bool,
+}
+
+/// Duas threads por confinamento, até a conexão terminar: uma esvazia a fila
+/// do kernel sem esperar o envio, e outra manda os eventos em lotes. Com
+/// `freeze` (uma aba), a primeira congela o cgroup quando as filas passam do
+/// limite ([`should_freeze`]) e o descongela quando esvaziam.
 fn forward_events(
     mut src: Box<dyn Events>,
     sock: Arc<OwnedFd>,
     send_lock: Arc<Mutex<()>>,
     stop: Arc<std::sync::atomic::AtomicBool>,
+    freeze: Option<Freeze>,
 ) {
+    let q = Arc::new((Mutex::new(Queue::default()), std::sync::Condvar::new()));
+    let qs = q.clone();
+    let _ = std::thread::Builder::new()
+        .name("helper-envio".into())
+        .spawn(move || send_events(&qs, &sock, &send_lock));
     let _ = std::thread::Builder::new()
         .name("helper-eventos".into())
         .spawn(move || {
+            let mut frozen: Option<std::time::Instant> = None;
+            // Uma escrita no `cgroup.freeze` falhou (o cgroup sumiu): sem
+            // insistir a cada volta.
+            let mut broken = false;
             while !stop.load(std::sync::atomic::Ordering::SeqCst) {
-                let (evs, dropped) = src.poll(300);
-                if evs.is_empty() && dropped == 0 {
-                    continue;
-                }
-                // Lotes que cabem numa mensagem.
-                let mut batch = Vec::new();
-                let mut size = 0;
-                let flush = |batch: &mut Vec<Value>, dropped: u64| -> bool {
-                    let msg = json!({"ev": batch, "dropped": dropped}).to_string();
-                    batch.clear();
-                    let _g = send_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    send(&*sock, msg.as_bytes(), &[]).is_ok()
-                };
-                let mut d = dropped;
-                for e in evs {
-                    let n = e.to_string().len() + 1;
-                    if size + n > MAX_MSG - 64 && !batch.is_empty() {
-                        if !flush(&mut batch, d) {
-                            return;
-                        }
-                        d = 0;
-                        size = 0;
+                let (evs, dropped) = src.poll(if frozen.is_some() { 50 } else { 300 });
+                let backlog = src.backlog();
+                let queued = {
+                    let (m, cv) = &*q;
+                    let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+                    if g.done {
+                        break;
                     }
-                    size += n;
-                    batch.push(e);
-                }
-                if (!batch.is_empty() || d > 0) && !flush(&mut batch, d) {
-                    return;
+                    if !evs.is_empty() || dropped > 0 {
+                        g.items.extend(evs);
+                        g.dropped += dropped;
+                        cv.notify_one();
+                    }
+                    g.items.len() + g.sending
+                };
+                let Some(f) = freeze.as_ref().filter(|_| !broken) else {
+                    continue;
+                };
+                match frozen {
+                    None if should_freeze(queued, backlog, dropped) => match f.write(true) {
+                        Ok(()) => frozen = Some(std::time::Instant::now()),
+                        Err(e) => {
+                            broken = true;
+                            eprintln!("sandmux-helper: uid {}: cgroup.freeze: {e}", f.uid);
+                        }
+                    },
+                    Some(t) if may_thaw(queued, backlog) && f.thaw() => {
+                        frozen = None;
+                        let ms = t.elapsed().as_millis();
+                        eprintln!(
+                            "{}",
+                            trf!(
+                                "sandmux-helper: uid {}: aba congelada por {ms} ms (fila de eventos cheia)",
+                                "sandmux-helper: uid {}: tab frozen for {ms} ms (event queue full)",
+                                f.uid
+                            )
+                        );
+                    }
+                    _ => {}
                 }
             }
+            let (m, cv) = &*q;
+            m.lock().unwrap_or_else(|e| e.into_inner()).done = true;
+            cv.notify_one();
         });
+}
+
+/// A thread que manda: tira tudo o que está na fila e manda em lotes que
+/// cabem numa mensagem, com os descartes no primeiro.
+fn send_events(q: &(Mutex<Queue>, std::sync::Condvar), sock: &OwnedFd, send_lock: &Mutex<()>) {
+    let (m, cv) = q;
+    loop {
+        let (evs, dropped) = {
+            let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+            while g.items.is_empty() && g.dropped == 0 && !g.done {
+                g = cv
+                    .wait_timeout(g, std::time::Duration::from_millis(300))
+                    .unwrap_or_else(|e| e.into_inner())
+                    .0;
+            }
+            if g.items.is_empty() && g.dropped == 0 {
+                return;
+            }
+            let evs: Vec<Value> = g.items.drain(..).collect();
+            g.sending = evs.len();
+            (evs, std::mem::take(&mut g.dropped))
+        };
+        let fail = |m: &Mutex<Queue>| {
+            let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+            g.done = true;
+            g.sending = 0;
+        };
+        let flush = |batch: &mut Vec<Value>, dropped: u64| -> bool {
+            let msg = json!({"ev": batch, "dropped": dropped}).to_string();
+            let n = batch.len();
+            batch.clear();
+            let ok = {
+                let _g = send_lock.lock().unwrap_or_else(|e| e.into_inner());
+                send(sock, msg.as_bytes(), &[]).is_ok()
+            };
+            let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+            g.sending = g.sending.saturating_sub(n);
+            ok
+        };
+        let mut batch = Vec::new();
+        let mut size = 0;
+        let mut d = dropped;
+        for e in evs {
+            let n = e.to_string().len() + 1;
+            if size + n > MAX_MSG - 64 && !batch.is_empty() {
+                if !flush(&mut batch, d) {
+                    return fail(m);
+                }
+                d = 0;
+                size = 0;
+            }
+            size += n;
+            batch.push(e);
+        }
+        if (!batch.is_empty() || d > 0) && !flush(&mut batch, d) {
+            return fail(m);
+        }
+    }
 }
 
 /// A carga real, pelo `sandmux-ebpf`.
@@ -970,6 +1161,9 @@ impl Events for RealEvents {
             .collect();
         (evs, sandmux_ebpf::prog::take_drops(&self.drops))
     }
+    fn backlog(&self) -> (u64, u64) {
+        (self.reader.backlog(), self.reader.size())
+    }
 }
 
 /// Nível e id de um cgroup v2 pelo descritor (para o anexo global).
@@ -1049,6 +1243,9 @@ struct ObsEvents {
 impl Events for ObsEvents {
     fn poll(&mut self, timeout_ms: i32) -> (Vec<Value>, u64) {
         self.inner.poll(timeout_ms)
+    }
+    fn backlog(&self) -> (u64, u64) {
+        self.inner.backlog()
     }
 }
 
@@ -1605,7 +1802,7 @@ fn status_with(lsm: Result<bool, String>, socket: &Path) -> Result<Status, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     struct Fake {
         loaded: Arc<AtomicUsize>,
@@ -1923,6 +2120,180 @@ mod tests {
         assert!(!e.is_empty());
         drop(c);
         wait_for(|| loaded.load(Ordering::SeqCst) == 0);
+    }
+
+    #[test]
+    fn limites_do_congelamento() {
+        assert!(!should_freeze(10, (0, 0), 0));
+        assert!(should_freeze(10, (0, 0), 1));
+        assert!(should_freeze(QUEUE_HIGH + 1, (0, 0), 0));
+        assert!(should_freeze(0, (800, 1000), 0));
+        assert!(!should_freeze(0, (700, 1000), 0));
+        assert!(may_thaw(0, (0, 0)));
+        assert!(may_thaw(QUEUE_LOW - 1, (250, 1000)));
+        assert!(!may_thaw(QUEUE_LOW, (0, 1000)));
+        assert!(!may_thaw(0, (300, 1000)));
+    }
+
+    /// Eventos de um roteiro: cada volta devolve o próximo passo (a quantidade
+    /// de eventos, os descartes e o backlog) e anota o `cgroup.freeze`.
+    struct Roteiro {
+        passos: std::collections::VecDeque<(usize, u64, (u64, u64))>,
+        backlog: (u64, u64),
+        freeze: PathBuf,
+        visto: Arc<Mutex<Vec<String>>>,
+    }
+    impl Events for Roteiro {
+        fn poll(&mut self, _timeout_ms: i32) -> (Vec<Value>, u64) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            let v = std::fs::read_to_string(&self.freeze).unwrap_or_default();
+            let mut visto = self.visto.lock().unwrap();
+            if visto.last() != Some(&v) {
+                visto.push(v);
+            }
+            let (n, dropped, backlog) = self.passos.pop_front().unwrap_or((0, 0, (0, 0)));
+            self.backlog = backlog;
+            let evs = (0..n)
+                .map(
+                    |i| json!({"kind": "open", "write": false, "ino": i, "mnt": 1, "path": "/w/a"}),
+                )
+                .collect();
+            (evs, dropped)
+        }
+        fn backlog(&self) -> (u64, u64) {
+            self.backlog
+        }
+    }
+
+    struct Congelamento {
+        _d: tempfile::TempDir,
+        freeze: PathBuf,
+        visto: Arc<Mutex<Vec<String>>>,
+        ended: Arc<Mutex<bool>>,
+        closing: Arc<AtomicBool>,
+        stop: Arc<AtomicBool>,
+        /// A outra ponta da conexão, que recebe os eventos.
+        peer: OwnedFd,
+    }
+
+    fn congelamento(passos: Vec<(usize, u64, (u64, u64))>) -> Congelamento {
+        let d = tempfile::tempdir().unwrap();
+        let freeze = d.path().join("cgroup.freeze");
+        std::fs::write(&freeze, "0").unwrap();
+        let cg = open_path(d.path()).unwrap();
+        let mut fds = [0; 2];
+        // SAFETY: socketpair escreve dois descritores novos no vetor.
+        assert_eq!(
+            unsafe {
+                libc::socketpair(
+                    libc::AF_UNIX,
+                    libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC,
+                    0,
+                    fds.as_mut_ptr(),
+                )
+            },
+            0
+        );
+        // SAFETY: descritores recém-criados, nossos.
+        let (a, b) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+        let visto = Arc::new(Mutex::new(Vec::new()));
+        let ended = Arc::new(Mutex::new(false));
+        let closing = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let cl = closing.clone();
+        forward_events(
+            Box::new(Roteiro {
+                passos: passos.into(),
+                backlog: (0, 0),
+                freeze: freeze.clone(),
+                visto: visto.clone(),
+            }),
+            Arc::new(a),
+            Arc::new(Mutex::new(())),
+            stop.clone(),
+            Some(Freeze {
+                cg,
+                uid: 1000,
+                ended: ended.clone(),
+                closing: Box::new(move || cl.load(Ordering::SeqCst)),
+            }),
+        );
+        Congelamento {
+            _d: d,
+            freeze,
+            visto,
+            ended,
+            closing,
+            stop,
+            peer: b,
+        }
+    }
+
+    impl Congelamento {
+        fn estado(&self) -> String {
+            std::fs::read_to_string(&self.freeze).unwrap()
+        }
+        /// Lê da outra ponta até somar `n` eventos.
+        fn recebe(&self, n: usize) -> u64 {
+            let mut vistos = 0;
+            let mut dropped = 0;
+            while vistos < n {
+                let (msg, _) = recv(&self.peer).unwrap().unwrap();
+                let v: Value = serde_json::from_slice(&msg).unwrap();
+                vistos += v["ev"].as_array().unwrap().len();
+                dropped += v["dropped"].as_u64().unwrap_or(0);
+            }
+            dropped
+        }
+    }
+
+    impl Drop for Congelamento {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn congela_com_descarte_e_descongela_ao_esvaziar() {
+        let c = congelamento(vec![(10, 3, (0, 0))]);
+        assert_eq!(c.recebe(10), 3);
+        wait_for(|| c.visto.lock().unwrap().len() >= 3);
+        assert_eq!(&c.visto.lock().unwrap()[..3], ["0", "1", "0"]);
+    }
+
+    #[test]
+    fn congela_com_a_fila_do_kernel_quase_cheia() {
+        let c = congelamento(vec![(5, 0, (900, 1000)), (0, 0, (0, 1000))]);
+        assert_eq!(c.recebe(5), 0);
+        wait_for(|| c.visto.lock().unwrap().len() >= 3);
+        assert_eq!(&c.visto.lock().unwrap()[..3], ["0", "1", "0"]);
+    }
+
+    #[test]
+    fn congela_com_a_fila_do_auxiliar_cheia() {
+        // Ninguém lê a outra ponta: o envio para, e a fila passa do teto.
+        let c = congelamento(vec![(QUEUE_HIGH + 2000, 0, (0, 0))]);
+        wait_for(|| c.estado() == "1");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(c.estado(), "1", "não descongela com a fila cheia");
+        assert_eq!(c.recebe(QUEUE_HIGH + 2000), 0);
+        wait_for(|| c.estado() == "0");
+    }
+
+    #[test]
+    fn nao_descongela_depois_do_fim_nem_na_saida_limpa() {
+        for fim in [true, false] {
+            let c = congelamento(vec![(QUEUE_HIGH + 2000, 0, (0, 0))]);
+            wait_for(|| c.estado() == "1");
+            if fim {
+                *c.ended.lock().unwrap() = true;
+            } else {
+                c.closing.store(true, Ordering::SeqCst);
+            }
+            assert_eq!(c.recebe(QUEUE_HIGH + 2000), 0);
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert_eq!(c.estado(), "1", "fim: {fim}");
+        }
     }
 
     #[test]

@@ -703,6 +703,105 @@ fn arquivos_da_aba_pelo_kernel() {
     limpar(&e);
 }
 
+/// A leitura em massa numa aba pelo kernel (change 80): trinta mil arquivos
+/// diferentes, cada um lido três vezes, chegam todos ao registro, sem linha
+/// de descarte. As repetições ficam no kernel, e a aba espera a fila esvaziar.
+#[test]
+fn leitura_em_massa_pela_aba_completa() {
+    if helper().is_none() {
+        return;
+    }
+    const DIRS: usize = 300;
+    const FILES: usize = 100;
+    let e = Env::new();
+    for d in 0..DIRS {
+        let dir = e.work.join(format!("massa/d{d:03}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in 0..FILES {
+            std::fs::write(dir.join(format!("f{f:03}")), "x\n").unwrap();
+        }
+    }
+    let mut t = term(&e, &e.work);
+    let s = run_in(&mut t, &e.work, "sleep 1; echo PRONTO");
+    assert!(s.contains("PRONTO"), "{s}");
+    let st = stats(&e);
+    assert!(st.contains("aberturas de arquivo: pelo kernel"), "{st}");
+    let s = run_in(
+        &mut t,
+        &e.work,
+        "for i in 1 2 3; do cat massa/*/* > /dev/null; done; echo FIM",
+    );
+    assert!(s.contains("FIM"), "{s}");
+    // Os arquivos, sem as pastas que o `sh` abre para expandir o padrão.
+    let arquivo = |x: &serde_json::Value| {
+        x["path"].as_str().is_some_and(|p| {
+            p.contains("/massa/d") && p.rsplit('/').next().is_some_and(|n| n.starts_with('f'))
+        })
+    };
+    let massa = |l: &[serde_json::Value]| {
+        l.iter()
+            .filter(|x| x["access"] == "r" && arquivo(x))
+            .filter_map(|x| x["path"].as_str().map(str::to_string))
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut l = all_file_lines(&e);
+    while massa(&l) < DIRS * FILES && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(500));
+        l = all_file_lines(&e);
+    }
+    let descartes: Vec<_> = l.iter().filter(|x| x["access"] == "?").collect();
+    assert!(descartes.is_empty(), "{descartes:?}");
+    assert_eq!(massa(&l), DIRS * FILES);
+    // Uma linha por arquivo, e não uma por leitura.
+    let linhas = l.iter().filter(|x| arquivo(x)).count();
+    assert_eq!(linhas, DIRS * FILES);
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
+}
+
+/// Um arquivo renomeado pela aba e lido logo depois com o nome novo vai para
+/// o registro com o nome novo (change 80): renomear tira o arquivo das
+/// repetições do kernel.
+#[test]
+fn arquivo_renomeado_pela_aba_no_registro() {
+    if helper().is_none() {
+        return;
+    }
+    let e = Env::new();
+    std::fs::write(e.work.join("antes.txt"), "a\n").unwrap();
+    let mut t = term(&e, &e.work);
+    let s = run_in(&mut t, &e.work, "sleep 1; echo PRONTO");
+    assert!(s.contains("PRONTO"), "{s}");
+    let st = stats(&e);
+    assert!(st.contains("aberturas de arquivo: pelo kernel"), "{st}");
+    let s = run_in(
+        &mut t,
+        &e.work,
+        "cat antes.txt; mv antes.txt depois.txt; cat depois.txt; ln depois.txt elo.txt; \
+         cat elo.txt; echo FIM",
+    );
+    assert!(s.contains("FIM"), "{s}");
+    let tem = |l: &[serde_json::Value], nome: &str| {
+        l.iter()
+            .any(|x| x["access"] == "r" && x["path"].as_str().is_some_and(|p| p.ends_with(nome)))
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut l = all_file_lines(&e);
+    while !(tem(&l, "/depois.txt") && tem(&l, "/elo.txt")) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(200));
+        l = all_file_lines(&e);
+    }
+    assert!(tem(&l, "/antes.txt"), "{l:?}");
+    assert!(tem(&l, "/depois.txt"), "{l:?}");
+    assert!(tem(&l, "/elo.txt"), "{l:?}");
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
+}
+
 /// A ABI do Landlock deste kernel.
 fn landlock_abi() -> i64 {
     // SAFETY: a consulta da versão não usa os ponteiros.
