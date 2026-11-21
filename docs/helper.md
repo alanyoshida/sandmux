@@ -30,14 +30,16 @@ A decisão é pelo arquivo (o inode), e não pelo caminho. Por isso, desmontar u
 ## Ao vivo e eventos
 
 - **Desmarcar:** o daemon também pede `unmark`, quando a política de arquivos da pasta muda e um caminho deixa de ser negado. O auxiliar tira a marca e solta o descritor do arquivo.
-- **Eventos:** os programas mandam um evento por uma fila do kernel quando negam uma operação e quando um contêiner cria um arquivo no sistema de arquivos da pasta. O auxiliar lê a fila e manda os eventos ao daemon pela mesma conexão do confinamento. O evento tem o tipo, o gancho, o inode e o nome do arquivo criado, nunca o conteúdo de um arquivo. Com a fila cheia, os eventos a mais são descartados e contados, e os contêineres não esperam.
+- **Eventos:** os programas mandam um evento por uma fila do kernel quando negam uma operação e quando um contêiner cria um arquivo no sistema de arquivos da pasta. O auxiliar lê a fila e manda os eventos ao daemon pela mesma conexão do confinamento. O evento tem o tipo, o gancho, o inode e o nome do arquivo criado, nunca o conteúdo de um arquivo. Com a fila cheia, os eventos a mais são descartados e contados, e os contêineres não esperam (uma aba espera: veja abaixo).
 
 ## Arquivos de uma aba
 
 O daemon também pede o `confine` para o escopo de uma aba, quando o lançador dela pede os [arquivos pelo kernel](files.md#pelo-kernel). O pedido leva, além do `dev` da pasta de trabalho, as montagens (`mnt_id`) das pastas do agente na visão do sandbox. Mudam três coisas em relação ao Docker:
 
 - **Marcas novas:** `secret` dá `ENOENT` (o segredo some, como no supervisor) e `fdeny` dá `EACCES`, nas aberturas e nas operações dentro de uma pasta marcada.
-- **Evento de abertura:** o programa do `file_open` manda, para cada arquivo aberto numa das montagens pedidas, o caminho (por `bpf_d_path`, na visão do sandbox), o inode, a montagem e se a abertura grava. As outras montagens não mandam nada. A fila desse confinamento tem 1 MiB.
+- **Evento de abertura:** o programa do `file_open` manda, para cada arquivo aberto numa das montagens pedidas, o caminho (por `bpf_d_path`, na visão do sandbox, só com os bytes do caminho), o inode, a montagem e se a abertura grava. As outras montagens não mandam nada. A fila desse confinamento tem 1 MiB.
+- **Repetições:** um mapa LRU do confinamento (16384 entradas) guarda o arquivo (dispositivo, inode e geração), o modo e a hora do último evento. Uma abertura do mesmo arquivo e modo em menos de 1 s não manda evento. Os programas de renomear e de link tiram o arquivo do mapa. Um evento que não coube na fila não entra no mapa.
+- **Fila cheia:** uma thread do auxiliar só esvazia a fila do kernel, e outra manda os eventos ao daemon. Quando a fila do kernel passa de 3/4, a do auxiliar passa de 32768 eventos ou há um descarte, o auxiliar congela o cgroup da aba (`cgroup.freeze`). Ele descongela quando a do auxiliar cai abaixo de 4096 e a do kernel abaixo de 1/4. Cada congelamento vai para o journal do auxiliar, com a duração ("aba congelada por N ms"). Depois do fim da conexão, ou na saída limpa, o auxiliar não descongela, porque as regras saem com a conexão; quem descongela é o daemon, ao refazer o confinamento.
 - **Status:** o `status` diz `tab`: um auxiliar que confina abas. Com um auxiliar antigo, sem esse campo, a aba fica com o supervisor.
 
 ## Observação das execuções e das conexões

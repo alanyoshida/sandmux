@@ -45,6 +45,7 @@ Differences from the supervisor:
 - **New files from the host:** a secret, or a file in a denied folder, created outside the sandbox during the session is marked by the folder watch (inotify, or the scan every 10 s without watches) within ~1 s. In that window, the agent can open the file. The secrets the agent itself creates stay its own, as with the supervisor.
 - **Live policy:** denying and allowing on the spot mark and unmark the files within 1 s.
 - **Access:** the line says `r` or `w`; a read-write open shows as `w`.
+- **Bulk reads:** the log comes out complete. The kernel does not send again the open of a file, in the same mode, less than 1 s after the last one. Renaming the file or creating a link to it, from inside the tab, makes the next open go into the log with the new path. When the queue fills anyway, the helper freezes the tab for a few milliseconds, until the queue drains ([the events](helper.md#a-tabs-files)). A file renamed on the host during the session and opened by the new name less than 1 s after the last open by the old name stays in the log with the old name only. The same holds for a file seen through two of the agent's folders.
 - **Helper drop:** without the marks, nothing runs in the tab. The daemon freezes its scope (`cgroup.freeze`) until the helper is back (systemd starts it on the next connection) and redoes the confinement, with the current policy; the tab goes on where it stopped. Without the confinement back within 30 s, the daemon kills everything in the scope (`cgroup.kill`). On a clean exit of the helper (`systemctl restart`, an upgrade), it tells the daemon before dropping the rules; killed by force, a short window is left between the exit and the freeze.
 - **Special cases:** magic links and `/proc/self` follow the kernel and Landlock rules; a marked file stays denied through any path, because the mark belongs to the inode.
 
@@ -124,7 +125,7 @@ How it works: a supervisor helper enters the sandbox's user namespace and create
 
 Measured on the reference machine (median of 3 runs): `opencode --version` 1.0x; hermes importing the CLI 1.1x to 1.2x; incremental `cargo check` 1.2x to 1.3x; reading 13 thousand files in a row 3.2x. Four supervisor threads serve the opens.
 
-[By the kernel](#by-the-kernel), in an Ubuntu 24.04 VM (median of 3 runs, against the same work outside the sandbox): reading 13 thousand files of the work folder 1.1x on kernel 6.8 and 1.4x on 7.0, against 2.6x and 3.1x for the supervisor in the same VM; the Python module import stays the same as outside (the system does not go through the queue).
+[By the kernel](#by-the-kernel), in an Ubuntu 24.04 VM (median of 3 runs, against the same work outside the sandbox): reading 13 thousand files of the work folder 1.05x on kernel 6.8 and 1.14x on 7.0, against 2.7x and 3.0x for the supervisor in the same VM (measured on 2026-11-21, with repeats removed in the kernel); the Python module import stays the same as outside (the system does not go through the queue).
 
 ## Log
 

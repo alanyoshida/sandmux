@@ -178,6 +178,8 @@ pub struct Reader {
     prod: *mut u8,
     page: usize,
     size: usize,
+    /// Bytes que estavam na fila no último esvaziamento.
+    backlog: u64,
 }
 
 // SAFETY: os ponteiros são de mapeamentos deste leitor, usados por uma thread
@@ -245,6 +247,7 @@ impl Reader {
             prod,
             page,
             size,
+            backlog: 0,
         })
     }
 
@@ -261,14 +264,22 @@ impl Reader {
             let data = std::slice::from_raw_parts(self.prod.add(self.page), 2 * self.size);
             (c, p.load(Ordering::Acquire), data)
         };
-        let (out, next) = consume(
-            data,
-            self.size as u64 - 1,
-            cons_pos.load(Ordering::Relaxed),
-            prod_pos,
-        );
+        let cons = cons_pos.load(Ordering::Relaxed);
+        let (out, next) = consume(data, self.size as u64 - 1, cons, prod_pos);
         cons_pos.store(next, Ordering::Release);
+        self.backlog = prod_pos.saturating_sub(cons);
         out
+    }
+
+    /// Quantos bytes estavam na fila no último [`Reader::poll`]: perto do
+    /// tamanho, a fila esteve a ponto de encher.
+    pub fn backlog(&self) -> u64 {
+        self.backlog
+    }
+
+    /// O tamanho dos dados da fila.
+    pub fn size(&self) -> u64 {
+        self.size as u64
     }
 
     pub fn fd(&self) -> &OwnedFd {

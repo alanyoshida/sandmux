@@ -43,6 +43,7 @@ Diferenças do supervisor:
 - **Arquivos novos do host:** um segredo ou um arquivo de pasta negada criado fora do sandbox durante a sessão é marcado pela vigia da pasta (inotify, ou a varredura a cada 10 s sem vigias), em até ~1 s. Nessa janela, o agente consegue abrir o arquivo. Os segredos que o próprio agente cria continuam dele, como no supervisor.
 - **Política ao vivo:** negar e liberar na hora marcam e desmarcam os arquivos em até 1 s.
 - **Acesso:** a linha diz `r` ou `w`; uma abertura de leitura e escrita aparece como `w`.
+- **Leitura em massa:** o registro sai completo. O kernel não manda de novo a abertura de um arquivo, no mesmo modo, com menos de 1 s da última. Renomear o arquivo ou criar um link para ele, de dentro da aba, faz a abertura seguinte ir para o registro com o caminho novo. Quando a fila enche mesmo assim, o auxiliar congela a aba por alguns milissegundos, até a fila esvaziar ([os eventos](helper.md#arquivos-de-uma-aba)). Um arquivo renomeado no host durante a sessão e aberto pelo nome novo em menos de 1 s depois da última abertura pelo nome antigo fica só com o nome antigo no registro. O mesmo vale para um arquivo visto por duas pastas do agente.
 - **Queda do auxiliar:** sem as marcas, nada roda na aba. O daemon congela o escopo dela (`cgroup.freeze`) até o auxiliar voltar (o systemd o sobe na conexão seguinte) e refaz o confinamento, com a política atual; a aba segue de onde parou. Sem o confinamento de volta em 30 s, o daemon mata tudo no escopo (`cgroup.kill`). Numa saída limpa do auxiliar (`systemctl restart`, uma atualização), ele avisa o daemon antes de soltar as regras; morto à força, sobra uma janela curta entre a saída e o congelamento.
 - **Casos especiais:** os links mágicos e o `/proc/self` seguem as regras do kernel e do Landlock; um arquivo marcado continua negado por qualquer caminho, porque a marca é do inode.
 
@@ -122,7 +123,7 @@ Como funciona: um auxiliar do supervisor entra no user namespace do sandbox e cr
 
 Medido na máquina de referência (mediana de 3 rodadas): `opencode --version` 1,0x; o hermes importando o CLI 1,1x a 1,2x; `cargo check` incremental 1,2x a 1,3x; ler 13 mil arquivos seguidos 3,2x. Quatro threads do supervisor atendem as aberturas.
 
-[Pelo kernel](#pelo-kernel), numa VM do Ubuntu 24.04 (mediana de 3 rodadas, contra o mesmo trabalho fora do sandbox): ler 13 mil arquivos da pasta de trabalho 1,1x no kernel 6.8 e 1,4x no 7.0, contra 2,6x e 3,1x do supervisor na mesma VM; o import de módulos do Python fica igual ao de fora (o sistema não passa pela fila).
+[Pelo kernel](#pelo-kernel), numa VM do Ubuntu 24.04 (mediana de 3 rodadas, contra o mesmo trabalho fora do sandbox): ler 13 mil arquivos da pasta de trabalho 1,05x no kernel 6.8 e 1,14x no 7.0, contra 2,7x e 3,0x do supervisor na mesma VM (medido em 2026-11-21, com as repetições tiradas no kernel); o import de módulos do Python fica igual ao de fora (o sistema não passa pela fila).
 
 ## Registro
 

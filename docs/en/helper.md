@@ -30,14 +30,16 @@ The decision is by file (the inode), not by path. That is why unmounting a cover
 ## Live and events
 
 - **Unmark:** the daemon also asks for `unmark`, when the folder's file policy changes and a path is no longer denied. The helper removes the mark and releases the file's descriptor.
-- **Events:** the programs send an event through a kernel queue when they deny an operation and when a container creates a file on the folder's file system. The helper reads the queue and sends the events to the daemon over the same confinement connection. The event has the type, the hook, the inode and the created file's name, never the content of a file. With the queue full, extra events are dropped and counted, and containers do not wait.
+- **Events:** the programs send an event through a kernel queue when they deny an operation and when a container creates a file on the folder's file system. The helper reads the queue and sends the events to the daemon over the same confinement connection. The event has the type, the hook, the inode and the created file's name, never the content of a file. With the queue full, extra events are dropped and counted, and containers do not wait (a tab waits: see below).
 
 ## A tab's files
 
 The daemon also asks for `confine` on a tab's scope, when the tab's launcher asks for the [files by the kernel](files.md#by-the-kernel). Besides the `dev` of the work folder, the request carries the mounts (`mnt_id`) of the agent's folders in the sandbox view. Three things change from Docker:
 
 - **New marks:** `secret` gives `ENOENT` (the secret disappears, as with the supervisor) and `fdeny` gives `EACCES`, on opens and on operations inside a marked folder.
-- **Open event:** the `file_open` program sends, for each file opened in one of the requested mounts, the path (through `bpf_d_path`, in the sandbox view), the inode, the mount and whether the open writes. The other mounts send nothing. This confinement's queue has 1 MiB.
+- **Open event:** the `file_open` program sends, for each file opened in one of the requested mounts, the path (through `bpf_d_path`, in the sandbox view, with the path's bytes only), the inode, the mount and whether the open writes. The other mounts send nothing. This confinement's queue has 1 MiB.
+- **Repeats:** an LRU map of the confinement (16384 entries) keeps the file (device, inode and generation), the mode and the time of the last event. An open of the same file and mode within 1 s sends no event. The rename and link programs take the file out of the map. An event that did not fit in the queue does not enter the map.
+- **Full queue:** one helper thread only drains the kernel queue, and another sends the events to the daemon. When the kernel queue goes past 3/4, the helper's goes past 32768 events or an event is dropped, the helper freezes the tab's cgroup (`cgroup.freeze`). It thaws it when the helper's queue falls below 4096 and the kernel's below 1/4. Each freeze goes into the helper's journal, with its length ("tab frozen for N ms"). After the connection ends, or on a clean exit, the helper does not thaw, because the rules go away with the connection; the daemon thaws, when it redoes the confinement.
 - **Status:** `status` says `tab`: a helper that confines tabs. With an older helper, without that field, the tab stays with the supervisor.
 
 ## Execution and connection observation
