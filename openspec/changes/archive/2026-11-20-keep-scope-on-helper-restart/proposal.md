@@ -12,10 +12,11 @@ No mesmo trabalho apareceu um lançamento recusado logo depois de um reinício (
 ## What Changes
 
 - **O daemon guarda o escopo de cada aba:** no `Msg::ConfineTab` (que toda sessão do daemon manda), o lançador passa também os parâmetros do escopo e o user namespace do sandbox (por `SCM_RIGHTS`, aberto antes de liberar o filho, quando o processo 1 ainda deixa). Isso vale só quando o escopo vem do auxiliar. O daemon passa a vigiar uma conexão com o auxiliar por aba.
-- **Queda do auxiliar:** o daemon congela a aba (`cgroup.freeze`) e registra de novo, com o auxiliar de volta, o escopo e, quando a aba está nesse modo, os arquivos pelo kernel do change 78. Depois descongela. Sem tudo de volta em 10 s, ou sem o congelamento, a aba morre. É a decisão do usuário de 2026-11-20 e vale também para as abas com os arquivos pelo supervisor.
-- **Sem o daemon:** no `sandmux run` sem terminal, ou quando o daemon não assume o escopo, o próprio lançador vigia a conexão do escopo e registra de novo, com prazo de 10 s. Sem o registro de volta, mata o sandbox. Nesse caso sobra a janela da troca de auxiliar.
+- **Queda do auxiliar:** o daemon congela a aba (`cgroup.freeze`) e registra de novo, com o auxiliar de volta, o escopo e, quando a aba está nesse modo, os arquivos pelo kernel do change 78. Depois descongela. Sem tudo de volta em 30 s, ou sem o congelamento, a aba morre. É a decisão do usuário de 2026-11-20 e vale também para as abas com os arquivos pelo supervisor.
+- **Sem o daemon:** no `sandmux run` sem terminal, ou quando o daemon não assume o escopo, o próprio lançador vigia a conexão do escopo e registra de novo, com prazo de 30 s. Sem o registro de volta, mata o sandbox. Nesse caso sobra a janela da troca de auxiliar.
 - **Saída limpa do auxiliar:** no `SIGTERM`, o auxiliar para de atender conexões novas (fecha as que chegam), e quem conectar na hora tenta de novo.
-- **Lançamento durante a troca:** o lançador tenta o registro do escopo de novo por até 10 s quando a conexão é recusada ou cai sem resposta.
+- **Lançamento durante a troca:** o lançador tenta o registro do escopo de novo por até 30 s quando a conexão é recusada ou cai sem resposta.
+- **Programas do escopo carregados antes e por mais tempo:** no 6.8, carregar e soltar os quatro programas do escopo leva segundos (o `ftrace` espera o RCU Tasks a cada um), e a troca de auxiliar somava a descarga do antigo e a carga do novo. Num kernel com o Landlock abaixo do ABI 6, o auxiliar carrega os programas ao subir, e eles ficam carregados por 60 s depois do último escopo. Os prazos da recuperação (também a dos arquivos do change 78) e do registro passam de 10 s para 30 s.
 - O protocolo entre o lançador e o daemon sobe para 44.
 
 ## Capabilities
@@ -26,8 +27,9 @@ No mesmo trabalho apareceu um lançamento recusado logo depois de um reinício (
 
 ### Modified Capabilities
 
-- `root-helper`: o requisito "Escopo de um sandbox" ganha o registro de novo pelo daemon, com a aba congelada, quando o auxiliar reinicia, e a saída limpa que não atende conexões novas.
+- `root-helper`: dois requisitos novos. "Escopo de volta depois de um reinício do auxiliar": o registro de novo pelo daemon, com a aba congelada. "Saída limpa do auxiliar": o aviso antes de soltar as regras, as conexões novas recusadas e as tentativas do lançamento.
 - `sandbox-isolation`: o requisito "Processos do host fora do alcance" ganha o cenário do auxiliar reiniciado com o sandbox rodando.
+- `file-access-log`: o requisito "Aberturas pelo supervisor" tem o prazo da recuperação da aba de 30 s, e não de 10 s.
 
 ## Impact
 

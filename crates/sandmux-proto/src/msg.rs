@@ -303,6 +303,15 @@ pub struct Usage {
     pub processes_max: Option<u64>,
 }
 
+/// O escopo de um sandbox no auxiliar root, para o daemon registrá-lo de
+/// novo: o processo 1 (no host), o filtro de `ioctl` e os dispositivos.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabScope {
+    pub init_pid: u32,
+    pub ioctl: bool,
+    pub devs: Vec<(u32, u32)>,
+}
+
 /// O que foi aplicado no lançamento de uma sessão: a proteção ativa.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PolicySummary {
@@ -712,6 +721,11 @@ pub enum Msg {
         roots: Vec<PathBuf>,
         #[serde(default)]
         exclude: Vec<PathBuf>,
+        /// O escopo do sandbox pelo auxiliar root (Landlock abaixo do ABI
+        /// 6): com ele, o user namespace vem logo depois do quadro, num byte
+        /// com o descritor por `SCM_RIGHTS` (protocolo 44).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<TabScope>,
     },
     /// Tokens reais capturados numa resposta de login (papel e valor), do
     /// gateway de um lançamento ao daemon, que os guarda e devolve os falsos
@@ -856,6 +870,10 @@ pub enum Msg {
     ConfineTabReply {
         kernel: bool,
         reason: Option<String>,
+        /// O daemon vigia o escopo do sandbox e o registra de novo quando o
+        /// auxiliar reinicia (protocolo 44).
+        #[serde(default)]
+        scope: bool,
     },
     StatusInfo {
         pid: u32,

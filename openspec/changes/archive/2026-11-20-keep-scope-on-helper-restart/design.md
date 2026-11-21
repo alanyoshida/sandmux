@@ -13,7 +13,7 @@ Restrições achadas ao propor:
 
 **Goals:**
 - Numa sessão do daemon no 6.8, nenhum processo da aba roda sem o escopo depois de um reinício limpo do auxiliar. A aba congela e segue.
-- No `run` sem o daemon, o escopo volta sozinho, ou o sandbox termina em 10 s.
+- No `run` sem o daemon, o escopo volta sozinho, ou o sandbox termina em 30 s.
 - Um lançamento durante a troca do auxiliar sobe.
 - Uma recuperação só por aba: o escopo e os arquivos pelo kernel voltam juntos, sob o mesmo congelamento.
 
@@ -39,7 +39,7 @@ O `tabfiles` vira o lugar da aba no kernel. O contexto tem o escopo do systemd, 
 Na queda, a recuperação:
 1. congela o escopo da aba;
 2. solta o confinamento antigo dos arquivos;
-3. a cada 300 ms até 10 s: conecta, liga os arquivos (quando pelo kernel), registra o escopo numa conexão própria (`Client::scope` com o `init_pid`) e abre a vigia nova;
+3. a cada 300 ms até 30 s: conecta, liga os arquivos (quando pelo kernel), registra o escopo numa conexão própria (`Client::scope` com o `init_pid`) e abre a vigia nova;
 4. descongela.
 
 Se algo não volta, ou o congelamento falha, mata o escopo (`cgroup.kill`). Depois da primeira queda, quem segura o escopo é o daemon. A conexão do lançador já caiu.
@@ -52,14 +52,29 @@ Com `scope: true` na resposta, a vigia do lançador só espera o fim da própria
 
 ### 4. A vigia do lançador sem o daemon
 
-Sem o daemon (o `run` sem terminal), ou com `scope: false`, uma thread do lançador espera a conexão do escopo cair. Depois tenta o registro de novo, com o descritor guardado, a cada 300 ms até 10 s. Se não consegue, mata o processo 1 (`SIGKILL`), e o namespace de pid inteiro vai junto. Aqui há janela, a da troca do auxiliar. É aceita porque não há quem congele de fora.
+Sem o daemon (o `run` sem terminal), ou com `scope: false`, uma thread do lançador espera a conexão do escopo cair. Depois tenta o registro de novo, com o descritor guardado, a cada 300 ms até 30 s. Se não consegue, mata o processo 1 (`SIGKILL`), e o namespace de pid inteiro vai junto. Aqui há janela, a da troca do auxiliar. É aceita porque não há quem congele de fora.
 
 ### 5. A troca do auxiliar sem lançamentos perdidos
 
 - **No `SIGTERM`:** o auxiliar marca a saída e fecha, sem atender, as conexões que o `accept` entrega daí em diante. Com o socket do systemd, elas esperariam na fila do socket pelo auxiliar seguinte, mas as que já foram aceitas precisam cair para quem pediu tentar de novo.
-- **No lançamento:** o `scope::register` tenta de novo, a cada 300 ms até 10 s, quando a conexão é recusada, quando falta o socket ou quando ela cai sem resposta. Uma recusa com mensagem (um erro do pedido) não se repete.
+- **No lançamento:** o `scope::register` tenta de novo, a cada 300 ms até 30 s, quando a conexão é recusada, quando falta o socket ou quando ela cai sem resposta. Uma recusa com mensagem (um erro do pedido) não se repete.
+
+### 6. Os programas do escopo carregados antes e por mais tempo
+
+Medido na VM (6.8), com uma vigia das pilhas do auxiliar: as threads das conexões passavam segundos em `synchronize_rcu_tasks`, dentro de `register_ftrace_direct` e `unregister_ftrace_direct`. No 6.8, os quatro programas globais do escopo (`BPF_LSM_MAC`) vão por trampolins do `ftrace`, e cada um, ao entrar ou sair, espera um período do RCU Tasks.
+
+Hoje os programas carregam no primeiro escopo e saem no último. Numa troca de auxiliar, somavam-se a descarga no auxiliar antigo, ao sair, e a carga no novo, no primeiro pedido, e o pedido de um lançamento passava dos 10 s de prazo.
+
+Agora:
+- **Carga antecipada:** num kernel com o Landlock abaixo do ABI 6 (onde os lançadores pedem o escopo), o auxiliar carrega os programas ao subir, numa thread; os pedidos esperam a carga.
+- **Descarga só depois de 60 s sem escopo:** poupa o relançamento de uma aba e a troca de auxiliar, sem deixar programas globais carregados num host sem sandbox por mais de um minuto.
+- **Prazos de 30 s:** o registro do lançador e a recuperação do daemon (também a dos arquivos do change 78) cabem a carga.
+
+Num kernel com o ABI 6 (o 7.0), nada disso carrega.
 
 ## Risks / Trade-offs
+
+- **[Programas globais carregados sem sandbox]** → por até 60 s depois do último escopo, e desde a subida do auxiliar num kernel abaixo do ABI 6. Os programas só negam para os namespaces registrados; sem registro, deixam passar.
 
 - **[A janela do `run` sem o daemon]** → aceita (decisão 4). O `run` sem terminal é curto, e o reinício do auxiliar também.
 - **[O daemon morre com a aba congelada]** → a aba fica congelada, como no change 78. As sessões do daemon terminam com ele.

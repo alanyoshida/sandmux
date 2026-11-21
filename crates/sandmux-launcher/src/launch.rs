@@ -175,8 +175,10 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
     }
     // Sem o Landlock ABI 6, o auxiliar root completa o confinamento: o
     // sandbox é registrado antes de o comando rodar, e a conexão fica aberta
-    // até o fim (fechada, o registro sai).
-    let _scope = match level {
+    // até o fim (fechada, o registro sai). A vigia do escopo (depois da
+    // liberação) registra de novo quando o auxiliar cai, ou deixa para o
+    // daemon.
+    let scope_reg = match level {
         KernelLevel::Landlock => None,
         KernelLevel::Helper { abi } => match crate::scope::register(child, abi, spec) {
             Ok(c) => Some(c),
@@ -225,21 +227,56 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
     let _ = sync_w.write_all(b"1");
     drop(sync_w);
 
+    // Quem refaz o escopo numa queda do auxiliar: numa sessão do daemon, a
+    // resposta dele decide; sem o daemon, o lançador.
+    let keeper = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
+        if kernel_files(spec).is_some() {
+            crate::scope::KEEPER_UNKNOWN
+        } else {
+            crate::scope::KEEPER_SELF
+        },
+    ));
+    let scope_info = scope_reg.as_ref().map(|r| (r.params.clone(), r.ns.clone()));
+    if let Some(r) = scope_reg {
+        crate::scope::keep(r, child, keeper.clone());
+    }
+
     // As aberturas de arquivo do comando: o descritor do filtro chega quando
     // o comando o instala; uma thread espera por ele.
     {
         let spec = spec.clone();
         let child_pid = child.as_raw();
+        let keeper = keeper.clone();
         let _ = std::thread::Builder::new()
             .name("sandmux-files".into())
             .spawn(move || {
-                // Os arquivos pelo kernel: com a raiz pronta, o processo 1
-                // pergunta o modo antes de criar o comando.
+                // Os arquivos pelo kernel e o escopo: com a raiz pronta, o
+                // processo 1 pergunta o modo antes de criar o comando.
                 if let Some((access, tag, f)) = kernel_files(&spec)
                     && recv_byte(&files_r) == Some(MODE_ASK)
                 {
-                    let kernel = confine_tab(child_pid, access, tag, f);
-                    send_byte(&files_r, if kernel { MODE_KERNEL } else { MODE_SUPERVISOR });
+                    let a = confine_tab(child_pid, access, tag, f, scope_info.as_ref());
+                    keeper.store(
+                        if a.scope {
+                            crate::scope::KEEPER_DAEMON
+                        } else {
+                            crate::scope::KEEPER_SELF
+                        },
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
+                    send_byte(
+                        &files_r,
+                        if a.kernel.is_ok() {
+                            MODE_KERNEL
+                        } else {
+                            MODE_SUPERVISOR
+                        },
+                    );
+                } else {
+                    keeper.store(
+                        crate::scope::KEEPER_SELF,
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
                 }
                 if let Ok(Some(listener)) = net::recv_fd(&files_r) {
                     // A raiz está pronta: o auxiliar de nomes aplica o Landlock.
@@ -443,19 +480,30 @@ fn kernel_files(
 }
 
 /// Pede ao daemon os arquivos da aba pelo kernel, com as montagens das
-/// pastas do registro na visão do processo 1.
+/// pastas do registro na visão do processo 1, e a vigia do escopo. Sem
+/// montagens que caibam no mapa, vão vazias: os arquivos ficam com o
+/// supervisor, e o escopo ainda vai.
 fn confine_tab(
     pid: i32,
     access: &sandmux_spec::VaultAccess,
     tag: &str,
     f: &sandmux_spec::FilesSpec,
-) -> bool {
-    let mounts = crate::viewmounts::of_pid(pid, &f.roots, &f.exclude);
-    if mounts.is_empty() || mounts.len() > crate::viewmounts::MAX_MOUNTS {
-        return false;
+    scope: Option<&(crate::scope::TabScope, std::sync::Arc<OwnedFd>)>,
+) -> sandmux_net::procinfo::TabAnswer {
+    let mut mounts = crate::viewmounts::of_pid(pid, &f.roots, &f.exclude);
+    if mounts.len() > crate::viewmounts::MAX_MOUNTS {
+        mounts.clear();
     }
-    sandmux_net::procinfo::confine_tab(access, tag, mounts, f.roots.clone(), f.exclude.clone())
-        .is_ok()
+    sandmux_net::procinfo::confine_tab(
+        access,
+        sandmux_net::procinfo::TabRequest {
+            tag,
+            mounts,
+            roots: f.roots.clone(),
+            exclude: f.exclude.clone(),
+            scope: scope.map(|(p, ns)| (p.clone(), &**ns)),
+        },
+    )
 }
 
 fn send_byte(sock: &OwnedFd, b: u8) -> bool {

@@ -9,6 +9,11 @@ use std::io::IoSlice;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::FileTypeExt;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::{Duration, Instant};
+
+pub use sandmux_net::procinfo::TabScope;
 
 use nix::sys::socket::{ControlMessage, MsgFlags, sendmsg};
 use nix::unistd::Pid;
@@ -115,8 +120,30 @@ fn connect() -> Result<OwnedFd, String> {
     Ok(sock)
 }
 
+/// Por que um pedido ao auxiliar não deu certo.
+#[derive(Debug, PartialEq)]
+enum Fail {
+    /// Sem resposta: o auxiliar não está lá, ou caiu no meio (a troca de
+    /// auxiliar). Vale tentar de novo.
+    NoAnswer(String),
+    /// O auxiliar recusou, com o motivo.
+    Refused(String),
+}
+
+impl Fail {
+    fn message(self) -> String {
+        match self {
+            Fail::NoAnswer(m) | Fail::Refused(m) => m,
+        }
+    }
+}
+
 /// Lê a resposta do auxiliar, com um prazo de 10 s.
 fn reply(sock: &OwnedFd) -> Result<serde_json::Value, String> {
+    answer(sock).map_err(Fail::message)
+}
+
+fn answer(sock: &OwnedFd) -> Result<serde_json::Value, Fail> {
     let tv = libc::timeval {
         tv_sec: 10,
         tv_usec: 0,
@@ -135,16 +162,20 @@ fn reply(sock: &OwnedFd) -> Result<serde_json::Value, String> {
     // SAFETY: recv escreve no máximo buf.len() bytes.
     let n = unsafe { libc::recv(sock.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len(), 0) };
     if n <= 0 {
-        return Err(tr!(
-            "o auxiliar root não respondeu ao pedido",
-            "the root helper did not answer the request"
-        )
-        .into());
+        return Err(Fail::NoAnswer(
+            tr!(
+                "o auxiliar root não respondeu ao pedido",
+                "the root helper did not answer the request"
+            )
+            .into(),
+        ));
     }
     let v: serde_json::Value =
-        serde_json::from_slice(&buf[..n as usize]).map_err(|e| e.to_string())?;
+        serde_json::from_slice(&buf[..n as usize]).map_err(|e| Fail::Refused(e.to_string()))?;
     if v["ok"] != true {
-        return Err(v["error"].as_str().unwrap_or("?").to_string());
+        return Err(Fail::Refused(
+            v["error"].as_str().unwrap_or("?").to_string(),
+        ));
     }
     Ok(v)
 }
@@ -178,16 +209,63 @@ pub fn status() -> Result<(), String> {
         }))
 }
 
-/// Registra o sandbox do filho no auxiliar e devolve a conexão, que mantém o
-/// registro enquanto estiver aberta.
-pub fn register(child: Pid, abi: i32, spec: &LaunchSpec) -> Result<OwnedFd, String> {
-    let sock = connect()?;
+/// O escopo registrado de um sandbox: a conexão que o mantém, o user
+/// namespace (aberto antes da liberação, quando o processo 1 ainda deixa) e
+/// os parâmetros, para registrar de novo.
+pub struct Registered {
+    pub conn: OwnedFd,
+    pub ns: Arc<OwnedFd>,
+    pub params: TabScope,
+}
+
+/// Quanto o registro espera o auxiliar (a troca de auxiliar).
+const RETRY_FOR: Duration = Duration::from_secs(30);
+const RETRY_EVERY: Duration = Duration::from_millis(300);
+
+/// Registra o sandbox do filho no auxiliar. Precisa ser chamado antes da
+/// liberação do filho.
+pub fn register(child: Pid, abi: i32, spec: &LaunchSpec) -> Result<Registered, String> {
     let ns = std::fs::File::open(format!("/proc/{child}/ns/user")).map_err(|e| e.to_string())?;
+    let ns = Arc::new(OwnedFd::from(ns));
+    let params = TabScope {
+        init_pid: child.as_raw() as u32,
+        ioctl: abi < 5,
+        devs: devices(&spec.mounts),
+    };
+    let conn = register_ns(&ns, &params)?;
+    Ok(Registered { conn, ns, params })
+}
+
+/// O pedido `scope`, de novo enquanto o auxiliar não responde, por até
+/// [`RETRY_FOR`]. Uma recusa com motivo não se repete.
+fn register_ns(ns: &OwnedFd, params: &TabScope) -> Result<OwnedFd, String> {
+    retry(RETRY_FOR, RETRY_EVERY, || try_register(ns, params))
+}
+
+/// Tenta `f` enquanto ele não tem resposta, até `total`.
+fn retry<T>(
+    total: Duration,
+    every: Duration,
+    mut f: impl FnMut() -> Result<T, Fail>,
+) -> Result<T, String> {
+    let deadline = Instant::now() + total;
+    loop {
+        match f() {
+            Ok(v) => return Ok(v),
+            Err(Fail::Refused(m)) => return Err(m),
+            Err(Fail::NoAnswer(m)) if Instant::now() >= deadline => return Err(m),
+            Err(Fail::NoAnswer(_)) => std::thread::sleep(every),
+        }
+    }
+}
+
+fn try_register(ns: &OwnedFd, params: &TabScope) -> Result<OwnedFd, Fail> {
+    let sock = connect().map_err(Fail::NoAnswer)?;
     let req = serde_json::json!({
         "op": "scope",
-        "ioctl": abi < 5,
-        "init_pid": child.as_raw(),
-        "devs": devices(&spec.mounts),
+        "ioctl": params.ioctl,
+        "init_pid": params.init_pid,
+        "devs": params.devs,
     })
     .to_string();
     let fds = [ns.as_raw_fd()];
@@ -198,14 +276,118 @@ pub fn register(child: Pid, abi: i32, spec: &LaunchSpec) -> Result<OwnedFd, Stri
         MsgFlags::MSG_NOSIGNAL,
         None,
     )
-    .map_err(|e| e.to_string())?;
-    reply(&sock)?;
+    .map_err(|e| Fail::NoAnswer(e.to_string()))?;
+    answer(&sock)?;
     Ok(sock)
+}
+
+/// Quem refaz o escopo depois de uma queda do auxiliar.
+pub const KEEPER_UNKNOWN: u8 = 0;
+/// O daemon (ele congela a aba e registra de novo).
+pub const KEEPER_DAEMON: u8 = 1;
+/// O próprio lançador.
+pub const KEEPER_SELF: u8 = 2;
+
+/// A vigia do escopo: quando a conexão cai (o auxiliar saiu), registra de
+/// novo, a não ser que o daemon tenha assumido (`keeper`); sem o registro em
+/// [`RETRY_FOR`], mata o sandbox.
+pub fn keep(reg: Registered, child: Pid, keeper: Arc<AtomicU8>) {
+    let Registered {
+        mut conn,
+        ns,
+        params,
+    } = reg;
+    let _ = std::thread::Builder::new()
+        .name("sandmux-escopo".into())
+        .spawn(move || {
+            loop {
+                wait_closed(&conn);
+                // Numa sessão do daemon, a resposta dele pode ainda não ter
+                // chegado.
+                let deadline = Instant::now() + Duration::from_secs(15);
+                while keeper.load(Ordering::SeqCst) == KEEPER_UNKNOWN && Instant::now() < deadline
+                {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                if keeper.load(Ordering::SeqCst) == KEEPER_DAEMON {
+                    return;
+                }
+                match register_ns(&ns, &params) {
+                    Ok(c) => conn = c,
+                    Err(e) => {
+                        eprintln!(
+                            "{}",
+                            sandmux_spec::trf!(
+                                "sandmux: o escopo do sandbox não voltou depois da queda do auxiliar root ({e}); o sandbox para",
+                                "sandmux: the sandbox scope did not come back after the root helper dropped ({e}); the sandbox stops"
+                            )
+                        );
+                        let _ = nix::sys::signal::kill(child, nix::sys::signal::Signal::SIGKILL);
+                        return;
+                    }
+                }
+            }
+        });
+}
+
+/// Espera a conexão fechar (o auxiliar não manda nada nela depois da
+/// resposta).
+fn wait_closed(sock: &OwnedFd) {
+    // Sem o prazo do pedido: a espera é pelo fim.
+    let tv = libc::timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+    // SAFETY: setsockopt lê a struct do tamanho dado.
+    unsafe {
+        libc::setsockopt(
+            sock.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            (&tv as *const libc::timeval).cast(),
+            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+        );
+    }
+    let mut buf = [0u8; 512];
+    loop {
+        // SAFETY: recv escreve no máximo buf.len() bytes.
+        let n = unsafe { libc::recv(sock.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len(), 0) };
+        if n == 0
+            || (n < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted)
+        {
+            return;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tenta_de_novo_so_sem_resposta() {
+        let ms = Duration::from_millis(1);
+        let mut n = 0;
+        let r = retry(Duration::from_secs(5), ms, || {
+            n += 1;
+            if n < 3 {
+                Err(Fail::NoAnswer("caiu".into()))
+            } else {
+                Ok(n)
+            }
+        });
+        assert_eq!(r, Ok(3));
+        let mut n = 0;
+        let r: Result<(), String> = retry(Duration::from_secs(5), ms, || {
+            n += 1;
+            Err(Fail::Refused("não".into()))
+        });
+        assert_eq!((r, n), (Err("não".into()), 1));
+        let r: Result<(), String> = retry(Duration::from_millis(20), ms, || {
+            Err(Fail::NoAnswer("ninguém".into()))
+        });
+        assert_eq!(r, Err("ninguém".into()));
+    }
 
     #[test]
     fn numeros_de_dispositivo() {

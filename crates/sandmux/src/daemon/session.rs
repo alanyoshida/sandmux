@@ -71,7 +71,7 @@ pub struct Session {
     pub exec_obs: Option<super::execlog::ExecObs>,
     /// Os arquivos da aba confinados pelo kernel (change 78); `None`, com o
     /// supervisor.
-    pub tab_files: Option<super::tabfiles::TabFiles>,
+    pub tab_kernel: Option<super::tabfiles::TabKernel>,
     /// As conexões TCP do lançamento atual vistas pelo kernel.
     pub conns: super::execlog::Conns,
     /// Mortes por falta de memória e recusas de processo do último lançamento.
@@ -154,7 +154,7 @@ impl Session {
             limits: None,
             cgroup: None,
             exec_obs: None,
-            tab_files: None,
+            tab_kernel: None,
             conns: Default::default(),
             oom_kills: 0,
             keys_moved: 0,
@@ -1066,7 +1066,7 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
             }
             s.cgroup = None;
             s.exec_obs = None;
-            s.tab_files = None;
+            s.tab_kernel = None;
             s.conns = Default::default();
             s.oom_kills = 0;
             s.keys_moved = 0;

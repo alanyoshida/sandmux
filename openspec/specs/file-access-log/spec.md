@@ -26,7 +26,7 @@ Numa aba confinada pelo kernel (o auxiliar root, o BPF LSM e o escopo próprio),
 
 #### Scenario: Auxiliar reiniciado com a aba rodando
 - **WHEN** a conexão do daemon com o auxiliar cai numa aba confinada pelo kernel, e o auxiliar volta
-- **THEN** a aba fica congelada até o confinamento ser refeito, com as marcas da política atual, e segue; sem o confinamento de volta em 10 s, tudo no escopo da aba morre
+- **THEN** a aba fica congelada até o confinamento ser refeito, com as marcas da política atual, e segue; sem o confinamento de volta em 30 s, tudo no escopo da aba morre
 
 ### Requirement: Regras do Landlock nas aberturas
 O supervisor MUST conferir cada abertura contra as regras de leitura e de escrita do Landlock da especificação, pelo caminho do arquivo aberto na visão do agente. Uma abertura fora das regras MUST falhar com `EACCES`. Os links mágicos de outros processos (`/proc/<pid>/fd`, `cwd` e `root`) MUST ser recusados.

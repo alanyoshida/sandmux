@@ -16,6 +16,8 @@ use sandmux_proto::msg::Msg;
 use sandmux_proto::{Frame, PROTOCOL, read_frame, write_control};
 use sandmux_spec::VaultAccess;
 
+pub use sandmux_proto::msg::TabScope;
+
 tokio::task_local! {
     /// A origem (o socket do processo no sandbox) da conexão desta tarefa.
     pub static CONN_SRC: SocketAddr;
@@ -227,35 +229,101 @@ fn hello(a: &VaultAccess, wait: Duration) -> Option<UnixStream> {
     Some(s)
 }
 
-/// Pede ao daemon os arquivos da aba `tag` pelo kernel (o lançador, antes de
-/// liberar o comando). `Err` com o motivo de ficar com o supervisor.
-pub fn confine_tab(
-    a: &VaultAccess,
-    tag: &str,
-    mounts: Vec<u32>,
-    roots: Vec<std::path::PathBuf>,
-    exclude: Vec<std::path::PathBuf>,
-) -> Result<(), String> {
-    let no_daemon =
-        || sandmux_spec::tr!("o daemon não respondeu", "the daemon did not answer").to_string();
-    let mut s = hello(a, Duration::from_secs(10)).ok_or_else(no_daemon)?;
-    write_control(
-        &mut s,
-        &Msg::ConfineTab {
-            tag: tag.into(),
-            mounts,
-            roots,
-            exclude,
-        },
-    )
-    .map_err(|e| e.to_string())?;
-    match read_frame(&mut s) {
-        Ok(Some(Frame::Control(Msg::ConfineTabReply { kernel: true, .. }))) => Ok(()),
-        Ok(Some(Frame::Control(Msg::ConfineTabReply { reason, .. }))) => {
-            Err(reason.unwrap_or_default())
-        }
-        _ => Err(no_daemon()),
+/// A resposta do daemon ao pedido de uma aba.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabAnswer {
+    /// Os arquivos pelo kernel, ou o motivo de ficar com o supervisor.
+    pub kernel: Result<(), String>,
+    /// O daemon vigia o escopo do sandbox (e o registra de novo).
+    pub scope: bool,
+}
+
+/// O pedido de uma aba ao daemon: as montagens e as pastas do registro, e o
+/// escopo do sandbox pelo auxiliar, com o user namespace.
+pub struct TabRequest<'a> {
+    pub tag: &'a str,
+    pub mounts: Vec<u32>,
+    pub roots: Vec<std::path::PathBuf>,
+    pub exclude: Vec<std::path::PathBuf>,
+    pub scope: Option<(sandmux_proto::msg::TabScope, &'a OwnedFd)>,
+}
+
+/// Pede ao daemon os arquivos da aba pelo kernel e a vigia do escopo (o
+/// lançador, antes de criar o comando).
+pub fn confine_tab(a: &VaultAccess, req: TabRequest<'_>) -> TabAnswer {
+    let no_daemon = || TabAnswer {
+        kernel: Err(
+            sandmux_spec::tr!("o daemon não respondeu", "the daemon did not answer").into(),
+        ),
+        scope: false,
+    };
+    let Some(mut s) = hello(a, Duration::from_secs(10)) else {
+        return no_daemon();
+    };
+    let (scope, ns) = match req.scope {
+        Some((sc, fd)) => (Some(sc), Some(fd)),
+        None => (None, None),
+    };
+    let msg = Msg::ConfineTab {
+        tag: req.tag.into(),
+        mounts: req.mounts,
+        roots: req.roots,
+        exclude: req.exclude,
+        scope,
+    };
+    if write_control(&mut s, &msg).is_err() {
+        return no_daemon();
     }
+    // O namespace logo depois do quadro: o daemon lê o byte com `recvmsg`.
+    if let Some(fd) = ns
+        && send_fd(&s, fd).is_err()
+    {
+        return no_daemon();
+    }
+    match read_frame(&mut s) {
+        Ok(Some(Frame::Control(Msg::ConfineTabReply {
+            kernel,
+            reason,
+            scope,
+        }))) => TabAnswer {
+            kernel: if kernel {
+                Ok(())
+            } else {
+                Err(reason.unwrap_or_default())
+            },
+            scope,
+        },
+        _ => no_daemon(),
+    }
+}
+
+/// Um byte com o descritor `fd` por `SCM_RIGHTS`.
+pub fn send_fd(s: &UnixStream, fd: &OwnedFd) -> std::io::Result<()> {
+    const SPACE: usize = 64;
+    let mut byte = *b"N";
+    let mut iov = libc::iovec {
+        iov_base: byte.as_mut_ptr().cast(),
+        iov_len: 1,
+    };
+    // `u64`: o `cmsghdr` precisa do alinhamento dele.
+    let mut buf = [0u64; SPACE / 8];
+    // SAFETY: msghdr zerado é válido; o cmsg cabe no buffer (um descritor).
+    unsafe {
+        let mut msg: libc::msghdr = std::mem::zeroed();
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = buf.as_mut_ptr().cast();
+        msg.msg_controllen = libc::CMSG_SPACE(std::mem::size_of::<i32>() as u32) as _;
+        let c = libc::CMSG_FIRSTHDR(&msg);
+        (*c).cmsg_level = libc::SOL_SOCKET;
+        (*c).cmsg_type = libc::SCM_RIGHTS;
+        (*c).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<i32>() as u32) as _;
+        std::ptr::write_unaligned(libc::CMSG_DATA(c).cast::<i32>(), fd.as_raw_fd());
+        if libc::sendmsg(s.as_raw_fd(), &msg, libc::MSG_NOSIGNAL) != 1 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
 }
 
 /// Pergunta ao daemon: (pid, executável, a aba está pelo kernel).

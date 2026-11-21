@@ -427,26 +427,59 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 mounts,
                 roots,
                 exclude,
+                scope,
             } => {
+                // O user namespace do sandbox vem logo depois do quadro.
+                let scope = match scope {
+                    Some(sc) => match super::recv_userns(&stream) {
+                        Ok(ns) => Some((sc, ns)),
+                        Err(e) => {
+                            eprintln!(
+                                "{}",
+                                trf!(
+                                    "sandmuxd: o escopo da aba {tag} não veio: {e}",
+                                    "sandmuxd: the scope of tab {tag} did not arrive: {e}"
+                                )
+                            );
+                            None
+                        }
+                    },
+                    None => None,
+                };
                 let r = match super::peer_pid(&stream) {
-                    Some(pid) => {
-                        super::tabfiles::confine(shared, &tag, pid as u32, mounts, (roots, exclude))
-                    }
+                    Some(pid) => super::tabfiles::confine(
+                        shared,
+                        super::tabfiles::Request {
+                            tag: tag.clone(),
+                            pid: pid as u32,
+                            mounts,
+                            view: (roots, exclude),
+                            scope,
+                        },
+                    ),
                     None => {
                         Err(tr!("sem as credenciais do lançador", "no launcher credentials").into())
                     }
                 };
                 let reply = match r {
-                    Ok((id, t)) => {
-                        if let Some(s) = shared.lock().sessions.get_mut(&id) {
-                            s.tab_files = Some(t);
+                    Ok(c) => {
+                        let (kernel, reason) = match &c.files {
+                            Ok(()) => (true, None),
+                            Err(e) => (false, Some(e.clone())),
+                        };
+                        if let Some(s) = shared.lock().sessions.get_mut(&c.id) {
+                            s.tab_kernel = c.tab;
                             if let Some(p) = s.policy.as_mut() {
-                                p.files = Some("kernel".into());
+                                p.files = Some(match &reason {
+                                    None => "kernel".into(),
+                                    Some(e) => format!("supervisor: {e}"),
+                                });
                             }
                         }
                         Msg::ConfineTabReply {
-                            kernel: true,
-                            reason: None,
+                            kernel,
+                            reason,
+                            scope: c.scope,
                         }
                     }
                     Err(e) => {
@@ -454,6 +487,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                         Msg::ConfineTabReply {
                             kernel: false,
                             reason: Some(e),
+                            scope: false,
                         }
                     }
                 };

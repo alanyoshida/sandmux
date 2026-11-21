@@ -45,7 +45,7 @@ O lançador MUST verificar, antes de executar o comando, que a máquina permite 
 - **THEN** o comando não é executado e o lançador termina com erro
 
 ### Requirement: Processos do host fora do alcance
-Um processo confinado MUST enxergar apenas os processos do próprio sandbox e MUST NOT conseguir sinalizar, inspecionar ou depurar um processo do host.
+Um processo confinado MUST enxergar apenas os processos do próprio sandbox e MUST NOT conseguir sinalizar, inspecionar ou depurar um processo do host. Isso MUST continuar valendo depois de um reinício do auxiliar root, nos kernels em que o escopo do sandbox vem dele.
 
 #### Scenario: Listagem de processos
 - **WHEN** um processo confinado lista os processos pelo `/proc`
@@ -58,6 +58,10 @@ Um processo confinado MUST enxergar apenas os processos do próprio sandbox e MU
 #### Scenario: Depuração dentro do sandbox
 - **WHEN** um depurador confinado se anexa a outro processo do mesmo sandbox
 - **THEN** a operação funciona
+
+#### Scenario: Sinal para o host depois do reinício do auxiliar
+- **WHEN** o kernel tem o Landlock abaixo do ABI 6, o auxiliar root reinicia com uma aba rodando, e um processo dela tenta mandar um sinal ao supervisor do sandbox
+- **THEN** a tentativa falha
 
 ### Requirement: Sockets do host fora do alcance
 Um processo confinado MUST NOT conseguir se conectar a sockets Unix do host, nem por caminho nem por nome abstrato. Isso inclui ssh-agent, D-Bus, Docker, Wayland e X11. As exceções são os sockets do compositor e do áudio que a opção `window` monta e o barramento do sandmux que a opção `portal` monta, que não é o D-Bus do usuário.

@@ -58,6 +58,13 @@ Programas BPF LSM globais, carregados no primeiro escopo e soltos quando não re
 
 O escopo vale enquanto a conexão do lançador está aberta, isto é, enquanto o sandbox vive. Sem o auxiliar ou sem o BPF LSM, o lançamento é recusado, e o `sandmux doctor` mostra os caminhos ([Ubuntu 24.04](install.md#ubuntu-2404)). Num kernel com o ABI 6, o lançador não pede o escopo.
 
+Quando o auxiliar reinicia (uma atualização, um travamento), o escopo volta no auxiliar seguinte:
+
+- **Numa sessão do daemon:** o lançador entrega ao daemon os parâmetros do escopo e o user namespace do sandbox, e o daemon vigia uma conexão com o auxiliar por aba. Na queda, ele congela a aba, registra de novo o escopo (e os [arquivos pelo kernel](files.md#pelo-kernel), quando a aba tem) e descongela. Nada da aba roda sem o escopo.
+- **No `run` sem o daemon:** o próprio lançador registra de novo assim que o auxiliar seguinte responde. Nesse intervalo, o sandbox roda sem o escopo.
+
+Sem o escopo de volta em 30 s, o sandbox termina. Um lançamento que encontra o auxiliar trocando tenta de novo por até 30 s. No 6.8, carregar e soltar os programas do escopo leva segundos; por isso, num kernel abaixo do ABI 6, o auxiliar os carrega ao subir, e eles ficam carregados por 60 s depois do último escopo.
+
 ## Quanto tempo as regras duram
 
 As regras e as marcas valem enquanto a conexão do daemon com o auxiliar estiver aberta. Elas somem quando:
@@ -66,7 +73,7 @@ As regras e as marcas valem enquanto a conexão do daemon com o auxiliar estiver
 - o daemon termina, mesmo morto por `SIGKILL`;
 - o auxiliar para.
 
-Se o auxiliar parar com o Docker rodando, o daemon para o Docker da pasta, que não segue sem as regras. Uma aba com os arquivos pelo kernel fica congelada até o confinamento ser refeito com o auxiliar de volta, e para se ele não voltar em 10 s. No `SIGTERM` (o `systemctl restart`, uma atualização), o auxiliar fecha a escrita de cada conexão antes de sair: quem pediu fica sabendo com as regras ainda valendo, e elas saem quando ele fecha a conexão (ou em 2 s). O próximo `docker` sobe outro Docker e liga o confinamento de novo, se o auxiliar responder. O socket do systemd sobe o auxiliar de volta na conexão seguinte.
+Se o auxiliar parar com o Docker rodando, o daemon para o Docker da pasta, que não segue sem as regras. Uma aba com os arquivos pelo kernel fica congelada até o confinamento ser refeito com o auxiliar de volta, e para se ele não voltar em 30 s. No `SIGTERM` (o `systemctl restart`, uma atualização), o auxiliar fecha a escrita de cada conexão antes de sair: quem pediu fica sabendo com as regras ainda valendo, e elas saem quando ele fecha a conexão (ou em 2 s). As conexões que chegam nesse meio tempo fecham sem resposta, e quem pediu tenta no auxiliar seguinte. O próximo `docker` sobe outro Docker e liga o confinamento de novo, se o auxiliar responder. O socket do systemd sobe o auxiliar de volta na conexão seguinte.
 
 ## Instalar
 
