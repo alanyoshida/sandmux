@@ -696,7 +696,12 @@ impl App {
         if was_live && matches!(t.state, SessionState::Encerrada { .. }) {
             t.ask_restart = true;
         }
-        if !was_live && t.state == SessionState::Viva && t.conn.is_none() {
+        // Não depende de `!was_live`: um reinício rápido (forçado pelo
+        // modal de chaves movidas, por exemplo) pode passar por
+        // `Encerrada` e voltar a `Viva` entre duas sincronizações, sem
+        // nenhuma pegar a transição no meio. Não existe aba viva sem
+        // conexão que deva continuar assim de propósito.
+        if t.state == SessionState::Viva && t.conn.is_none() {
             t.parser = new_parser(self.size);
             self.attach(i);
         }
@@ -3547,5 +3552,77 @@ mod tests {
         d.join().unwrap();
         assert_eq!(app.tabs.len(), 1);
         assert!(matches!(&app.modal, Some(Modal::VaultRestart { ids, .. }) if ids == &vec![1]));
+    }
+
+    /// Restaura uma variável de ambiente ao sair de escopo, mesmo com pânico.
+    struct EnvGuard {
+        key: &'static str,
+        old: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        /// Isola `key` num valor só deste teste; nenhum outro teste de
+        /// `tui::tests` lê essa variável, então não há corrida real hoje.
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let old = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            EnvGuard { key, old }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.old.take() {
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    #[test]
+    fn sync_reanexa_aba_viva_sem_conexao_mesmo_sem_ver_a_transicao() {
+        // `attach()` tenta um socket real (`$XDG_RUNTIME_DIR/sandmux/...`).
+        // Isola a variável numa pasta que não existe, para a tentativa
+        // falhar sempre, de forma previsível, sem nenhum risco de alcançar
+        // um daemon de verdade da máquina (que pode estar rodando sessões
+        // reais do usuário).
+        let tmp =
+            std::env::temp_dir().join(format!("sandmux-teste-sem-daemon-{}", std::process::id()));
+        let _env = EnvGuard::set("XDG_RUNTIME_DIR", &tmp);
+
+        let mut app = test_app(vec![test_tab(1, 0, 0)]);
+        // A conexão cai, como `Ev::Closed` já faz, sem mudar o estado: a
+        // aba continua "vista" como viva na última sincronização (não há
+        // transição por `Encerrada` para o `sync` observar no meio).
+        app.tabs[0].conn = None;
+
+        let (conn, mut daemon) = fake_conn();
+        app.control = Some(conn);
+        let d = std::thread::spawn(move || match read_frame(&mut daemon).unwrap() {
+            Some(Frame::Control(Msg::List)) => {
+                write_control(
+                    &mut daemon,
+                    &Msg::Sessions {
+                        sessions: vec![session_info(1, 0, SessionState::Viva)],
+                        layouts: Vec::new(),
+                    },
+                )
+                .unwrap();
+            }
+            other => panic!("pedido inesperado: {other:?}"),
+        });
+        app.sync();
+        d.join().unwrap();
+
+        // O reanexo disparou mesmo sem a sincronização ter visto a
+        // transição por `Encerrada`: a tentativa de `attach` (sem daemon
+        // na pasta isolada) aparece na barra de status.
+        assert!(
+            app.status_text().contains("anexar"),
+            "{}",
+            app.status_text()
+        );
     }
 }
