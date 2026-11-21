@@ -520,6 +520,74 @@ struct Ctx {
     root: std::sync::OnceLock<OwnedFd>,
     rules: LandlockRules,
     log: Option<Mutex<Logger>>,
+    /// As regras do `bwrap` do sandmux por processo (o `tgid`): valem para
+    /// ele e os descendentes, além das da aba. Só restringem.
+    extra: Mutex<std::collections::HashMap<u32, Vec<LandlockRules>>>,
+}
+
+/// O caminho que o `bwrap` do sandmux abre para registrar as regras dele:
+/// `<prefixo><endereço em hexa>-<tamanho>`, apontando para o JSON das regras
+/// na memória do processo. A resposta é sempre [`BWRAP_ACK`].
+pub const BWRAP_RULES: &[u8] = b"/run/sandmux/bwrap-rules/";
+/// O erro que confirma o registro (o `bwrap` sem supervisor recebe outro).
+pub const BWRAP_ACK: i32 = libc::ECANCELED;
+/// Teto do JSON das regras.
+const BWRAP_MAX: usize = 1 << 20;
+
+/// O registro de regras de um `bwrap`: lê o JSON da memória do processo.
+fn bwrap_register(ctx: &Ctx, pid: u32, mem: &File, path: &[u8]) {
+    use std::os::unix::fs::FileExt;
+    let Some(rest) = path.strip_prefix(BWRAP_RULES) else {
+        return;
+    };
+    let Some((addr, len)) = std::str::from_utf8(rest)
+        .ok()
+        .and_then(|r| r.split_once('-'))
+    else {
+        return;
+    };
+    let (Ok(addr), Ok(len)) = (u64::from_str_radix(addr, 16), len.parse::<usize>()) else {
+        return;
+    };
+    if len > BWRAP_MAX {
+        return;
+    }
+    let mut buf = vec![0u8; len];
+    if mem.read_at(&mut buf, addr).ok() != Some(len) {
+        return;
+    }
+    let Ok(rules) = serde_json::from_slice::<LandlockRules>(&buf) else {
+        return;
+    };
+    let tgid = tgid_of(pid).unwrap_or(pid);
+    let mut m = ctx.extra.lock().unwrap_or_else(|e| e.into_inner());
+    m.retain(|p, _| std::path::Path::new(&format!("/proc/{p}")).exists());
+    m.entry(tgid).or_default().push(rules);
+}
+
+fn tgid_of(pid: u32) -> Option<u32> {
+    status_field(pid, "Tgid:")?.parse().ok()
+}
+
+/// As regras de `bwrap` que valem para o processo: as dele e as dos
+/// ancestrais.
+fn bwrap_rules(ctx: &Ctx, pid: u32) -> Vec<LandlockRules> {
+    let m = ctx.extra.lock().unwrap_or_else(|e| e.into_inner());
+    if m.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut p = tgid_of(pid).unwrap_or(pid);
+    for _ in 0..64 {
+        if let Some(r) = m.get(&p) {
+            out.extend(r.iter().cloned());
+        }
+        match status_field(p, "PPid:").and_then(|v| v.parse::<u32>().ok()) {
+            Some(pp) if pp > 1 && pp != p => p = pp,
+            _ => break,
+        }
+    }
+    out
 }
 
 /// Começa a atender as notificações de `listener` em [`THREADS`] threads.
@@ -535,6 +603,7 @@ pub fn spawn(
         root: std::sync::OnceLock::new(),
         rules: spec.landlock.clone(),
         log: spec.files.clone().map(|f| Mutex::new(Logger::new(f))),
+        extra: Mutex::new(std::collections::HashMap::new()),
     });
     for i in 0..THREADS {
         let c = ctx.clone();
@@ -665,7 +734,11 @@ fn open_how(
         resolve: u64,
     }
     let c = CString::new(path).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
-    let mode = if flags & (libc::O_CREAT | libc::O_TMPFILE) != 0 {
+    // O `O_TMPFILE` inclui o bit do `O_DIRECTORY`: só conta com os dois.
+    // Com o `mode` de um `O_DIRECTORY` comum (o Bun passa 0666 em toda
+    // abertura), o `openat2` recusaria com `EINVAL`.
+    let tmpfile = flags & libc::O_TMPFILE == libc::O_TMPFILE;
+    let mode = if flags & libc::O_CREAT != 0 || tmpfile {
         mode as u64 & 0o7777
     } else {
         0
@@ -702,11 +775,22 @@ fn open_how(
 }
 
 fn open_proc(path: &str) -> io::Result<OwnedFd> {
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_PATH | libc::O_DIRECTORY)
-        .open(path)?;
-    Ok(f.into())
+    // Pelo `open` direto: no musl, o `O_ACCMODE` inclui o `O_PATH`, e o
+    // `custom_flags` do `OpenOptions` o tira.
+    let c =
+        std::ffi::CString::new(path).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: caminho terminado em NUL; o descritor devolvido é nosso.
+    let fd = unsafe {
+        libc::open(
+            c.as_ptr(),
+            libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: descritor recém-aberto.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
 /// Abre o pedido como o processo abriria, dentro da raiz do sandbox.
@@ -1178,6 +1262,11 @@ fn handle(ctx: &Ctx, n: &Notif) {
     let Some(req) = read_request(n, &mem) else {
         return respond_error(fd, n.id, libc::EFAULT);
     };
+    // O registro das regras de um `bwrap` do sandmux.
+    if req.path.starts_with(BWRAP_RULES) {
+        bwrap_register(ctx, n.pid, &mem, &req.path);
+        return respond_error(fd, n.id, BWRAP_ACK);
+    }
     drop(mem);
     // A notificação ainda vale (o processo pode ter morrido e o pid, mudado).
     // SAFETY: ponteiro para um u64 válido.
@@ -1275,6 +1364,13 @@ fn handle(ctx: &Ctx, n: &Notif) {
         }
         if !landlock_allows(&ctx.rules, p, flags) {
             record(p, label, Some("landlock"));
+            return respond_error(fd, n.id, libc::EACCES);
+        }
+        if bwrap_rules(ctx, n.pid)
+            .iter()
+            .any(|r| !landlock_allows(r, p, flags))
+        {
+            record(p, label, Some("bwrap"));
             return respond_error(fd, n.id, libc::EACCES);
         }
         record(p, label, None);

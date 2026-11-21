@@ -2,7 +2,7 @@
 
 > English: [helper.md](en/helper.md)
 
-O `sandmux-helper` é o único pedaço do sandmux que roda como root. Ele existe para uma coisa: prender ao cgroup do [Docker privado](docker.md) de uma pasta os programas BPF LSM que decidem, no kernel, o que os contêineres podem abrir e alterar. Sem ele, o resto do sandmux funciona igual, e o Docker privado sobe só com as proteções sem privilégio.
+O `sandmux-helper` é o único pedaço do sandmux que roda como root. Ele existe para uma coisa: prender ao cgroup do [Docker privado](docker.md) de uma pasta os programas BPF LSM que decidem, no kernel, o que os contêineres podem abrir e alterar. Sem ele, o resto do sandmux funciona igual, e o Docker privado sobe só com as proteções sem privilégio. Num kernel com o Landlock abaixo do ABI 6 (o Ubuntu 24.04 com o 6.8), ele também completa o confinamento de cada aba ([escopo do sandbox](#escopo-do-sandbox)), e aí o sandbox só sobe com ele.
 
 ## O que ele faz
 
@@ -24,26 +24,58 @@ A decisão é pelo arquivo (o inode), e não pelo caminho. Por isso, desmontar u
 - Um usuário só confina um cgroup cujo diretório pertence a ele. O root pode qualquer um.
 - Uma regra só nega. Ela nunca dá acesso, e só vale para os processos do cgroup pedido. Marcar um arquivo do sistema, como `/etc/hostname`, só impede o Docker daquele usuário de abri-lo.
 - O auxiliar nunca abre um caminho. Os arquivos chegam como descritores abertos pelo próprio usuário, que prova assim que alcança o arquivo.
-- **Limites por usuário:** 16 confinamentos ativos, cada um com até 16384 marcas. Um pedido acima disso é recusado, sem afetar os outros.
+- Um usuário só pede o escopo de um user namespace que pertence a ele, e nunca o do próprio auxiliar.
+- **Limites por usuário:** 16 confinamentos ativos, cada um com até 16384 marcas, e 256 escopos de sandbox. Um pedido acima disso é recusado, sem afetar os outros.
 
 ## Ao vivo e eventos
 
 - **Desmarcar:** o daemon também pede `unmark`, quando a política de arquivos da pasta muda e um caminho deixa de ser negado. O auxiliar tira a marca e solta o descritor do arquivo.
-- **Eventos:** os programas mandam um evento por uma fila do kernel quando negam uma operação e quando um contêiner cria um arquivo no sistema de arquivos da pasta. O auxiliar lê a fila e manda os eventos ao daemon pela mesma conexão do confinamento. O evento tem o tipo, o gancho, o inode e o nome do arquivo criado, nunca o conteúdo de um arquivo. Com a fila cheia, os eventos a mais são descartados e contados, e os contêineres não esperam.
+- **Eventos:** os programas mandam um evento por uma fila do kernel quando negam uma operação e quando um contêiner cria um arquivo no sistema de arquivos da pasta. O auxiliar lê a fila e manda os eventos ao daemon pela mesma conexão do confinamento. O evento tem o tipo, o gancho, o inode e o nome do arquivo criado, nunca o conteúdo de um arquivo. Com a fila cheia, os eventos a mais são descartados e contados, e os contêineres não esperam (uma aba espera: veja abaixo).
+
+## Arquivos de uma aba
+
+O daemon também pede o `confine` para o escopo de uma aba, quando o lançador dela pede os [arquivos pelo kernel](files.md#pelo-kernel). O pedido leva, além do `dev` da pasta de trabalho, as montagens (`mnt_id`) das pastas do agente na visão do sandbox. Mudam três coisas em relação ao Docker:
+
+- **Marcas novas:** `secret` dá `ENOENT` (o segredo some, como no supervisor) e `fdeny` dá `EACCES`, nas aberturas e nas operações dentro de uma pasta marcada.
+- **Evento de abertura:** o programa do `file_open` manda, para cada arquivo aberto numa das montagens pedidas, o caminho (por `bpf_d_path`, na visão do sandbox, só com os bytes do caminho), o inode, a montagem e se a abertura lê e se grava (os bits `FMODE_READ` e `FMODE_WRITE` do arquivo, também no evento de uma abertura negada). As outras montagens não mandam nada. A fila desse confinamento tem 1 MiB.
+- **Repetições:** um mapa LRU do confinamento (16384 entradas) guarda o arquivo (dispositivo, inode e geração), o modo e a hora do último evento. Uma abertura do mesmo arquivo e modo em menos de 1 s não manda evento. Os programas de renomear e de link tiram o arquivo do mapa. Um evento que não coube na fila não entra no mapa.
+- **Fila cheia:** uma thread do auxiliar só esvazia a fila do kernel, e outra manda os eventos ao daemon. Quando a fila do kernel passa de 3/4, a do auxiliar passa de 32768 eventos ou há um descarte, o auxiliar congela o cgroup da aba (`cgroup.freeze`). Ele descongela quando a do auxiliar cai abaixo de 4096 e a do kernel abaixo de 1/4. Cada congelamento vai para o journal do auxiliar, com a duração ("aba congelada por N ms"). Depois do fim da conexão, ou na saída limpa, o auxiliar não descongela, porque as regras saem com a conexão; quem descongela é o daemon, ao refazer o confinamento.
+- **Status:** o `status` diz `tab`: um auxiliar que confina abas. Com um auxiliar antigo, sem esse campo, a aba fica com o supervisor.
 
 ## Observação das execuções e das conexões
 
 O pedido `observe` liga só a observação das execuções num cgroup do usuário (o escopo de uma aba), sem regras de arquivos nem marcas. Um programa no tracepoint `sched_process_exec` manda o caminho executado, o processo e os argumentos pela mesma conexão. Dois programas `fexit`, na saída de `tcp_v4_connect` e `tcp_v6_connect`, mandam cada conexão TCP que um processo do cgroup abre: o pid, a porta de origem e o destino. O daemon usa esses eventos para o [processo de cada conexão](network.md#processo-de-cada-conexão) no registro de rede. O confinamento do Docker (`confine`) inclui a mesma observação. São até 64 observações ativas por usuário, além dos 16 confinamentos. A observação só registra: nenhuma execução ou conexão é negada nem atrasada.
 
+## Escopo do sandbox
+
+Num kernel com o Landlock ABI 4 ou 5, o Landlock não tem o escopo de sockets abstratos e de sinais e, no ABI 4, a restrição de `ioctl` em dispositivos. O lançador (`sandmux-run`) pede então ao auxiliar o `scope` do sandbox, antes de o comando rodar, com:
+- o user namespace que cada lançamento cria;
+- o processo 1 do sandbox;
+- a lista dos dispositivos do `/dev` do sandbox.
+
+Programas BPF LSM globais, carregados no primeiro escopo e soltos quando não resta nenhum, negam a um processo desse user namespace (e dos de baixo):
+- a conexão a um socket abstrato criado fora do sandbox;
+- um sinal a um processo de fora, ou ao processo 1 do sandbox;
+- um `ioctl` num dispositivo fora da lista, com os mesmos comandos liberados pelo Landlock.
+
+O escopo vale enquanto a conexão do lançador está aberta, isto é, enquanto o sandbox vive. Sem o auxiliar ou sem o BPF LSM, o lançamento é recusado, e o `sandmux doctor` mostra os caminhos ([Ubuntu 24.04](install.md#ubuntu-2404)). Num kernel com o ABI 6, o lançador não pede o escopo.
+
+Quando o auxiliar reinicia (uma atualização, um travamento), o escopo volta no auxiliar seguinte:
+
+- **Numa sessão do daemon:** o lançador entrega ao daemon os parâmetros do escopo e o user namespace do sandbox, e o daemon vigia uma conexão com o auxiliar por aba. Na queda, ele congela a aba, registra de novo o escopo (e os [arquivos pelo kernel](files.md#pelo-kernel), quando a aba tem) e descongela. Nada da aba roda sem o escopo.
+- **No `run` sem o daemon:** o próprio lançador registra de novo assim que o auxiliar seguinte responde. Nesse intervalo, o sandbox roda sem o escopo.
+
+Sem o escopo de volta em 30 s, o sandbox termina. Um lançamento que encontra o auxiliar trocando tenta de novo por até 30 s. No 6.8, carregar e soltar os programas do escopo leva segundos; por isso, num kernel abaixo do ABI 6, o auxiliar os carrega ao subir, e eles ficam carregados por 60 s depois do último escopo.
+
 ## Quanto tempo as regras duram
 
 As regras e as marcas valem enquanto a conexão do daemon com o auxiliar estiver aberta. Elas somem quando:
 
-- o Docker da pasta para;
+- o Docker da pasta para, ou a aba termina;
 - o daemon termina, mesmo morto por `SIGKILL`;
 - o auxiliar para.
 
-Se o auxiliar parar com o Docker rodando, o daemon para o Docker da pasta, que não segue sem as regras. O próximo `docker` sobe outro Docker e liga o confinamento de novo, se o auxiliar responder. O socket do systemd sobe o auxiliar de volta na conexão seguinte.
+Se o auxiliar parar com o Docker rodando, o daemon para o Docker da pasta, que não segue sem as regras. Uma aba com os arquivos pelo kernel fica congelada até o confinamento ser refeito com o auxiliar de volta, e para se ele não voltar em 30 s. No `SIGTERM` (o `systemctl restart`, uma atualização), o auxiliar fecha a escrita de cada conexão antes de sair: quem pediu fica sabendo com as regras ainda valendo, e elas saem quando ele fecha a conexão (ou em 2 s). As conexões que chegam nesse meio tempo fecham sem resposta, e quem pediu tenta no auxiliar seguinte. O próximo `docker` sobe outro Docker e liga o confinamento de novo, se o auxiliar responder. O socket do systemd sobe o auxiliar de volta na conexão seguinte.
 
 ## Instalar
 
@@ -92,10 +124,21 @@ Os programas são montados pelo próprio sandmux, a partir do BTF do kernel que 
 
 ## Testes
 
-Os testes que exigem root rodam por `scripts/check-root.sh`, fora do `check.sh`:
+Os testes que exigem root (`crates/sandmux/tests/docker_ebpf.rs`) ficam fora do `check.sh`. Eles carregam programas BPF no kernel, e um erro num programa global derruba a máquina inteira. Por isso o padrão é rodá-los numa VM do Ubuntu 24.04:
+
+```bash
+scripts/vm-ubuntu-2404.sh up
+scripts/vm-ubuntu-2404.sh docker
+scripts/vm-ubuntu-2404.sh check-root
+```
+
+- `up` sobe a VM, e o `docker` instala nela o Docker sem root, uma vez.
+- `check-root` compila os testes e o auxiliar em musl e os copia para a VM, no mesmo caminho. Depois sobe o auxiliar como root lá dentro, reiniciando-o quando um teste pede, e roda os testes como o usuário da VM. Um filtro de teste pode vir depois do `check-root`.
+
+O `scripts/check-root.sh` roda os mesmos testes no kernel desta máquina:
 
 ```bash
 sudo scripts/check-root.sh
 ```
 
-O script sobe o auxiliar como root num socket temporário e roda `crates/sandmux/tests/docker_ebpf.rs` como o usuário que chamou o `sudo`. Ele roda binários compilados por esse usuário. Por isso, liberá-lo no `sudoers` sem senha dá root a quem roda como esse usuário. Se fizer isso, faça só enquanto precisa.
+Ele avisa e pergunta antes de carregar BPF no host; `--host` dispensa a pergunta. O script sobe o auxiliar como root num socket temporário e roda os testes como o usuário que chamou o `sudo`, com binários compilados por esse usuário. Por isso, liberá-lo no `sudoers` sem senha dá root a quem roda como esse usuário. Se fizer isso, faça só enquanto precisa.

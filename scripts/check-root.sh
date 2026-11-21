@@ -1,7 +1,12 @@
 #!/bin/sh
 # Testes que exigem root: o confinamento do Docker privado por BPF LSM.
 #
-#   sudo scripts/check-root.sh [filtro de teste]
+#   sudo scripts/check-root.sh [--host] [filtro de teste]
+#
+# O padrão para estes testes é a VM (`scripts/vm-ubuntu-2404.sh check-root`):
+# eles carregam programas BPF no kernel, e um erro num programa global derruba
+# a máquina inteira (aconteceu duas vezes em 2026-11-20). Aqui, no host, o
+# script avisa e pergunta antes; `--host` dispensa a pergunta.
 #
 # Só o auxiliar (`target/debug/sandmux-helper`) roda como root, num socket
 # temporário, por `systemd-run` com as restrições da unidade do serviço
@@ -13,6 +18,26 @@
 # Atenção: o script roda binários compilados pelo usuário. Liberá-lo no
 # sudoers sem senha dá root a quem roda como esse usuário.
 set -eu
+
+host=0
+if [ "${1:-}" = "--host" ]; then
+    host=1
+    shift
+fi
+cat >&2 <<'AVISO'
+check-root: estes testes carregam programas BPF no kernel DESTA máquina. Um
+erro num programa global derruba o sistema inteiro. O padrão é rodá-los numa
+VM: scripts/vm-ubuntu-2404.sh up && scripts/vm-ubuntu-2404.sh check-root
+AVISO
+if [ "$host" -ne 1 ]; then
+    if [ ! -t 0 ]; then
+        echo "check-root: sem terminal para confirmar; passe --host para rodar no host" >&2
+        exit 2
+    fi
+    printf 'check-root: rodar no host mesmo assim? [s/N] ' >&2
+    read -r resp
+    case "$resp" in s|S|sim|y|Y|yes) ;; *) echo "check-root: cancelado" >&2; exit 1 ;; esac
+fi
 
 [ "$(id -u)" -eq 0 ] || { echo "check-root: rode com sudo" >&2; exit 2; }
 uid=${SUDO_UID:-}

@@ -496,33 +496,93 @@ pub fn run_with(fix: bool) -> Result<i32> {
     Ok(if r.can_launch { 0 } else { 1 })
 }
 
+/// A ajuda do Landlock que falta: os dois caminhos. Um kernel 6.12 ou mais
+/// novo (no Ubuntu 24.04, o kernel HWE) e, com o Landlock ABI 4 ou 5, o
+/// auxiliar root com o `bpf` na lista de LSMs do boot. O `sandmux setup`
+/// não muda o boot: os comandos ficam aqui.
+fn landlock_help(
+    abi: i32,
+    os_release: &str,
+    lsm: Option<&str>,
+    helper: Option<&Result<(), String>>,
+) -> String {
+    let ubuntu_2404 = os_release.lines().any(|l| l == "ID=ubuntu")
+        && os_release.lines().any(|l| l == "VERSION_ID=\"24.04\"");
+    let mut out = if ubuntu_2404 {
+        tr!(
+            "Sem ele o sandbox não sobe.\nCaminho 1, o recomendado: o kernel HWE do Ubuntu 24.04, que tem o Landlock completo. Rode `sudo apt install linux-generic-hwe-24.04` e reinicie.",
+            "Without it the sandbox does not start.\nPath 1, the recommended one: the Ubuntu 24.04 HWE kernel, which has the full Landlock. Run `sudo apt install linux-generic-hwe-24.04` and reboot."
+        )
+        .to_string()
+    } else {
+        tr!(
+            "Sem ele o sandbox não sobe.\nCaminho 1: um kernel 6.12 ou mais novo, com o Landlock ligado (lsm=landlock).",
+            "Without it the sandbox does not start.\nPath 1: a kernel 6.12 or newer, with Landlock enabled (lsm=landlock)."
+        )
+        .to_string()
+    };
+    if abi < 4 {
+        return out;
+    }
+    let has_bpf = lsm.is_some_and(sandmux_ebpf::lsm_has_bpf);
+    out.push('\n');
+    if has_bpf {
+        out.push_str(tr!(
+            "Caminho 2: o BPF LSM já está ligado; falta o auxiliar root. Rode `sandmux setup`, que o instala com sudo.",
+            "Path 2: the BPF LSM is already on; the root helper is missing. Run `sandmux setup`, which installs it with sudo."
+        ));
+        if let Some(Err(e)) = helper {
+            out.push_str(&trf!(
+                " (O auxiliar respondeu: {e}.)",
+                " (The helper said: {e}.)"
+            ));
+        }
+    } else {
+        let list = lsm
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .unwrap_or("landlock,lockdown,yama,integrity,apparmor");
+        out.push_str(&trf!(
+            "Caminho 2: o auxiliar root completa o Landlock por BPF LSM, que precisa estar na lista de LSMs do boot. Rode:\n\necho 'GRUB_CMDLINE_LINUX_DEFAULT=\"$GRUB_CMDLINE_LINUX_DEFAULT lsm={list},bpf\"' | sudo tee /etc/default/grub.d/99-sandmux-lsm.cfg\nsudo update-grub\n\nreinicie, e rode `sandmux setup` para instalar o auxiliar.",
+            "Path 2: the root helper completes Landlock through the BPF LSM, which must be in the boot LSM list. Run:\n\necho 'GRUB_CMDLINE_LINUX_DEFAULT=\"$GRUB_CMDLINE_LINUX_DEFAULT lsm={list},bpf\"' | sudo tee /etc/default/grub.d/99-sandmux-lsm.cfg\nsudo update-grub\n\nreboot, and run `sandmux setup` to install the helper."
+        ));
+    }
+    out
+}
+
 fn sandbox_group(r: &support::SupportReport, host: Option<&Host>) -> Group {
     let mut checks = Vec::new();
     let abi_detail = if r.landlock_abi < 0 {
         tr!("ausente no kernel", "missing from the kernel").to_string()
+    } else if r.landlock_full() {
+        trf!("ABI {}", "ABI {}", r.landlock_abi)
+    } else if r.landlock_ok() {
+        trf!(
+            "ABI {}, completado pelo auxiliar root (BPF LSM)",
+            "ABI {}, completed by the root helper (BPF LSM)",
+            r.landlock_abi
+        )
     } else {
         trf!(
-            "ABI {} (exige {REQUIRED_ABI}, kernel 6.12 ou mais novo)",
-            "ABI {} (requires {REQUIRED_ABI}, kernel 6.12 or newer)",
+            "ABI {} (exige {REQUIRED_ABI}, kernel 6.12 ou mais novo, ou a 4 com o auxiliar root)",
+            "ABI {} (requires {REQUIRED_ABI}, kernel 6.12 or newer, or 4 with the root helper)",
             r.landlock_abi
         )
     };
-    let mut c = support_check(
+    let hint = (!r.landlock_ok()).then(|| {
+        let os = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+        let lsm = std::fs::read_to_string(sandmux_ebpf::LSM_LIST).ok();
+        landlock_help(r.landlock_abi, &os, lsm.as_deref(), r.helper.as_ref())
+    });
+    let c = support_check(
         r.landlock_ok(),
         tr!(
             "Landlock com escopo de sockets abstratos e de sinais",
             "Landlock with abstract socket and signal scoping"
         ),
         &abi_detail,
-        None,
+        hint.map(|h| format!("  {}", h.replace('\n', "\n  "))),
     );
-    if !r.landlock_ok() {
-        c.help = tr!(
-            "Sem ele o sandbox não sobe. O kernel precisa ser o 6.12 ou mais novo, com o Landlock ligado (lsm=landlock).",
-            "Without it the sandbox does not start. The kernel must be 6.12 or newer, with Landlock enabled (lsm=landlock)."
-        )
-        .into();
-    }
     checks.push(c);
 
     let userns = tr!(
@@ -686,6 +746,20 @@ fn sandbox_group(r: &support::SupportReport, host: Option<&Host>) -> Group {
             ),
         });
     }
+    let tabs = tr!("arquivos das abas pelo kernel", "tab files by the kernel");
+    // Opcional: sem o caminho do kernel, o supervisor, como antes.
+    checks.push(match sandmux::helper::tab_availability() {
+        Ok(detail) => support_check(true, tabs, &detail, None),
+        Err(why) => {
+            let hint = tr!(
+                "  Sem ele, o supervisor do sandmux decide e registra cada abertura de arquivo\n  das abas, de 3 a 3,5 vezes mais lento na leitura em massa. Com o auxiliar\n  root (`sandmux setup`) e o `bpf` na lista de LSMs, o kernel decide. Detalhes\n  em docs/files.md.",
+                "  Without it, the sandmux supervisor decides and logs each file open of the\n  tabs, 3 to 3.5 times slower on bulk reads. With the root helper\n  (`sandmux setup`) and `bpf` in the LSM list, the kernel decides. Details in\n  docs/en/files.md."
+            );
+            Check::new(State::Info, tabs, why.clone())
+                .help(flat(hint))
+                .cli(format!("[info] {tabs}: {why}\n{hint}"))
+        }
+    });
 
     let tun = std::fs::metadata("/dev/net/tun")
         .map(|m| std::os::unix::fs::FileTypeExt::is_char_device(&m.file_type()))
@@ -1098,5 +1172,56 @@ fn daemon_group() -> Group {
     Group {
         name: tr!("Daemon", "Daemon").into(),
         checks,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NOBLE: &str = "PRETTY_NAME=\"Ubuntu 24.04.5 LTS\"\nID=ubuntu\nVERSION_ID=\"24.04\"\n";
+    const LSM: &str = "lockdown,capability,landlock,yama,apparmor\n";
+
+    #[test]
+    fn ajuda_do_ubuntu_2404_no_6_8() {
+        sandmux_spec::lang::set(sandmux_spec::lang::Lang::Pt);
+        let h = landlock_help(4, NOBLE, Some(LSM), Some(&Err("sem BPF LSM".into())));
+        assert!(
+            h.contains("sudo apt install linux-generic-hwe-24.04"),
+            "{h}"
+        );
+        assert!(
+            h.contains("lsm=lockdown,capability,landlock,yama,apparmor,bpf"),
+            "{h}"
+        );
+        assert!(
+            h.contains("sudo update-grub") && h.contains("sandmux setup"),
+            "{h}"
+        );
+    }
+
+    #[test]
+    fn ajuda_com_o_bpf_ligado_e_sem_auxiliar() {
+        sandmux_spec::lang::set(sandmux_spec::lang::Lang::Pt);
+        let h = landlock_help(
+            4,
+            NOBLE,
+            Some("lockdown,landlock,apparmor,bpf"),
+            Some(&Err("não responde".into())),
+        );
+        assert!(
+            h.contains("já está ligado") && h.contains("sandmux setup"),
+            "{h}"
+        );
+        assert!(h.contains("não responde"), "{h}");
+        assert!(!h.contains("update-grub"), "{h}");
+    }
+
+    #[test]
+    fn ajuda_de_kernel_sem_landlock_4() {
+        sandmux_spec::lang::set(sandmux_spec::lang::Lang::Pt);
+        let h = landlock_help(3, "ID=debian\nVERSION_ID=\"12\"\n", Some(LSM), None);
+        assert!(h.contains("6.12 ou mais novo"), "{h}");
+        assert!(!h.contains("hwe") && !h.contains("Caminho 2"), "{h}");
     }
 }

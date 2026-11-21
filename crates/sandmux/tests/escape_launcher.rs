@@ -109,6 +109,33 @@ fn landlock_insuficiente_recusa_sem_executar() {
     assert!(!dir.path().join("executou").exists());
 }
 
+/// Num kernel com o Landlock ABI 4 (o Ubuntu 24.04 com o 6.8), sem o
+/// auxiliar root, o lançamento é recusado antes de o comando rodar. (A
+/// variável faz o lançador agir como nesse kernel; sem auxiliar, nada é
+/// carregado no kernel.)
+#[test]
+fn kernel_antigo_sem_o_auxiliar_recusa_sem_executar() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut cmd, _keep) = run_command(marker_spec(dir.path()).to_json().as_bytes());
+    let out = cmd
+        .env("SANDMUX_RUN_LANDLOCK_ABI", "4")
+        .env(
+            "SANDMUX_HELPER_SOCKET",
+            dir.path().join("sem-auxiliar.sock"),
+        )
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(125));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("Landlock ABI 4")
+            && err.contains("auxiliar root")
+            && err.contains("sandmux doctor"),
+        "{err}"
+    );
+    assert!(!dir.path().join("executou").exists());
+}
+
 #[test]
 fn user_namespace_bloqueado_recusa_e_aponta_o_doctor() {
     let dir = tempfile::tempdir().unwrap();

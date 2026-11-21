@@ -76,7 +76,7 @@ Vários terminais podem se anexar à mesma sessão; todos recebem a saída e tod
 `sandmux enter [id]` (sem identificador, a única sessão viva), ou Ctrl+b `t` na TUI, abre uma sessão nova, `dentro:<pasta>`, com um shell dentro do sandbox da aba alvo. O shell vê exatamente o que o agente vê:
 
 - **arquivos:** a mesma visão, a mesma pasta inicial, o mesmo Landlock;
-- **regras de arquivos:** as aberturas passam pelas mesmas regras e entram no mesmo registro (um `.env` continua negado);
+- **regras de arquivos:** as aberturas passam pelas mesmas regras e pelo mesmo caminho do agente, o kernel numa aba confinada pelo kernel e o supervisor nas outras, e entram no mesmo registro (um `.env` continua negado);
 - **rede e restrições:** a mesma rede e o mesmo seccomp;
 - **processos:** os mesmos, porque o shell está no mesmo pid namespace (`ps` mostra o agente).
 
@@ -176,7 +176,7 @@ Socket Unix de fluxo. Cada quadro tem 4 bytes de tamanho (big-endian, só o cont
 | 0 | Mensagem de controle em JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Bytes de terminal: entrada do cliente ou saída da sessão |
 
-A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados, a pasta de configuração e o idioma do cliente (o daemon responde nesse idioma). Esta versão usa o protocolo 42. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
+A primeira mensagem é a saudação (`hello`), com o número do protocolo, a versão, o diretório de dados, a pasta de configuração e o idioma do cliente (o daemon responde nesse idioma). Esta versão usa o protocolo 44. Números diferentes encerram a conexão, e o cliente mostra as duas versões e indica `sandmux daemon restart`. Um diretório de dados ou uma pasta de configuração diferente também é recusado, com as duas pastas na mensagem.
 
 O cliente envia ao daemon, junto com o pedido de sessão, as opções dadas no `run`, o perfil nomeado, a pasta atual, as variáveis da lista segura, o `SHELL` e os valores de `pass-env` da política efetiva. O daemon resolve as camadas de configuração ([docs/config.md](config.md)) e compõe a especificação de lançamento com a mesma função do `run` direto.
 

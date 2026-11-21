@@ -22,22 +22,30 @@ O lançador `sandmux-run` MUST receber uma especificação de lançamento comple
 - **THEN** ele termina com erro e não executa o comando
 
 ### Requirement: Falha fechada sem suporte do kernel
-O lançador MUST verificar, antes de executar o comando, que a máquina permite user namespaces sem privilégio e oferece Landlock com escopo de sockets abstratos e de sinais. Faltando qualquer um, o lançador MUST recusar o lançamento. Não existe opção para lançar sem confinamento.
+O lançador MUST verificar, antes de executar o comando, que a máquina permite user namespaces sem privilégio e oferece o escopo de sockets abstratos e de sinais e a restrição de `ioctl` em dispositivos: pelo Landlock ABI 6 ou, com o ABI 4 ou 5, pelo auxiliar root com o BPF LSM ativo. Faltando qualquer um, o lançador MUST recusar o lançamento. Não existe opção para lançar sem confinamento.
 
 #### Scenario: Landlock ausente ou antigo
-- **WHEN** o kernel não oferece Landlock com escopo de sockets abstratos
+- **WHEN** o kernel não oferece Landlock com escopo de sockets abstratos e o auxiliar root não pode completar o que falta
 - **THEN** o lançamento é recusado, a mensagem diz qual suporte falta e nenhum comando é executado
+
+#### Scenario: Kernel 6.8 com o auxiliar
+- **WHEN** o kernel tem o Landlock ABI 4, o `bpf` está entre os LSMs ativos e o `sandmux-helper` está instalado
+- **THEN** o comando roda, e um socket abstrato do host, um sinal a um processo de fora e um `ioctl` num dispositivo de fora da lista são negados como num kernel com o ABI 6
+
+#### Scenario: Kernel 6.8 sem o BPF LSM
+- **WHEN** o kernel tem o Landlock ABI 4 e o `bpf` não está entre os LSMs ativos
+- **THEN** o lançamento é recusado, e a mensagem aponta para `sandmux doctor`
 
 #### Scenario: User namespace bloqueado
 - **WHEN** a máquina não permite criar user namespace sem privilégio
 - **THEN** o lançamento é recusado e a mensagem aponta para `sandmux doctor`
 
 #### Scenario: Falha ao montar o confinamento
-- **WHEN** qualquer etapa da montagem do confinamento falha
+- **WHEN** qualquer etapa da montagem do confinamento falha, inclusive o registro no auxiliar root
 - **THEN** o comando não é executado e o lançador termina com erro
 
 ### Requirement: Processos do host fora do alcance
-Um processo confinado MUST enxergar apenas os processos do próprio sandbox e MUST NOT conseguir sinalizar, inspecionar ou depurar um processo do host.
+Um processo confinado MUST enxergar apenas os processos do próprio sandbox e MUST NOT conseguir sinalizar, inspecionar ou depurar um processo do host. Isso MUST continuar valendo depois de um reinício do auxiliar root, nos kernels em que o escopo do sandbox vem dele.
 
 #### Scenario: Listagem de processos
 - **WHEN** um processo confinado lista os processos pelo `/proc`
@@ -50,6 +58,10 @@ Um processo confinado MUST enxergar apenas os processos do próprio sandbox e MU
 #### Scenario: Depuração dentro do sandbox
 - **WHEN** um depurador confinado se anexa a outro processo do mesmo sandbox
 - **THEN** a operação funciona
+
+#### Scenario: Sinal para o host depois do reinício do auxiliar
+- **WHEN** o kernel tem o Landlock abaixo do ABI 6, o auxiliar root reinicia com uma aba rodando, e um processo dela tenta mandar um sinal ao supervisor do sandbox
+- **THEN** a tentativa falha
 
 ### Requirement: Sockets do host fora do alcance
 Um processo confinado MUST NOT conseguir se conectar a sockets Unix do host, nem por caminho nem por nome abstrato. Isso inclui ssh-agent, D-Bus, Docker, Wayland e X11. As exceções são os sockets do compositor e do áudio que a opção `window` monta e o barramento do sandmux que a opção `portal` monta, que não é o D-Bus do usuário.
@@ -104,7 +116,7 @@ Um processo confinado MUST NOT conseguir inserir caracteres na fila de entrada d
 - **THEN** a chamada devolve erro e nada é inserido no terminal
 
 ### Requirement: User namespaces aninhados permitidos, sem montagem
-Um processo confinado MUST poder criar user namespaces próprios e mapear neles o próprio uid, para que programas que se isolam continuem funcionando. Dentro de um namespace aninhado, o processo MUST continuar sem conseguir montar nada nem alcançar o que o sandbox esconde.
+Um processo confinado MUST poder criar user namespaces próprios e mapear neles o próprio uid, para que programas que se isolam continuem funcionando. Dentro de um namespace aninhado, o processo MUST continuar sem conseguir montar nada nem alcançar o que o sandbox esconde. Um `bwrap` no `PATH` do sandbox MUST executar o comando pedido sem montar, com as restrições do pedido que não precisam de montagem.
 
 #### Scenario: Navegador headless
 - **WHEN** um navegador headless que cria o próprio isolamento é iniciado dentro do sandbox
@@ -117,6 +129,14 @@ Um processo confinado MUST poder criar user namespaces próprios e mapear neles 
 #### Scenario: Chrome com o sandbox dele
 - **WHEN** o `google-chrome` é iniciado no sandbox, sem `--no-sandbox`
 - **THEN** ele inicia com o sandbox de namespaces e seccomp dele
+
+#### Scenario: Sandbox do bash do Claude Code
+- **WHEN** o Claude Code roda na aba com o sandbox do bash dele ligado e executa um comando
+- **THEN** o comando roda, e uma escrita fora das pastas que o Claude Code liberou falha
+
+#### Scenario: bwrap com binds
+- **WHEN** um processo confinado roda `bwrap --ro-bind / / --bind $PWD $PWD -- sh -c 'touch $PWD/x; touch ~/y'`
+- **THEN** `$PWD/x` é criado e `~/y` não
 
 ### Requirement: Ambiente construído do zero
 O comando confinado MUST receber apenas as variáveis de ambiente de uma lista segura, as que o preset define e as passadas com `--pass-env`. A lista segura é: `TERM`, `COLORTERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `LANG`, `LC_*`, `TZ`, `NO_COLOR`, `USER`, `LOGNAME`, `SHELL`, `HOME`, `PATH` reconstruído e as variáveis XDG apontando para o HOME sintético. As opções `window` e `portal` acrescentam as variáveis que definem.

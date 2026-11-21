@@ -134,6 +134,8 @@ pub const DB_MCP: &str = "/run/sandmux/bin/sandmux-db-mcp";
 pub const DB_MCP_NAME: &str = "sandmux-db";
 /// Programa das abas de chat, dentro do sandbox.
 pub const CHAT_BIN: &str = "/run/sandmux/bin/sandmux-chat";
+/// O `bwrap` do sandmux dentro do sandbox (o `sandmux-run` com outro nome).
+pub const BWRAP_SHIM: &str = "/run/sandmux/bin/bwrap";
 
 /// Onde fica a camada de escrita de toolchains e caches nesta execução.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,6 +187,9 @@ pub struct RunOptions {
     pub db_mcp: Option<PathBuf>,
     /// Binário `sandmux-chat` e as variáveis da aba de chat.
     pub chat_bin: Option<PathBuf>,
+    /// O `sandmux-run`, montado como o `bwrap` do sandbox (o substituto do
+    /// bubblewrap, que não monta).
+    pub bwrap_bin: Option<PathBuf>,
     pub chat_env: Vec<(String, String)>,
     /// Modelos descobertos nos servidores locais do opencode: (provedor,
     /// modelos), somados ao `OPENCODE_CONFIG_CONTENT`.
@@ -253,6 +258,7 @@ impl RunOptions {
             db_socket: None,
             db_mcp: None,
             chat_bin: None,
+            bwrap_bin: None,
             chat_env: Vec::new(),
             opencode_models: Vec::new(),
             network: crate::config::NetworkMode::Aberta,
@@ -871,6 +877,9 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     // Toolchains e caches.
     let chains = toolchains::detect(host);
     let mut path_dirs = vec![host.h(".local/bin")];
+    if opts.bwrap_bin.is_some() {
+        path_dirs.insert(0, PathBuf::from("/run/sandmux/bin"));
+    }
     for t in &chains {
         for d in &t.dirs {
             b.layered(d, false);
@@ -1011,6 +1020,16 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     if let (Some(sock), Some(bin)) = (&opts.db_socket, &opts.db_mcp) {
         b.bind(sock, Path::new(DB_SOCKET), true);
         b.bind(bin, Path::new(DB_MCP), false);
+    }
+    // O `bwrap` do sandmux, na frente do `PATH` e por cima do `bwrap` do
+    // sistema, se a visão tiver um.
+    if let Some(bin) = &opts.bwrap_bin {
+        b.bind(bin, Path::new(BWRAP_SHIM), false);
+        for sys in ["/usr/bin/bwrap", "/usr/local/bin/bwrap"] {
+            if host.sys(sys).is_file() {
+                b.bind(bin, Path::new(sys), false);
+            }
+        }
     }
     // Aba de chat: o programa, em somente leitura.
     if let Some(bin) = &opts.chat_bin {
@@ -1452,11 +1471,19 @@ pub struct DockerMarks {
     pub deny: Vec<PathBuf>,
     pub protect: Vec<PathBuf>,
     pub gitdir: Vec<PathBuf>,
+    /// Segredos de uma aba confinada pelo kernel (`ENOENT`); vazio no Docker.
+    pub secret: Vec<PathBuf>,
+    /// Negados pela política de uma aba (`EACCES`); vazio no Docker.
+    pub fdeny: Vec<PathBuf>,
 }
 
 impl DockerMarks {
     pub fn len(&self) -> usize {
-        self.deny.len() + self.protect.len() + self.gitdir.len()
+        self.deny.len()
+            + self.protect.len()
+            + self.gitdir.len()
+            + self.secret.len()
+            + self.fdeny.len()
     }
 
     /// Acrescenta às pastas negadas e protegidas tudo o que existe dentro
@@ -1485,7 +1512,7 @@ impl DockerMarks {
             true
         }
         let mut n = self.len();
-        for v in [&mut self.deny, &mut self.protect] {
+        for v in [&mut self.deny, &mut self.protect, &mut self.fdeny] {
             let mut more = Vec::new();
             for p in v.iter() {
                 let is_dir = std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
@@ -1509,15 +1536,73 @@ impl DockerMarks {
     }
 }
 
+/// Os arquivos das pastas `roots` que a política decide esconder (segredos)
+/// e negar (`file-deny`), para as marcas de uma aba confinada pelo kernel. As
+/// pastas negadas entram sem descer nelas (o `expand` as completa); os links
+/// simbólicos e as pastas de `exclude` são pulados. Acima de `max` caminhos,
+/// devolve `Err` com a contagem.
+pub fn tab_covers(
+    policy: &sandmux_spec::files::FilePolicy,
+    created: &std::collections::HashSet<PathBuf>,
+    roots: &[PathBuf],
+    exclude: &[PathBuf],
+    max: usize,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>), usize> {
+    use sandmux_spec::files::FileVerdict;
+    let (mut secret, mut deny) = (Vec::new(), Vec::new());
+    let mut seen = 0usize;
+    let mut stack: Vec<PathBuf> = roots.to_vec();
+    while let Some(dir) = stack.pop() {
+        if exclude.iter().any(|x| dir.starts_with(x)) {
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            seen += 1;
+            if seen > max * 16 {
+                return Err(seen);
+            }
+            let Ok(t) = e.file_type() else { continue };
+            if t.is_symlink() {
+                continue;
+            }
+            let path = e.path();
+            match policy.decide(&path, |q| created.contains(q)) {
+                FileVerdict::Deny(_) => deny.push(path),
+                FileVerdict::Secret => secret.push(path),
+                FileVerdict::Pass if t.is_dir() => stack.push(path),
+                FileVerdict::Pass => {}
+            }
+            if secret.len() + deny.len() > max {
+                return Err(secret.len() + deny.len());
+            }
+        }
+    }
+    secret.sort();
+    deny.sort();
+    Ok((secret, deny))
+}
+
 /// As marcas do confinamento para a visão `spec` do Docker da pasta
 /// `workdir` (já canônica).
 pub fn docker_marks(spec: &LaunchSpec, workdir: &Path) -> DockerMarks {
-    let mut m = DockerMarks::default();
+    let mut m = git_marks(workdir);
     for x in &spec.mounts {
         if let Mount::Cover { dest } = x {
             m.deny.push(dest.clone());
         }
     }
+    m.deny.sort();
+    m.deny.dedup();
+    m
+}
+
+/// As marcas da proteção do `.git` da pasta `workdir` (já canônica): os
+/// binds em somente leitura protegidos contra escrita e os diretórios git.
+pub fn git_marks(workdir: &Path) -> DockerMarks {
+    let mut m = DockerMarks::default();
     let git_dir = match git::detect(workdir) {
         GitLayout::Repo { git_dir } => Some(git_dir),
         GitLayout::Worktree {
@@ -1557,7 +1642,13 @@ pub type MarkSet = std::collections::BTreeMap<PathBuf, u32>;
 /// As marcas como conjunto, com os bits de cada caminho.
 pub fn mark_set(m: &DockerMarks) -> MarkSet {
     let mut s = MarkSet::new();
-    for (v, bit) in [(&m.deny, 1u32), (&m.protect, 2), (&m.gitdir, 4)] {
+    for (v, bit) in [
+        (&m.deny, 1u32),
+        (&m.protect, 2),
+        (&m.gitdir, 4),
+        (&m.secret, 8),
+        (&m.fdeny, 16),
+    ] {
         for p in v {
             *s.entry(p.clone()).or_default() |= bit;
         }
@@ -2006,6 +2097,7 @@ mod docker_view_tests {
             deny: vec![p("/x")],
             protect: vec![p("/x"), p("/h")],
             gitdir: vec![p("/g")],
+            ..Default::default()
         };
         assert_eq!(
             mark_set(&m),
@@ -2066,6 +2158,7 @@ mod docker_view_tests {
             deny: vec![privado.clone()],
             protect: vec![hooks.clone()],
             gitdir: vec![],
+            ..Default::default()
         };
         m.clone().expand(100).unwrap();
         let mut x = m.clone();

@@ -125,7 +125,7 @@ O `sandmux stats <id>` mostra a seção "Docker privado da pasta", com a memóri
 
 O Docker privado precisa de três coisas:
 
-- `rootlesskit`, `dockerd`, `containerd`, `newuidmap` e `newgidmap` no `PATH`;
+- `rootlesskit`, `dockerd`, `containerd`, `newuidmap` e `newgidmap` no `PATH`, com o `rootlesskit` 2.0 ou mais novo (a rede `none`). O do Ubuntu 24.04 é o 1.1.1, e o 2.0 ou mais novo vem no pacote `docker-ce-rootless-extras` do [repositório do Docker](https://docs.docker.com/engine/install/ubuntu/);
 - uma faixa de 65536 IDs do usuário em `/etc/subuid`;
 - uma faixa igual em `/etc/subgid`.
 

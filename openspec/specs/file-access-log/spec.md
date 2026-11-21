@@ -6,7 +6,7 @@ Define como o sandmux vê cada abertura de arquivo do agente, com o agente em ex
 ## Requirements
 
 ### Requirement: Aberturas pelo supervisor
-Toda chamada `open`, `openat`, `openat2` e `creat` de um processo do sandbox MUST ser atendida pelo supervisor: ele MUST abrir o arquivo dentro da raiz do sandbox e entregar o descritor ao processo como resultado da chamada. O arquivo entregue MUST ser o que o supervisor abriu, mesmo que o caminho mude na memória do processo depois da leitura. Sem o supervisor, as aberturas MUST falhar.
+Numa aba confinada pelo kernel (o auxiliar root, o BPF LSM e o escopo próprio), as aberturas MUST ser decididas e registradas pelo kernel, sem o supervisor. Nas outras, toda chamada `open`, `openat`, `openat2` e `creat` MUST ser atendida pelo supervisor, que abre o arquivo dentro da raiz do sandbox e entrega o descritor; o arquivo entregue MUST ser o que ele abriu, mesmo que o caminho mude depois. Sem o supervisor, essas aberturas MUST falhar.
 
 #### Scenario: Abertura comum
 - **WHEN** o agente lê e escreve arquivos na pasta de trabalho, no HOME e em `/tmp`
@@ -19,6 +19,18 @@ Toda chamada `open`, `openat`, `openat2` e `creat` de um processo do sandbox MUS
 #### Scenario: Descritores do próprio processo
 - **WHEN** o agente usa `cat <(echo oi)` ou abre `/proc/self/status`
 - **THEN** a abertura funciona, com o descritor e o processo dele
+
+#### Scenario: Aba confinada pelo kernel
+- **WHEN** o auxiliar root está instalado, o BPF LSM está ativo e o agente lê mil arquivos da pasta de trabalho
+- **THEN** as leituras funcionam sem passar pelo supervisor, e o registro tem uma linha de leitura para cada arquivo
+
+#### Scenario: Leitura em massa numa aba confinada pelo kernel
+- **WHEN** a aba é confinada pelo kernel e o agente lê trinta mil arquivos diferentes da pasta de trabalho, cada um várias vezes
+- **THEN** o registro tem uma linha de leitura para cada arquivo, e nenhuma linha de eventos descartados
+
+#### Scenario: Auxiliar reiniciado com a aba rodando
+- **WHEN** a conexão do daemon com o auxiliar cai numa aba confinada pelo kernel, e o auxiliar volta
+- **THEN** a aba fica congelada até o confinamento ser refeito, com as marcas da política atual, e segue; sem o confinamento de volta em 30 s, tudo no escopo da aba morre
 
 ### Requirement: Regras do Landlock nas aberturas
 O supervisor MUST conferir cada abertura contra as regras de leitura e de escrita do Landlock da especificação, pelo caminho do arquivo aberto na visão do agente. Uma abertura fora das regras MUST falhar com `EACCES`. Os links mágicos de outros processos (`/proc/<pid>/fd`, `cwd` e `root`) MUST ser recusados.
@@ -41,6 +53,10 @@ Cada acesso distinto (caminho e tipo de acesso) às pastas do agente (pasta de t
 #### Scenario: Sistema fora do registro
 - **WHEN** o agente roda `ls /usr/bin`
 - **THEN** nenhuma linha de `/usr` vai para o registro
+
+#### Scenario: Leitura e escrita numa aba confinada pelo kernel
+- **WHEN** a aba é confinada pelo kernel e o agente abre um arquivo da pasta de trabalho para leitura e escrita, e outro numa pasta em `file-deny`
+- **THEN** o registro tem uma linha `rw` do primeiro e uma linha `rw` bloqueada do segundo, como numa aba pelo supervisor
 
 ### Requirement: Consulta e retenção do registro de arquivos
 `sandmux files [<id>]` MUST mostrar as linhas recentes do registro de arquivos, de uma sessão ou de todas, com a hora, a sessão, o acesso e o caminho. O daemon MUST aplicar à pasta `files` a retenção do registro de rede (`net-log-days` e `net-log-max`).

@@ -1920,6 +1920,15 @@ fn draw_panel(f: &mut Frame, r: Rect, app: &App) {
                             ok,
                         ));
                     }
+                    // Aberturas de arquivo pelo kernel (aceso) ou pelo
+                    // supervisor.
+                    if p.files.is_some() {
+                        items.push((
+                            p.files.as_deref() == Some("kernel"),
+                            tr!("arquivos pelo kernel", "files by kernel").into(),
+                            ok,
+                        ));
+                    }
                     items.push((p.clipboard, "clipboard".into(), warn));
                     items.push((!p.pass_env.is_empty(), "pass-env".into(), warn));
                     for l in dots(&items) {

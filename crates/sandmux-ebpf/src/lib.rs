@@ -10,6 +10,7 @@ pub mod btf;
 pub mod exec;
 pub mod prog;
 pub mod ring;
+pub mod scope;
 pub mod sys;
 
 /// Lista dos LSMs ativos no kernel.

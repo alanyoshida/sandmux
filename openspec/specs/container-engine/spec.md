@@ -75,11 +75,15 @@ O Docker privado de uma pasta, com todos os contêineres, MUST rodar sob os teto
 - **THEN** o processo do contêiner é morto por falta de memória, e o Docker privado e as sessões continuam
 
 ### Requirement: Máquina sem Docker sem root
-Quando a máquina não tem o necessário para o Docker sem root (`rootlesskit`, `dockerd`, `newuidmap` e uma faixa do usuário em `/etc/subuid` e `/etc/subgid`), a sessão MUST subir normalmente e o socket MUST responder a todo pedido com um erro que diz o que falta e indica `sandmux doctor`.
+Quando a máquina não tem o necessário para o Docker sem root (`rootlesskit` 2.0 ou mais novo, com a rede `none`, `dockerd`, `newuidmap` e uma faixa do usuário em `/etc/subuid` e `/etc/subgid`), a sessão MUST subir normalmente e o socket MUST responder a todo pedido com um erro que diz o que falta e indica `sandmux doctor`.
 
 #### Scenario: Sem rootlesskit
 - **WHEN** a máquina não tem `rootlesskit` e o agente roda `docker ps`
 - **THEN** o `docker` mostra o erro dizendo que o Docker privado não está disponível, o que falta e `sandmux doctor`
+
+#### Scenario: rootlesskit sem a rede none
+- **WHEN** a máquina tem o `rootlesskit` 1.1.1 do Ubuntu 24.04 e o usuário roda `sandmux doctor`
+- **THEN** o Docker privado aparece como indisponível, com a versão do `rootlesskit` e o pacote `docker-ce-rootless-extras` do repositório do Docker como solução
 
 ### Requirement: Run sem terminal sem Docker privado
 O `run` sem terminal MUST NOT ter Docker privado nem definir `DOCKER_HOST`, porque não há daemon para manter o Docker.
@@ -228,6 +232,10 @@ Com o confinamento por eBPF, os arquivos e as pastas que a visão do Docker cobr
 #### Scenario: Segredo criado pelo agente
 - **WHEN** o agente criou `chave.pem` numa sessão anterior e um contêiner com a pasta montada lê o arquivo
 - **THEN** o contêiner lê o conteúdo
+
+#### Scenario: Arquivo que o usuário não lê
+- **WHEN** o confinamento vale e uma cobertura de `/etc` é um arquivo que o usuário não lê, como o `/etc/gshadow`, com os binários estáticos das releases
+- **THEN** o arquivo é marcado e o Docker privado sobe
 
 ### Requirement: .git protegido no Docker
 Com o confinamento por eBPF, em cada diretório git da pasta de trabalho (o do repositório e os dos submódulos), os processos do Docker da pasta MUST NOT:

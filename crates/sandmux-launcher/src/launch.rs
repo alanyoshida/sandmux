@@ -61,9 +61,19 @@ fn forwarded_signals() -> SigSet {
     s
 }
 
+/// Como o kernel confina o sandbox.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KernelLevel {
+    /// O Landlock dá tudo (ABI 6 ou mais).
+    Landlock,
+    /// O Landlock na ABI dada (4 ou 5), com o auxiliar root completando os
+    /// escopos e, na ABI 4, a restrição de `ioctl` em dispositivos.
+    Helper { abi: i32 },
+}
+
 /// Confere o suporte mínimo do kernel antes de qualquer montagem.
-pub fn check_kernel() -> Result<(), LaunchError> {
-    let abi = sys::landlock_abi();
+pub fn check_kernel() -> Result<KernelLevel, LaunchError> {
+    let abi = landlock_rules::effective_abi();
     // Só pode tornar a exigência mais rígida; usado pelos testes para simular um
     // kernel antigo.
     let required = std::env::var("SANDMUX_RUN_REQUIRE_LANDLOCK_ABI")
@@ -72,18 +82,22 @@ pub fn check_kernel() -> Result<(), LaunchError> {
         .map_or(landlock_rules::REQUIRED_ABI, |v| {
             v.max(landlock_rules::REQUIRED_ABI)
         });
-    if abi < required {
-        let found = if abi < 0 {
-            sandmux_spec::tr!("ausente", "missing").to_string()
-        } else {
-            format!("ABI {abi}")
-        };
-        return Err(LaunchError::Unsupported(sandmux_spec::trf!(
-            "o kernel não oferece Landlock com escopo de sockets abstratos e de sinais (exige ABI {required}, encontrado: {found}); rode `sandmux doctor`",
-            "the kernel does not offer Landlock with abstract socket and signal scoping (requires ABI {required}, found: {found}); run `sandmux doctor`"
-        )));
+    if abi >= required {
+        return Ok(KernelLevel::Landlock);
     }
-    Ok(())
+    if required == landlock_rules::REQUIRED_ABI && abi >= landlock_rules::MIN_ABI {
+        return Ok(KernelLevel::Helper { abi });
+    }
+    let found = if abi < 0 {
+        sandmux_spec::tr!("ausente", "missing").to_string()
+    } else {
+        format!("ABI {abi}")
+    };
+    Err(LaunchError::Unsupported(sandmux_spec::trf!(
+        "o kernel não oferece Landlock com escopo de sockets abstratos e de sinais (exige ABI {required}, ou a {} com o auxiliar root; encontrado: {found}); rode `sandmux doctor`",
+        "the kernel does not offer Landlock with abstract socket and signal scoping (requires ABI {required}, or {} with the root helper; found: {found}); run `sandmux doctor`",
+        landlock_rules::MIN_ABI
+    )))
 }
 
 /// Lança o comando da especificação dentro do sandbox e devolve o código de
@@ -91,7 +105,7 @@ pub fn check_kernel() -> Result<(), LaunchError> {
 ///
 /// Precisa ser chamado num processo com uma única thread.
 pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
-    check_kernel()?;
+    let level = check_kernel()?;
     // Valida o filtro antes de criar qualquer processo.
     seccomp::build(&spec.seccomp).map_err(LaunchError::Setup)?;
 
@@ -159,6 +173,25 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
             "could not map the user in the user namespace ({e}); run `sandmux doctor`"
         )));
     }
+    // Sem o Landlock ABI 6, o auxiliar root completa o confinamento: o
+    // sandbox é registrado antes de o comando rodar, e a conexão fica aberta
+    // até o fim (fechada, o registro sai). A vigia do escopo (depois da
+    // liberação) registra de novo quando o auxiliar cai, ou deixa para o
+    // daemon.
+    let scope_reg = match level {
+        KernelLevel::Landlock => None,
+        KernelLevel::Helper { abi } => match crate::scope::register(child, abi, spec) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                let _ = kill(child, Signal::SIGKILL);
+                let _ = waitpid(child, None);
+                return Err(LaunchError::Unsupported(sandmux_spec::trf!(
+                    "o kernel tem o Landlock ABI {abi}, e o auxiliar root não completou o confinamento: {e}; rode `sandmux doctor`",
+                    "the kernel has Landlock ABI {abi}, and the root helper did not complete the confinement: {e}; run `sandmux doctor`"
+                )));
+            }
+        },
+    };
     // O auxiliar de conexão das portas precisa de uma só thread e do /proc
     // do processo 1 aberto, antes de ele se fechar: nasce antes da liberação.
     let connector = if open {
@@ -194,13 +227,75 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
     let _ = sync_w.write_all(b"1");
     drop(sync_w);
 
+    // Quem refaz o escopo numa queda do auxiliar: numa sessão do daemon, a
+    // resposta dele decide; sem o daemon, o lançador.
+    let keeper = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
+        if kernel_files(spec).is_some() {
+            crate::scope::KEEPER_UNKNOWN
+        } else {
+            crate::scope::KEEPER_SELF
+        },
+    ));
+    let scope_info = scope_reg.as_ref().map(|r| (r.params.clone(), r.ns.clone()));
+    if let Some(r) = scope_reg {
+        crate::scope::keep(r, child, keeper.clone());
+    }
+
+    // O modo dos arquivos da aba, para os shells de entrada: eles seguem o
+    // comando.
+    let enter_mode =
+        std::sync::Arc::new(std::sync::atomic::AtomicU8::new(crate::enter::MODE_UNKNOWN));
+
     // As aberturas de arquivo do comando: o descritor do filtro chega quando
     // o comando o instala; uma thread espera por ele.
     {
         let spec = spec.clone();
+        let child_pid = child.as_raw();
+        let keeper = keeper.clone();
+        let enter_mode = enter_mode.clone();
         let _ = std::thread::Builder::new()
             .name("sandmux-files".into())
             .spawn(move || {
+                // Os arquivos pelo kernel e o escopo: com a raiz pronta, o
+                // processo 1 pergunta o modo antes de criar o comando.
+                if let Some((access, tag, f)) = kernel_files(&spec)
+                    && recv_byte(&files_r) == Some(MODE_ASK)
+                {
+                    let a = confine_tab(child_pid, access, tag, f, scope_info.as_ref());
+                    keeper.store(
+                        if a.scope {
+                            crate::scope::KEEPER_DAEMON
+                        } else {
+                            crate::scope::KEEPER_SELF
+                        },
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
+                    send_byte(
+                        &files_r,
+                        if a.kernel.is_ok() {
+                            MODE_KERNEL
+                        } else {
+                            MODE_SUPERVISOR
+                        },
+                    );
+                    enter_mode.store(
+                        if a.kernel.is_ok() {
+                            crate::enter::MODE_KERNEL
+                        } else {
+                            crate::enter::MODE_SUPERVISOR
+                        },
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
+                } else {
+                    keeper.store(
+                        crate::scope::KEEPER_SELF,
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
+                    enter_mode.store(
+                        crate::enter::MODE_SUPERVISOR,
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
+                }
                 if let Ok(Some(listener)) = net::recv_fd(&files_r) {
                     // A raiz está pronta: o auxiliar de nomes aplica o Landlock.
                     if let Some(n) = &namer {
@@ -263,7 +358,11 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
                     for c in l.incoming().flatten() {
                         let c = OwnedFd::from(c);
                         if let Ok(Some(pty)) = net::recv_fd(&c) {
-                            let _ = en.call(&c, &pty);
+                            // Um pedido antes da resposta do daemon espera o
+                            // modo; sem ele, o supervisor.
+                            let kernel =
+                                crate::enter::wait_mode(&enter_mode, crate::enter::MODE_WAIT);
+                            let _ = en.call(&c, &pty, kernel);
                         }
                     }
                 });
@@ -385,6 +484,67 @@ fn supervise(child: Pid, mask: &SigSet) -> i32 {
     }
 }
 
+/// O processo 1 pergunta o modo dos arquivos; o supervisor responde.
+const MODE_ASK: u8 = b'R';
+const MODE_KERNEL: u8 = b'2';
+const MODE_SUPERVISOR: u8 = b'1';
+
+/// Os arquivos da aba podem ir ao kernel: uma sessão do daemon (com o
+/// socket de controle) e o acesso ao daemon. O acesso, a etiqueta e as
+/// pastas do registro.
+fn kernel_files(
+    spec: &LaunchSpec,
+) -> Option<(&sandmux_spec::VaultAccess, &str, &sandmux_spec::FilesSpec)> {
+    let f = spec.files.as_ref()?;
+    f.control_socket.as_ref()?;
+    let n = spec.network.as_ref()?;
+    Some((n.vault.as_ref()?, n.tag.as_str(), f))
+}
+
+/// Pede ao daemon os arquivos da aba pelo kernel, com as montagens das
+/// pastas do registro na visão do processo 1, e a vigia do escopo. Sem
+/// montagens que caibam no mapa, vão vazias: os arquivos ficam com o
+/// supervisor, e o escopo ainda vai.
+fn confine_tab(
+    pid: i32,
+    access: &sandmux_spec::VaultAccess,
+    tag: &str,
+    f: &sandmux_spec::FilesSpec,
+    scope: Option<&(crate::scope::TabScope, std::sync::Arc<OwnedFd>)>,
+) -> sandmux_net::procinfo::TabAnswer {
+    let mut mounts = crate::viewmounts::of_pid(pid, &f.roots, &f.exclude);
+    if mounts.len() > crate::viewmounts::MAX_MOUNTS {
+        mounts.clear();
+    }
+    sandmux_net::procinfo::confine_tab(
+        access,
+        sandmux_net::procinfo::TabRequest {
+            tag,
+            mounts,
+            roots: f.roots.clone(),
+            exclude: f.exclude.clone(),
+            scope: scope.map(|(p, ns)| (p.clone(), &**ns)),
+        },
+    )
+}
+
+fn send_byte(sock: &OwnedFd, b: u8) -> bool {
+    // SAFETY: descritor válido, um byte de um buffer vivo.
+    unsafe { libc::send(sock.as_raw_fd(), [b].as_ptr().cast(), 1, libc::MSG_NOSIGNAL) == 1 }
+}
+
+fn recv_byte(sock: &OwnedFd) -> Option<u8> {
+    let mut b = [0u8];
+    loop {
+        // SAFETY: descritor válido, buffer de um byte.
+        let n = unsafe { libc::recv(sock.as_raw_fd(), b.as_mut_ptr().cast(), 1, 0) };
+        if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        return (n == 1).then_some(b[0]);
+    }
+}
+
 fn report(err_w: &OwnedFd, kind: u8, msg: &str) {
     let mut buf = vec![kind];
     buf.extend_from_slice(msg.as_bytes());
@@ -480,9 +640,15 @@ fn init_process(
         }
     }
 
+    // Os arquivos pelo kernel: com a raiz pronta, o supervisor pede ao daemon
+    // e responde o modo. Sem resposta, o supervisor de aberturas.
+    let kernel = kernel_files(spec).is_some()
+        && send_byte(&files_w, MODE_ASK)
+        && recv_byte(&files_w) == Some(MODE_KERNEL);
+
     // SAFETY: o processo 1 tem uma única thread.
     let cmd = match unsafe { nix::unistd::fork() } {
-        Ok(nix::unistd::ForkResult::Child) => command_process(spec, &err_w, &files_w),
+        Ok(nix::unistd::ForkResult::Child) => command_process(spec, &err_w, &files_w, kernel),
         Ok(nix::unistd::ForkResult::Parent { child }) => child,
         Err(e) => {
             report(
@@ -534,7 +700,7 @@ fn init_process(
 }
 
 /// Processo do comando. Nunca retorna.
-fn command_process(spec: &LaunchSpec, err_w: &OwnedFd, files_w: &OwnedFd) -> ! {
+fn command_process(spec: &LaunchSpec, err_w: &OwnedFd, files_w: &OwnedFd, kernel: bool) -> ! {
     let fail = |kind: u8, msg: String| -> ! {
         report(err_w, kind, &msg);
         // SAFETY: saída imediata do filho.
@@ -589,10 +755,14 @@ fn command_process(spec: &LaunchSpec, err_w: &OwnedFd, files_w: &OwnedFd) -> ! {
     if let Err(e) = seccomp::install(&spec.seccomp) {
         fail(MSG_SETUP, format!("seccomp: {e}"));
     }
-    // As aberturas de arquivo passam pelo supervisor. O descritor vai logo
-    // depois da instalação: uma abertura antes dele esperaria o supervisor.
-    match seccomp::install_notify(spec.files.as_ref().is_some_and(|f| f.exec_log)) {
-        Ok(listener) => {
+    // As aberturas de arquivo passam pelo supervisor, menos com os arquivos
+    // pelo kernel (aí só as execuções, com o registro delas pelo supervisor).
+    // O descritor vai logo depois da instalação: uma abertura antes dele
+    // esperaria o supervisor.
+    let exec = spec.files.as_ref().is_some_and(|f| f.exec_log);
+    match seccomp::install_files_notify(kernel, exec) {
+        Ok(None) => {}
+        Ok(Some(listener)) => {
             if let Err(e) = net::send_fd(files_w, &listener) {
                 fail(
                     MSG_SETUP,

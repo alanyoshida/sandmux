@@ -78,7 +78,7 @@ Several terminals can attach to the same session; all of them get the output and
 `sandmux enter [id]` (without an identifier, the only live session), or Ctrl+b `t` in the TUI, opens a new session, `dentro:<folder>`, with a shell inside the target tab's sandbox. The shell sees exactly what the agent sees:
 
 - **files:** the same view, the same starting folder, the same Landlock;
-- **file rules:** opens go through the same rules and into the same log (a `.env` is still denied);
+- **file rules:** opens go through the same rules and the same path as the agent's, the kernel in a kernel-confined tab and the supervisor in the others, and into the same log (a `.env` is still denied);
 - **network and restrictions:** the same network and the same seccomp;
 - **processes:** the same ones, because the shell is in the same pid namespace (`ps` shows the agent).
 
@@ -178,7 +178,7 @@ Unix stream socket. Each frame has 4 bytes of length (big-endian, content only, 
 | 0 | Control message in JSON (`{"t": "list"}`, `{"t": "created", "id": 1, "name": "shell:app"}`, …) |
 | 1 | Terminal bytes: client input or session output |
 
-The first message is the greeting (`hello`), with the protocol number, the version, the data directory, the configuration folder and the language of the client (the daemon answers in that language). This version uses protocol 42. Different numbers end the connection, and the client shows both versions and points to `sandmux daemon restart`. A different data directory or configuration folder is also refused, with both folders in the message.
+The first message is the greeting (`hello`), with the protocol number, the version, the data directory, the configuration folder and the language of the client (the daemon answers in that language). This version uses protocol 44. Different numbers end the connection, and the client shows both versions and points to `sandmux daemon restart`. A different data directory or configuration folder is also refused, with both folders in the message.
 
 Along with the session request, the client sends the daemon the options given to `run`, the named profile, the current folder, the variables of the safe list, `SHELL` and the `pass-env` values of the effective policy. The daemon resolves the configuration layers ([docs/config.md](config.md)) and composes the launch specification with the same function as the direct `run`.
 

@@ -217,7 +217,7 @@ sandmux's data (synthetic HOMEs, write layers, inbox folder, import manifests) l
 
 ## What is planned for v1
 
-- **Confinement**: user, mount, pid and network namespaces, Landlock and seccomp, without needing root. Without the required kernel support, the agent does not start; there is no tab without a sandbox.
+- **Confinement**: user, mount, pid and network namespaces, Landlock and seccomp, without needing root. Without the required kernel support, the agent does not start; there is no tab without a sandbox. The `bwrap` inside a tab is a sandmux shim that does not mount: Claude Code's bash sandbox works ([docs/en/claude.md](docs/en/claude.md#bash-sandbox)).
 - **Persistent sessions**: a daemon keeps the agents alive when the terminal closes.
 - **Interface**: tabs with a confined terminal, side panel with the access log, prefix key (Ctrl+b by default), mouse and themes.
 - **Network**: all traffic goes through a gateway that logs each domain. Four modes per tab: open (default), inference only, no network and custom (blocked by default, with an allowlist).
@@ -239,8 +239,8 @@ The development order, the decisions and the accepted risks are in the [roadmap]
 ## Requirements
 
 - Linux. There is no support for macOS or Windows.
-- Kernel 6.12 or newer (Landlock with abstract socket scoping), with unprivileged user namespaces and `/dev/net/tun`. overlayfs in a user namespace is optional: without it, the caches start empty and the toolchains stay read-only.
-- Tested and supported distros: Ubuntu 26.04, Debian 13, current Fedora and Arch (the last three in containers, with the test machine's kernel).
+- Kernel 6.12 or newer (Landlock with abstract socket scoping), with unprivileged user namespaces and `/dev/net/tun`. On Ubuntu 24.04, the HWE kernel, or 6.8 with the root helper and the BPF LSM on ([docs/en/install.md](docs/en/install.md#ubuntu-2404)). overlayfs in a user namespace is optional: without it, the caches start empty and the toolchains stay read-only.
+- Tested and supported distros: Ubuntu 26.04, Ubuntu 24.04 (in a VM, with the 6.8 and HWE kernels), Debian 13, current Fedora and Arch (the last three in containers, with the test machine's kernel).
 - Binaries published only for `x86_64`; on another architecture, build with `cargo install`.
 - The harnesses (opencode, hermes, Claude Code, oh-my-pi, Antigravity CLI) are installed by you, on the host. sandmux does not install harnesses; `sandmux update <harness>` runs the official updater outside the sandbox.
 

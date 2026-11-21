@@ -39,6 +39,9 @@ fn main() {
         }
     }
     raise_nofile();
+    // Antes de qualquer thread: o `SIGTERM` e o `SIGINT` ficam para a thread
+    // da saída limpa.
+    let signals = block_term();
     let listener = match socket {
         Some(p) => helper::listen(&p).unwrap_or_else(|e| fail(format!("{}: {e}", p.display()))),
         None => systemd_socket().unwrap_or_else(|| {
@@ -48,6 +51,20 @@ fn main() {
         }),
     };
     let server = helper::Server::new(Box::new(helper::Ebpf::new()));
+    // Os programas do escopo carregam antes do primeiro pedido, sem segurar
+    // a subida: os pedidos esperam a carga.
+    let s = server.clone();
+    std::thread::spawn(move || s.preload());
+    let s = server.clone();
+    std::thread::spawn(move || {
+        let mut sig = 0;
+        // SAFETY: conjunto de sinais válido, bloqueado em todas as threads.
+        unsafe { libc::sigwait(&signals, &mut sig) };
+        // Quem pediu (o daemon, o lançador) fica sabendo com as regras ainda
+        // valendo; elas saem quando cada um fecha a conexão, ou na saída.
+        s.close_all(std::time::Duration::from_secs(2));
+        exit(0);
+    });
     if let Err(e) = helper::accept_loop(server, listener) {
         fail(format!("accept: {e}"));
     }
@@ -71,6 +88,20 @@ fn systemd_socket() -> Option<OwnedFd> {
     // SAFETY: liga o close-on-exec do descritor que agora é nosso.
     unsafe { libc::fcntl(3, libc::F_SETFD, libc::FD_CLOEXEC) };
     Some(fd)
+}
+
+/// Bloqueia o `SIGTERM` e o `SIGINT` (as threads herdam) e devolve o
+/// conjunto, para o `sigwait`.
+fn block_term() -> libc::sigset_t {
+    // SAFETY: sigset zerado e preenchido pelas funções da libc.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGTERM);
+        libc::sigaddset(&mut set, libc::SIGINT);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        set
+    }
 }
 
 /// Cada arquivo marcado fica aberto: sobe o teto de descritores ao máximo.

@@ -129,6 +129,12 @@ fn sandmux_files_mostra_a_sessao() {
     );
     let other = stdout(&env.run(&env.work, &["files", "2"]));
     assert!(other.contains("Nenhum acesso"), "{other}");
+    // Sem o auxiliar root (ou sem o BPF LSM), as aberturas ficam com o
+    // supervisor, e o resumo diz por quê.
+    if std::env::var_os("SANDMUX_HELPER_SOCKET").is_none() {
+        let st = stdout(&env.run(&env.work, &["stats", "1"]));
+        assert!(st.contains("aberturas de arquivo: supervisor: "), "{st}");
+    }
     t.write(b"\x02d");
     t.wait_exit();
 }
@@ -407,4 +413,22 @@ fn execucoes_pelo_supervisor() {
         execs.iter().any(|l| l["path"] == "./nao-existe"),
         "{execs:?}"
     );
+}
+
+/// Um `openat` de diretório com `mode` e sem `O_CREAT` (o Bun, e com ele o
+/// Claude Code, passa 0666 em toda abertura): o supervisor tratava o
+/// `O_DIRECTORY` como `O_TMPFILE`, mantinha o `mode`, e o `openat2` dava
+/// `EINVAL`. O kernel ignora o `mode` nesse caso.
+#[test]
+fn abrir_diretorio_com_mode_sem_creat() {
+    let e = Env::new();
+    let script = r#"mkdir -p /tmp/d && python3 -c '
+import ctypes, os
+libc = ctypes.CDLL(None, use_errno=True)
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC | 0o100000
+fd = libc.syscall(257, -100, b"/tmp/d", flags, 0o666)
+print("ok" if fd >= 0 else "erro %d" % ctypes.get_errno())
+'"#;
+    let out = e.shell(&[], script);
+    assert_eq!(stdout(&out), "ok\n", "{}", stderr(&out));
 }

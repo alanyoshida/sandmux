@@ -2050,6 +2050,7 @@ impl Effective {
             db_socket: None,
             db_mcp: None,
             chat_bin: None,
+            bwrap_bin: None,
             chat_env: Vec::new(),
             opencode_models: Vec::new(),
             net: None,

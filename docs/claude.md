@@ -61,6 +61,20 @@ O login pela "Console" (cobrança por uso da API) cria uma chave de API (`/api/o
 
 **Chaves dos outros provedores:** o Claude Code não recebe as chaves falsas dos provedores do cofre (`ANTHROPIC_API_KEY` e afins). Com uma `ANTHROPIC_API_KEY`, ele trocaria a assinatura pela cobrança da API.
 
+## Sandbox do bash
+
+O sandbox do bash do Claude Code (o `/sandbox`) usa o bubblewrap no Linux. Dentro do sandmux, o `bwrap` é o do próprio sandmux, montado em `/run/sandmux/bin/bwrap`, na frente do `PATH`, e por cima do `bwrap` do sistema. Ele executa o comando sem montar nada, já dentro do confinamento da aba, e aplica do pedido o que não precisa de montagem:
+
+- **As pastas pedidas:** um `--ro-bind` ou `--bind` no mesmo caminho vira uma regra a mais do Landlock, só naquele comando. O supervisor de arquivos da aba também aplica essas regras. Uma escrita fora das pastas que o Claude Code liberou falha.
+- **Namespaces sem montagem:** a rede própria (`--unshare-net`), o processo 1 próprio (`--unshare-pid`), o hostname, o ambiente, o diretório e o filtro seccomp do pedido.
+
+O que o bubblewrap montaria e o substituto ignora, porque o comando já vê a visão da aba:
+- um `/proc` novo (com `--unshare-pid`, o comando ainda lista os processos da aba);
+- um `/dev` mínimo;
+- os arquivos cobertos por um bind de outro lugar, como um `/dev/null` sobre um arquivo. Os segredos da pasta continuam protegidos pelo sandmux.
+
+O sandmux nunca libera montagens dentro da aba. Ferramentas que dependem da árvore montada pelo bubblewrap, como o `flatpak-builder`, não funcionam.
+
 ## Rede
 
 `platform.claude.com` está no catálogo de inferência, e por isso o modo só inferência deixa a renovação passar. O primeiro login precisa da rede aberta (o padrão) ou de `platform.claude.com` liberado.

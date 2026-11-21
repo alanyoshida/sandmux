@@ -1,17 +1,12 @@
-sandmux 0.1.23, antes da v1: o processo de cada conexão.
+sandmux 0.1.31, antes da v1: o registro dos arquivos pelo kernel mostra as aberturas de leitura e escrita como `rw`.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
-## Novidades
+## Correção
 
-- **Processo de cada conexão:** cada conexão TCP e UDP de uma aba no registro de rede diz qual processo a abriu, com o pid e o executável. Dá para separar a chamada de inferência do harness de um `curl` lançado por uma ferramenta ou de um pacote baixado por um `npm install`. Os argumentos ficam no registro de execuções, pelo pid.
-  - Com o auxiliar root (`sandmux-helper`) e o BPF LSM ativos, o processo das conexões TCP vem do kernel, registrado no `connect`.
-  - Sem eles, e no UDP, o gateway acha o dono do socket no começo da conexão, sem root. Isso custa cerca de 1 ms por conexão. A linha diz a fonte (`proc_via`).
-  - `sandmux net` ganha a coluna do processo, e a tela de rede da TUI mostra o processo da linha.
-  - As linhas do Docker privado ficam sem processo.
-  - Detalhes em [docs/network.md](https://github.com/alanyoshida/sandmux/blob/main/docs/network.md#processo-de-cada-conexão).
+- **`rw` no registro pelo kernel:** numa aba com os [arquivos pelo kernel](https://github.com/alanyoshida/sandmux/blob/main/docs/files.md#pelo-kernel), uma abertura de leitura e escrita aparecia como `w`, e a mesma abertura numa aba pelo supervisor aparece como `rw`. Agora o registro diz `r`, `w` ou `rw` nos dois casos, também numa abertura bloqueada. Ler um arquivo e depois abri-lo para leitura e escrita dá as duas linhas.
 
-Esta versão muda o protocolo entre o cliente e o daemon (42), o auxiliar root e o lançador. Depois de atualizar, rode `sandmux setup` (que reinicia o auxiliar) e `sandmux daemon restart`, e abra a TUI de novo.
+Esta versão muda o auxiliar root. Depois de atualizar, atualize o auxiliar (`sandmux setup`); até lá, uma abertura de leitura e escrita continua aparecendo como `w`. O protocolo entre o cliente e o daemon não muda.
 
 ## Instalar
 
@@ -21,4 +16,4 @@ curl -fsSL https://github.com/alanyoshida/sandmux/releases/latest/download/insta
 
 O script pede `sudo` para instalar em `/usr/local/bin` e o perfil do AppArmor do lançador; sem `sudo`, instala em `~/.local/bin`. Também há `.deb`, `.rpm` e o tarball. Depois de instalar por pacote ou por `cargo install`, rode `sandmux setup`.
 
-Requisitos: Linux `x86_64` com kernel 6.12 ou mais novo (Landlock ABI 6) e user namespaces sem privilégio. Testado no Ubuntu 26.04, e em contêineres do Debian 13, do Fedora atual e do Arch. Detalhes em [docs/install.md](https://github.com/alanyoshida/sandmux/blob/main/docs/install.md).
+Requisitos: Linux `x86_64` com kernel 6.12 ou mais novo (Landlock ABI 6), ou o 6.8 do Ubuntu 24.04 com o auxiliar root, e user namespaces sem privilégio. Testado no Ubuntu 26.04, no Ubuntu 24.04 (numa VM) e em contêineres do Debian 13, do Fedora atual e do Arch. Detalhes em [docs/install.md](https://github.com/alanyoshida/sandmux/blob/main/docs/install.md).

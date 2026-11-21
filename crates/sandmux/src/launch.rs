@@ -72,6 +72,13 @@ pub fn runner_path() -> PathBuf {
 /// Motivo curto de uma máquina sem suporte.
 pub fn short_reason(r: &SupportReport) -> String {
     if !r.landlock_ok() {
+        if let Some(Err(e)) = &r.helper {
+            return trf!(
+                "Landlock ABI {} encontrado, e o auxiliar root não completa o confinamento: {e}",
+                "Landlock ABI {} found, and the root helper does not complete the confinement: {e}",
+                r.landlock_abi
+            );
+        }
         return trf!(
             "Landlock ABI {} encontrado, exige {}",
             "Landlock ABI {} found, requires {}",
@@ -421,6 +428,11 @@ pub fn prepare_with(
             ));
         }
     }
+    // O substituto do bubblewrap: o próprio lançador, com outro nome.
+    let shim = runner_path();
+    if shim.is_file() {
+        run.bwrap_bin = Some(shim);
+    }
     if opts.harness == sandmux_policy::assistant::HARNESS {
         let bin = runner_path().with_file_name("sandmux-chat");
         if !bin.is_file() {
@@ -507,6 +519,15 @@ pub fn prepare_with(
             )
             .into(),
         ),
+        // E por `kernel` quando o lançador pede os arquivos da aba e o
+        // auxiliar aceita (o motivo, quando não aceita).
+        files: policy_file.is_some().then(|| {
+            tr!(
+                "supervisor: aguardando o lançamento",
+                "supervisor: waiting for the launch"
+            )
+            .into()
+        }),
     };
     for d in &composed.dirs_to_create {
         if d.starts_with(&host.data_dir) {

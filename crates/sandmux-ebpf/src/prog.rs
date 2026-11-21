@@ -31,10 +31,19 @@ pub const PROTECT: u32 = 2;
 /// não pode ser apagado nem renomeado.
 pub const GITDIR: u32 = 4;
 
+/// Segredo de uma aba: a abertura devolve `ENOENT`, como o segredo escondido
+/// do supervisor; num diretório, nada entra nem sai (`EACCES`).
+pub const SECRET: u32 = 8;
+/// Negado pela política de arquivos de uma aba (`file-deny`): `EACCES`.
+pub const FDENY: u32 = 16;
+
 /// Nomes que não podem ser criados num diretório git.
 pub const GIT_RESERVED: [&str; 4] = ["commondir", "hooks", "config", "config.worktree"];
 
+const FMODE_READ: i32 = 0x1;
 const FMODE_WRITE: i32 = 0x2;
+/// Os bits do modo que vão nos eventos de abertura: leitura e escrita.
+const FMODE_RW: i32 = FMODE_READ | FMODE_WRITE;
 
 /// Os ganchos usados e o parâmetro que cada um examina.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,16 +103,29 @@ pub struct Layout {
     pub fn_ringbuf_output: i32,
     pub fn_probe_read_kernel_str: i32,
     pub fn_map_lookup_elem: i32,
+    pub fn_set_retval: i32,
+    pub fn_d_path: i32,
+    pub fn_ktime_get_ns: i32,
+    pub fn_map_update_elem: i32,
+    pub fn_map_delete_elem: i32,
     pub map_ringbuf: u32,
+    pub map_lru_hash: u32,
     pub map_array: u32,
+    pub map_hash: u32,
     inode_ino: i16,
     inode_ino_size: Size,
+    inode_gen: i16,
+    inode_gen_size: Size,
     inode_sb: i16,
     sb_dev: i16,
     sb_dev_size: Size,
     file_inode: i16,
     file_mode: i16,
     file_mode_size: Size,
+    file_path: i16,
+    path_mnt: i16,
+    /// Do `vfsmount` (dentro da `struct mount`) até o `mnt_id`.
+    vfsmount_to_mnt_id: i32,
     d_inode: i16,
     d_name_name: i16,
     d_name_len: i16,
@@ -143,16 +165,29 @@ impl Layout {
             fn_ringbuf_output: uapi(b, "BPF_FUNC_ringbuf_output")? as i32,
             fn_probe_read_kernel_str: uapi(b, "BPF_FUNC_probe_read_kernel_str")? as i32,
             fn_map_lookup_elem: uapi(b, "BPF_FUNC_map_lookup_elem")? as i32,
+            fn_set_retval: uapi(b, "BPF_FUNC_set_retval")? as i32,
+            fn_d_path: uapi(b, "BPF_FUNC_d_path")? as i32,
+            fn_ktime_get_ns: uapi(b, "BPF_FUNC_ktime_get_ns")? as i32,
+            fn_map_update_elem: uapi(b, "BPF_FUNC_map_update_elem")? as i32,
+            fn_map_delete_elem: uapi(b, "BPF_FUNC_map_delete_elem")? as i32,
             map_ringbuf: uapi(b, "BPF_MAP_TYPE_RINGBUF")? as u32,
+            map_lru_hash: uapi(b, "BPF_MAP_TYPE_LRU_HASH")? as u32,
             map_array: uapi(b, "BPF_MAP_TYPE_ARRAY")? as u32,
+            map_hash: uapi(b, "BPF_MAP_TYPE_HASH")? as u32,
             inode_ino: off(b, "inode", "i_ino")?,
             inode_ino_size: Size::of(b.field_size("inode", "i_ino")?)?,
+            inode_gen: off(b, "inode", "i_generation")?,
+            inode_gen_size: Size::of(b.field_size("inode", "i_generation")?)?,
             inode_sb: off(b, "inode", "i_sb")?,
             sb_dev: off(b, "super_block", "s_dev")?,
             sb_dev_size: Size::of(b.field_size("super_block", "s_dev")?)?,
             file_inode: off(b, "file", "f_inode")?,
             file_mode: off(b, "file", "f_mode")?,
             file_mode_size: Size::of(b.field_size("file", "f_mode")?)?,
+            file_path: off(b, "file", "f_path")?,
+            path_mnt: off(b, "path", "mnt")?,
+            vfsmount_to_mnt_id: b.offset("mount", "mnt_id")? as i32
+                - b.offset("mount", "mnt")? as i32,
             d_inode: off(b, "dentry", "d_inode")?,
             d_name_name: off(b, "dentry", "d_name.name")?,
             d_name_len: off(b, "dentry", "d_name.len")?,
@@ -206,17 +241,43 @@ pub struct EventMaps {
     /// O `s_dev` do superbloco da pasta de trabalho, no formato do kernel; 0
     /// manda as criações de qualquer sistema de arquivos.
     pub workdir_dev: u32,
+    /// O mapa dos `mnt_id` cujas aberturas vão para a fila (o registro de
+    /// arquivos de uma aba); `None`, sem eventos de abertura.
+    pub open_mnts_fd: Option<i32>,
+    /// O mapa LRU das aberturas já mandadas ([`OPENED_ENTRIES`]): a chave
+    /// [`OPENED_KEY`] e a hora do último evento. Só com `open_mnts_fd`.
+    pub opened_fd: Option<i32>,
 }
+
+/// Entradas do mapa das aberturas já mandadas de uma aba.
+pub const OPENED_ENTRIES: u32 = 16384;
+/// A chave do mapa: o inode (u64), o `s_dev` do superbloco, o
+/// `i_generation`, o modo (`FMODE_READ` e `FMODE_WRITE`) e 4 bytes zerados.
+pub const OPENED_KEY: u32 = 24;
+/// Uma abertura do mesmo arquivo, no mesmo modo, dentro desta janela desde o
+/// último evento não manda outro.
+pub const OPENED_WINDOW_NS: i32 = 1_000_000_000;
 
 /// Onde o evento é montado na pilha, e a chave do contador.
 const EV: i16 = -320;
 const KEY: i16 = -328;
+const MNT: i16 = -336;
+/// A chave do mapa das aberturas ([`OPENED_KEY`] bytes) e a hora lida.
+const OKEY: i16 = -360;
+const NOW: i16 = -368;
 
 struct Gen<'a> {
     a: Asm,
     l: &'a Layout,
     map_fd: i32,
     deny: Label,
+    /// Negação com `ENOENT` (segredo) e com `EACCES` (`file-deny`).
+    deny_noent: Label,
+    deny_acces: Label,
+    /// Os finais acima foram usados (o verificador recusa código
+    /// inalcançável: só os usados são montados).
+    used_noent: bool,
+    used_acces: bool,
     ev: Option<EventMaps>,
     hook: i32,
 }
@@ -225,6 +286,26 @@ impl Gen<'_> {
     /// Nega se o inode em `inode` (ponteiro confiável, talvez nulo) tem algum
     /// bit de `mask`.
     fn check(&mut self, inode: Reg, mask: u32, write: bool) {
+        let to = self.deny;
+        self.check_to(inode, mask, write, to);
+    }
+
+    /// As marcas das abas primeiro (`SECRET` com `ENOENT`, quando `secret`, e
+    /// `FDENY` com `EACCES`), depois as do Docker em `mask` (`EPERM`).
+    fn check_all(&mut self, inode: Reg, mask: u32, write: bool, secret: bool) {
+        if secret {
+            let to = self.deny_noent;
+            self.check_to(inode, SECRET, write, to);
+        }
+        let to = self.deny_acces;
+        let tab = if secret { FDENY } else { FDENY | SECRET };
+        self.check_to(inode, tab, write, to);
+        self.check(inode, mask, write);
+    }
+
+    fn check_to(&mut self, inode: Reg, mask: u32, write: bool, to: Label) {
+        self.used_noent |= to == self.deny_noent;
+        self.used_acces |= to == self.deny_acces;
         let next = self.a.label();
         self.a.jmp_imm(Cond::Eq, inode, 0, next);
         self.a.mov(R2, inode);
@@ -237,12 +318,138 @@ impl Gen<'_> {
         self.a.alu_imm(Alu::And, R1, mask as i32);
         self.a.jmp_imm(Cond::Eq, R1, 0, next);
         self.deny_event(inode, write);
-        self.a.ja(self.deny);
+        self.a.ja(to);
         self.a.bind(next);
     }
 
+    /// Manda o evento de abertura do arquivo em R8 (confiável; o inode em R7),
+    /// só quando a montagem dele está no mapa das registradas: o `mnt_id`, o
+    /// caminho por `bpf_d_path` (só os bytes escritos) e se grava. Uma
+    /// abertura do mesmo arquivo e modo com evento há menos de
+    /// [`OPENED_WINDOW_NS`] não manda outro; a hora só é gravada quando o
+    /// evento coube na fila.
+    fn open_event(&mut self, skip: Label) {
+        let Some(ev) = self.ev else { return };
+        let Some(mnts) = ev.open_mnts_fd else { return };
+        let l = self.l;
+        let fresh = self.a.label();
+        let a = &mut self.a;
+        // O `mnt_id` da `struct mount` do arquivo (fora do `vfsmount` que o
+        // verificador conhece: por `probe_read_kernel`).
+        a.ldx(Size::DW, R3, R8, l.file_path + l.path_mnt);
+        a.jmp_imm(Cond::Eq, R3, 0, skip);
+        a.alu_imm(Alu::Add, R3, l.vfsmount_to_mnt_id);
+        a.st(Size::DW, R10, MNT, 0);
+        a.mov(R1, R10);
+        a.alu_imm(Alu::Add, R1, i32::from(MNT));
+        a.mov_imm(R2, 4);
+        a.call(l.fn_probe_read_kernel);
+        a.jmp_imm(Cond::Ne, R0, 0, skip);
+        a.ld_map_fd(R1, mnts);
+        a.mov(R2, R10);
+        a.alu_imm(Alu::Add, R2, i32::from(MNT));
+        a.call(l.fn_map_lookup_elem);
+        a.jmp_imm(Cond::Eq, R0, 0, skip);
+        if let Some(opened) = ev.opened_fd {
+            // A chave, com o modo, e a hora.
+            self.opened_key(R7, skip);
+            let a = &mut self.a;
+            a.ldx(l.file_mode_size, R1, R8, l.file_mode);
+            a.alu_imm(Alu::And, R1, FMODE_RW);
+            a.stx(Size::W, R10, OKEY + 16, R1);
+            a.call(l.fn_ktime_get_ns);
+            a.stx(Size::DW, R10, NOW, R0);
+            a.ld_map_fd(R1, opened);
+            a.mov(R2, R10);
+            a.alu_imm(Alu::Add, R2, i32::from(OKEY));
+            a.call(l.fn_map_lookup_elem);
+            a.jmp_imm(Cond::Eq, R0, 0, fresh);
+            a.ldx(Size::DW, R1, R0, 0);
+            a.ldx(Size::DW, R2, R10, NOW);
+            a.alu_reg(Alu::Sub, R2, R1);
+            a.jmp_imm(Cond::Gt, R2, OPENED_WINDOW_NS - 1, fresh);
+            a.ja(skip);
+        }
+        self.a.bind(fresh);
+        let a = &mut self.a;
+        a.st(Size::W, R10, EV, crate::ring::EV_OPEN as i32);
+        a.st(Size::W, R10, EV + 4, self.hook);
+        a.st(Size::W, R10, EV + 8, 0);
+        a.ldx(l.file_mode_size, R1, R8, l.file_mode);
+        a.alu_imm(Alu::And, R1, FMODE_RW);
+        a.stx(Size::W, R10, EV + 12, R1);
+        a.ldx(l.inode_ino_size, R2, R7, l.inode_ino);
+        a.stx(Size::DW, R10, EV + 16, R2);
+        a.ldx(Size::W, R1, R10, MNT);
+        a.stx(Size::W, R10, EV + 24, R1);
+        a.mov(R1, R8);
+        a.alu_imm(Alu::Add, R1, i32::from(l.file_path));
+        a.mov(R2, R10);
+        a.alu_imm(Alu::Add, R2, i32::from(EV) + crate::ring::EV_HEADER as i32);
+        a.mov_imm(R3, crate::ring::EV_NAME as i32);
+        a.call(l.fn_d_path);
+        a.stx(Size::W, R10, EV + 28, R0);
+        // Sem caminho (um erro, ou longo demais), nada vai: o daemon ignora um
+        // caminho vazio. Com caminho, só os bytes escritos.
+        a.jmp_imm(Cond::Eq, R0, 0, skip);
+        a.jmp_imm(Cond::Gt, R0, crate::ring::EV_NAME as i32, skip);
+        a.mov(R3, R0);
+        a.alu_imm(Alu::Add, R3, crate::ring::EV_HEADER as i32);
+        self.ring_output(None, Some(skip));
+        if let Some(opened) = ev.opened_fd {
+            let a = &mut self.a;
+            a.ld_map_fd(R1, opened);
+            a.mov(R2, R10);
+            a.alu_imm(Alu::Add, R2, i32::from(OKEY));
+            a.mov(R3, R10);
+            a.alu_imm(Alu::Add, R3, i32::from(NOW));
+            a.mov_imm(R4, 0);
+            a.call(l.fn_map_update_elem);
+        }
+    }
+
+    /// Monta em `OKEY` a chave do inode em `inode` (confiável, não nulo), sem
+    /// o modo (zerado): o inode, o `s_dev` e a geração. Sem superbloco, vai
+    /// para `skip`.
+    fn opened_key(&mut self, inode: Reg, skip: Label) {
+        let l = self.l;
+        let a = &mut self.a;
+        a.ldx(l.inode_ino_size, R2, inode, l.inode_ino);
+        a.stx(Size::DW, R10, OKEY, R2);
+        a.ldx(Size::DW, R1, inode, l.inode_sb);
+        a.jmp_imm(Cond::Eq, R1, 0, skip);
+        a.ldx(l.sb_dev_size, R2, R1, l.sb_dev);
+        a.stx(Size::W, R10, OKEY + 8, R2);
+        a.ldx(l.inode_gen_size, R2, inode, l.inode_gen);
+        a.stx(Size::W, R10, OKEY + 12, R2);
+        a.st(Size::W, R10, OKEY + 16, 0);
+        a.st(Size::W, R10, OKEY + 20, 0);
+    }
+
+    /// Tira do mapa das aberturas as chaves de todos os modos do inode
+    /// em `inode` (confiável, talvez nulo): renomeado ou com um link novo, o
+    /// arquivo tem outro caminho, e a abertura seguinte vira evento.
+    fn forget_opened(&mut self, inode: Reg) {
+        let Some(opened) = self.ev.and_then(|e| e.opened_fd) else {
+            return;
+        };
+        let done = self.a.label();
+        self.a.jmp_imm(Cond::Eq, inode, 0, done);
+        self.opened_key(inode, done);
+        for mode in 0..=FMODE_RW {
+            let a = &mut self.a;
+            a.st(Size::W, R10, OKEY + 16, mode);
+            a.ld_map_fd(R1, opened);
+            a.mov(R2, R10);
+            a.alu_imm(Alu::Add, R2, i32::from(OKEY));
+            a.call(self.l.fn_map_delete_elem);
+        }
+        self.a.bind(done);
+    }
+
     /// Manda o evento de bloqueio: os bits em R1, o inode marcado em `inode`
-    /// (confiável).
+    /// (confiável). No `file_open`, o modo vem do arquivo em R8 (leitura e
+    /// escrita); nos outros ganchos, `write` dá o `FMODE_WRITE`.
     fn deny_event(&mut self, inode: Reg, write: bool) {
         if self.ev.is_none() {
             return;
@@ -251,7 +458,13 @@ impl Gen<'_> {
         a.st(Size::W, R10, EV, crate::ring::EV_DENY as i32);
         a.st(Size::W, R10, EV + 4, self.hook);
         a.stx(Size::W, R10, EV + 8, R1);
-        a.st(Size::W, R10, EV + 12, i32::from(write));
+        if HOOKS.get(self.hook as usize) == Some(&Hook::FileOpen) {
+            a.ldx(self.l.file_mode_size, R2, R8, self.l.file_mode);
+            a.alu_imm(Alu::And, R2, FMODE_RW);
+            a.stx(Size::W, R10, EV + 12, R2);
+        } else {
+            a.st(Size::W, R10, EV + 12, if write { FMODE_WRITE } else { 0 });
+        }
         a.ldx(self.l.inode_ino_size, R2, inode, self.l.inode_ino);
         a.stx(Size::DW, R10, EV + 16, R2);
         a.st(Size::W, R10, EV + 24, 0);
@@ -262,25 +475,39 @@ impl Gen<'_> {
     /// `bpf_ringbuf_output` do evento montado em `EV`, com `size` bytes; na
     /// falha (fila cheia), soma 1 ao contador.
     fn output(&mut self, size: i32) {
+        self.ring_output(Some(size), None);
+    }
+
+    /// Como [`Gen::output`]; com `size` `None`, o tamanho já está em R3. Na
+    /// falha, depois de contar, segue para `failed`, quando dado; no sucesso,
+    /// segue em frente.
+    fn ring_output(&mut self, size: Option<i32>, failed: Option<Label>) {
         let Some(ev) = self.ev else { return };
-        let done = self.a.label();
+        let sent = self.a.label();
+        // Sem `failed`, a falha termina junto com o sucesso.
+        let fail = failed.unwrap_or(sent);
         let a = &mut self.a;
         a.ld_map_fd(R1, ev.ring_fd);
         a.mov(R2, R10);
         a.alu_imm(Alu::Add, R2, i32::from(EV));
-        a.mov_imm(R3, size);
+        if let Some(size) = size {
+            a.mov_imm(R3, size);
+        }
         a.mov_imm(R4, 0);
         a.call(self.l.fn_ringbuf_output);
-        a.jmp_imm(Cond::Eq, R0, 0, done);
+        a.jmp_imm(Cond::Eq, R0, 0, sent);
         a.st(Size::W, R10, KEY, 0);
         a.ld_map_fd(R1, ev.drops_fd);
         a.mov(R2, R10);
         a.alu_imm(Alu::Add, R2, i32::from(KEY));
         a.call(self.l.fn_map_lookup_elem);
-        a.jmp_imm(Cond::Eq, R0, 0, done);
+        a.jmp_imm(Cond::Eq, R0, 0, fail);
         a.mov_imm(R1, 1);
         a.atomic_add64(R0, 0, R1);
-        a.bind(done);
+        if failed.is_some() {
+            a.ja(fail);
+        }
+        a.bind(sent);
     }
 
     /// Manda o evento de criação: diretório em R8 (confiável), dentry nova em
@@ -382,12 +609,18 @@ pub fn build(
     let mut a = Asm::new();
     let allow = a.label();
     let deny = a.label();
+    let deny_noent = a.label();
+    let deny_acces = a.label();
     let hook = HOOKS.iter().position(|x| *x == h).unwrap_or(0) as i32;
     let mut g = Gen {
         a,
         l,
         map_fd,
         deny,
+        deny_noent,
+        deny_acces,
+        used_noent: false,
+        used_acces: false,
         ev,
         hook,
     };
@@ -410,15 +643,18 @@ pub fn build(
             g.a.ldx(Size::DW, R7, R8, l.file_inode);
             g.a.ldx(l.file_mode_size, R1, R8, l.file_mode);
             let write = g.a.label();
+            let opened = g.a.label();
             g.a.jmp_imm(Cond::Set, R1, FMODE_WRITE, write);
-            g.check(R7, DENY, false);
-            g.a.ja(allow);
+            g.check_all(R7, DENY, false, true);
+            g.a.ja(opened);
             g.a.bind(write);
-            g.check(R7, DENY | PROTECT, true);
+            g.check_all(R7, DENY | PROTECT, true, true);
+            g.a.bind(opened);
+            g.open_event(allow);
         }
         Hook::InodeCreate | Hook::InodeMkdir | Hook::InodeMknod | Hook::InodeSymlink => {
             g.arg(R8, l.arg(h, "dir")?);
-            g.check(R8, dir, true);
+            g.check_all(R8, dir, true, false);
             g.arg(R9, l.arg(h, "dentry")?);
             g.reserved_names();
             if h == Hook::InodeCreate {
@@ -428,37 +664,43 @@ pub fn build(
         Hook::InodeLink => {
             g.arg(R1, l.arg(h, "old_dentry")?);
             g.d_inode(R7, R1);
-            g.check(R7, own, true);
+            g.check_all(R7, own, true, true);
             g.arg(R8, l.arg(h, "dir")?);
-            g.check(R8, dir, true);
+            g.check_all(R8, dir, true, false);
             g.arg(R9, l.arg(h, "new_dentry")?);
             g.reserved_names();
+            g.arg(R1, l.arg(h, "old_dentry")?);
+            g.d_inode(R7, R1);
+            g.forget_opened(R7);
         }
         Hook::InodeRename => {
             g.arg(R1, l.arg(h, "old_dentry")?);
             g.d_inode(R7, R1);
-            g.check(R7, own, true);
+            g.check_all(R7, own, true, true);
             g.arg(R7, l.arg(h, "old_dir")?);
-            g.check(R7, dir, true);
+            g.check_all(R7, dir, true, false);
             g.arg(R1, l.arg(h, "new_dentry")?);
             g.d_inode(R7, R1);
-            g.check(R7, own, true);
+            g.check_all(R7, own, true, true);
             g.arg(R8, l.arg(h, "new_dir")?);
-            g.check(R8, dir, true);
+            g.check_all(R8, dir, true, false);
             g.arg(R9, l.arg(h, "new_dentry")?);
             g.reserved_names();
+            g.arg(R1, l.arg(h, "old_dentry")?);
+            g.d_inode(R7, R1);
+            g.forget_opened(R7);
         }
         Hook::InodeUnlink | Hook::InodeRmdir => {
             g.arg(R7, l.arg(h, "dir")?);
-            g.check(R7, dir, true);
+            g.check_all(R7, dir, true, false);
             g.arg(R1, l.arg(h, "dentry")?);
             g.d_inode(R7, R1);
-            g.check(R7, own, true);
+            g.check_all(R7, own, true, true);
         }
         Hook::InodeSetattr => {
             g.arg(R1, l.arg(h, "dentry")?);
             g.d_inode(R7, R1);
-            g.check(R7, own, true);
+            g.check_all(R7, own, true, true);
         }
     }
     let (ok, no) = match attach {
@@ -471,6 +713,26 @@ pub fn build(
     g.a.bind(deny);
     g.a.mov_imm(R0, no);
     g.a.exit();
+    // Os outros erros: preso a um cgroup, o programa só aceita ou nega, e o
+    // erro vem do `bpf_set_retval`; no anexo global, do retorno.
+    for (label, errno, used) in [
+        (deny_noent, libc::ENOENT, g.used_noent),
+        (deny_acces, libc::EACCES, g.used_acces),
+    ] {
+        if !used {
+            continue;
+        }
+        g.a.bind(label);
+        match attach {
+            Attach::Cgroup => {
+                g.a.mov_imm(R1, -errno);
+                g.a.call(l.fn_set_retval);
+                g.a.mov_imm(R0, 0);
+            }
+            Attach::Global { .. } => g.a.mov_imm(R0, -errno),
+        }
+        g.a.exit();
+    }
     g.a.finish()
 }
 
@@ -484,6 +746,9 @@ pub struct Confinement {
     map: OwnedFd,
     ring: OwnedFd,
     drops: OwnedFd,
+    ring_size: u32,
+    _mnts: Option<OwnedFd>,
+    _opened: Option<OwnedFd>,
     _btf: OwnedFd,
     _progs: Vec<OwnedFd>,
     _links: Vec<OwnedFd>,
@@ -501,6 +766,24 @@ impl Confinement {
         attach: Attach,
         workdir_dev: u32,
     ) -> Result<Confinement, Error> {
+        Confinement::load_with(l, cgroup, attach, workdir_dev, &[])
+    }
+
+    /// Como [`Confinement::load`], com as montagens (`mnt_id`) cujas
+    /// aberturas vão para a fila: o registro de arquivos de uma aba. Com
+    /// montagens, a fila é maior ([`crate::ring::RING_SIZE_TAB`]).
+    pub fn load_with(
+        l: &Layout,
+        cgroup: RawFd,
+        attach: Attach,
+        workdir_dev: u32,
+        open_mnts: &[u32],
+    ) -> Result<Confinement, Error> {
+        let ring_size = if open_mnts.is_empty() {
+            crate::ring::RING_SIZE
+        } else {
+            crate::ring::RING_SIZE_TAB
+        };
         let btf = sys::btf_load(&crate::btf::int_btf())?;
         let map = sys::map_create(&sys::MapSpec {
             map_type: l.map_inode_storage,
@@ -515,11 +798,42 @@ impl Confinement {
             map_type: l.map_ringbuf,
             key_size: 0,
             value_size: 0,
-            max_entries: crate::ring::RING_SIZE,
+            max_entries: ring_size,
             flags: 0,
             name: "sandmux_events",
             btf: None,
         })?;
+        let mnts = if open_mnts.is_empty() {
+            None
+        } else {
+            let m = sys::map_create(&sys::MapSpec {
+                map_type: l.map_hash,
+                key_size: 4,
+                value_size: 1,
+                max_entries: 256,
+                flags: 0,
+                name: "sandmux_mnts",
+                btf: None,
+            })?;
+            for id in open_mnts.iter().take(256) {
+                sys::map_update(&m, &id.to_ne_bytes(), &[1], 0)?;
+            }
+            Some(m)
+        };
+        // As aberturas já mandadas: só com montagens a registrar.
+        let opened = if mnts.is_some() {
+            Some(sys::map_create(&sys::MapSpec {
+                map_type: l.map_lru_hash,
+                key_size: OPENED_KEY,
+                value_size: 8,
+                max_entries: OPENED_ENTRIES,
+                flags: 0,
+                name: "sandmux_opened",
+                btf: None,
+            })?)
+        } else {
+            None
+        };
         let drops = sys::map_create(&sys::MapSpec {
             map_type: l.map_array,
             key_size: 4,
@@ -533,6 +847,8 @@ impl Confinement {
             ring_fd: ring.as_raw_fd(),
             drops_fd: drops.as_raw_fd(),
             workdir_dev,
+            open_mnts_fd: mnts.as_ref().map(|m| m.as_raw_fd()),
+            opened_fd: opened.as_ref().map(|m| m.as_raw_fd()),
         };
         let mut progs = Vec::new();
         let mut links = Vec::new();
@@ -559,6 +875,9 @@ impl Confinement {
             map,
             ring,
             drops,
+            ring_size,
+            _mnts: mnts,
+            _opened: opened,
             _btf: btf,
             _progs: progs,
             _links: links,
@@ -630,6 +949,11 @@ impl Confinement {
     /// Uma cópia do descritor da fila de eventos, para a thread que a lê.
     pub fn ring(&self) -> std::io::Result<OwnedFd> {
         self.ring.try_clone()
+    }
+
+    /// O tamanho da fila (para o leitor).
+    pub fn ring_size(&self) -> u32 {
+        self.ring_size
     }
 
     /// Uma cópia do descritor do contador de eventos descartados.
@@ -709,6 +1033,8 @@ mod tests {
                         ring_fd: 4,
                         drops_fd: 5,
                         workdir_dev: 0x80_0002,
+                        open_mnts_fd: Some(6),
+                        opened_fd: Some(7),
                     }),
                 )
                 .unwrap_or_else(|e| panic!("{h:?}: {e}"));
@@ -745,7 +1071,15 @@ mod tests {
                 .collect()
         };
         let c = build(&l, Hook::InodeUnlink, 3, Attach::Cgroup, None).unwrap();
-        assert_eq!(movs(&c), [1, 0]);
+        // Aceita, nega (EPERM), e as negações por `bpf_set_retval` (ENOENT e
+        // EACCES), que devolvem 0 depois de pôr o erro.
+        assert_eq!(movs(&c), [1, 0, 0, 0]);
+        let retval: Vec<i32> = c
+            .windows(2)
+            .filter(|w| w[1].code == 0x85 && w[1].imm == l.fn_set_retval)
+            .map(|w| w[0].imm)
+            .collect();
+        assert_eq!(retval, [-libc::ENOENT, -libc::EACCES]);
         let g = build(
             &l,
             Hook::InodeUnlink,
@@ -757,7 +1091,125 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(movs(&g), [0, -libc::EPERM]);
+        assert_eq!(movs(&g), [0, -libc::EPERM, -libc::ENOENT, -libc::EACCES]);
+    }
+
+    #[test]
+    fn evento_de_abertura_so_com_montagens() {
+        let Some(l) = layout() else { return };
+        let ev = |mnts| {
+            Some(EventMaps {
+                ring_fd: 4,
+                drops_fd: 5,
+                workdir_dev: 0,
+                open_mnts_fd: mnts,
+                opened_fd: mnts.map(|_| 7),
+            })
+        };
+        let com = build(&l, Hook::FileOpen, 3, Attach::Cgroup, ev(Some(6))).unwrap();
+        assert!(com.iter().any(|i| i.code == 0x85 && i.imm == l.fn_d_path));
+        assert!(
+            com.iter()
+                .any(|i| i.code == 0x18 && i.regs == 0x11 && i.imm == 6)
+        );
+        let sem = build(&l, Hook::FileOpen, 3, Attach::Cgroup, ev(None)).unwrap();
+        assert!(!sem.iter().any(|i| i.code == 0x85 && i.imm == l.fn_d_path));
+        // Só a abertura tem o evento.
+        let outro = build(&l, Hook::InodeUnlink, 3, Attach::Cgroup, ev(Some(6))).unwrap();
+        assert!(!outro.iter().any(|i| i.code == 0x85 && i.imm == l.fn_d_path));
+    }
+
+    #[test]
+    fn modo_de_leitura_e_escrita_nos_eventos() {
+        let Some(l) = layout() else { return };
+        let ev = |mnts: Option<i32>| {
+            Some(EventMaps {
+                ring_fd: 4,
+                drops_fd: 5,
+                workdir_dev: 0,
+                open_mnts_fd: mnts,
+                opened_fd: mnts.map(|_| 7),
+            })
+        };
+        // O `f_mode` lido do arquivo e logo depois um `and` com os bits de
+        // leitura e escrita.
+        let and_rw = |p: &[Insn]| {
+            p.windows(2)
+                .filter(|w| {
+                    w[0].code & 0x07 == 0x01
+                        && w[0].off == l.file_mode
+                        && (w[1].code == 0x57 || w[1].code == 0x54)
+                        && w[1].imm == FMODE_RW
+                })
+                .count()
+        };
+        // Sem montagens a registrar (o Docker), só os bloqueios da abertura
+        // (um por marca conferida); na aba, também a chave das repetições e o
+        // evento de abertura.
+        let docker = build(&l, Hook::FileOpen, 3, Attach::Cgroup, ev(None)).unwrap();
+        assert!(and_rw(&docker) >= 1);
+        let aba = build(&l, Hook::FileOpen, 3, Attach::Cgroup, ev(Some(6))).unwrap();
+        assert_eq!(and_rw(&aba), and_rw(&docker) + 2);
+        // Os outros bloqueios gravam o `FMODE_WRITE` como constante.
+        let un = build(&l, Hook::InodeUnlink, 3, Attach::Cgroup, ev(None)).unwrap();
+        assert_eq!(and_rw(&un), 0);
+        assert!(
+            un.iter()
+                .any(|i| i.code == 0x62 && i.off == EV + 12 && i.imm == FMODE_WRITE)
+        );
+    }
+
+    #[test]
+    fn aberturas_repetidas_so_na_aba() {
+        let Some(l) = layout() else { return };
+        let ev = |mnts: Option<i32>, opened: Option<i32>| {
+            Some(EventMaps {
+                ring_fd: 4,
+                drops_fd: 5,
+                workdir_dev: 0,
+                open_mnts_fd: mnts,
+                opened_fd: opened,
+            })
+        };
+        let calls = |p: &[Insn], f: i32| p.iter().filter(|i| i.code == 0x85 && i.imm == f).count();
+        let usa = |p: &[Insn], fd: i32| {
+            p.iter()
+                .any(|i| i.code == 0x18 && i.regs == 0x11 && i.imm == fd)
+        };
+        let aba = build(&l, Hook::FileOpen, 3, Attach::Cgroup, ev(Some(6), Some(7))).unwrap();
+        assert!(usa(&aba, 7));
+        assert_eq!(calls(&aba, l.fn_ktime_get_ns), 1);
+        assert_eq!(calls(&aba, l.fn_map_update_elem), 1);
+        // O tamanho do evento vem do `bpf_d_path` (`mov r3, r0`), e não de uma
+        // constante.
+        assert!(aba.iter().any(|i| i.code == 0xbf && i.regs == 0x03));
+        // A janela, comparada sem sinal.
+        assert!(
+            aba.iter()
+                .any(|i| i.code == 0x25 && i.imm == OPENED_WINDOW_NS - 1)
+        );
+        for h in [Hook::InodeRename, Hook::InodeLink] {
+            let p = build(&l, h, 3, Attach::Cgroup, ev(Some(6), Some(7))).unwrap();
+            // As chaves dos quatro modos (0 a 3).
+            assert_eq!(calls(&p, l.fn_map_delete_elem), 4, "{h:?}");
+            assert!(usa(&p, 7), "{h:?}");
+        }
+        let outro = build(
+            &l,
+            Hook::InodeUnlink,
+            3,
+            Attach::Cgroup,
+            ev(Some(6), Some(7)),
+        )
+        .unwrap();
+        assert_eq!(calls(&outro, l.fn_map_delete_elem), 0);
+        // O Docker: sem montagens, sem o mapa.
+        for h in HOOKS {
+            let p = build(&l, h, 3, Attach::Cgroup, ev(None, None)).unwrap();
+            assert_eq!(calls(&p, l.fn_ktime_get_ns), 0, "{h:?}");
+            assert_eq!(calls(&p, l.fn_map_delete_elem), 0, "{h:?}");
+            assert_eq!(calls(&p, l.fn_map_update_elem), 0, "{h:?}");
+        }
     }
 
     #[test]

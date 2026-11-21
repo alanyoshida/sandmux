@@ -252,7 +252,7 @@ impl Engines {
         let mut opts = LaunchOptions::new("shell");
         opts.workdir = workdir.clone();
         if let Ok(eff) = launch::effective(&host, &opts) {
-            files.refresh(Some(eff.file_policy(&host.home, &workdir)));
+            let _ = files.refresh(Some(eff.file_policy(&host.home, &workdir)));
         }
     }
 
@@ -769,6 +769,11 @@ fn stop_engine(mut e: Engine) {
         if let Some(name) = cg.file_name().and_then(|n| n.to_str()) {
             let _ = systemctl().args(["--user", "stop", name]).output();
         }
+    }
+    // Sem processo nenhum, a conexão com o auxiliar fecha (a thread dos
+    // eventos segura o `Files`, e o confinamento ficaria no auxiliar).
+    if let Some(h) = &e.helper {
+        h.files.stop();
     }
     if let Some(g) = e.gateway.take() {
         g.shutdown(Duration::from_secs(1));

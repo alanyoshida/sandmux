@@ -32,6 +32,14 @@ fn main() {
     // O idioma vem do daemon por SANDMUX_LANG.
     sandmux_spec::lang::set(sandmux_spec::lang::resolve_env(None));
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Chamado como `bwrap`: o substituto do bubblewrap dentro do sandbox.
+    if std::env::args().next().is_some_and(|a0| {
+        std::path::Path::new(&a0)
+            .file_name()
+            .is_some_and(|n| n == "bwrap")
+    }) {
+        exit(sandmux_launcher::bwrap::main(&args));
+    }
     if args.as_slice() == ["--check"] {
         print!("{}", sandmux_launcher::support::check().to_wire());
         exit(0);

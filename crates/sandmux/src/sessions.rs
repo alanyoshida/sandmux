@@ -564,6 +564,13 @@ pub fn policy_lines(p: &sandmux_proto::msg::PolicySummary) -> Vec<String> {
         };
         l.push(trf!("execuções: {e}", "executions: {e}"));
     }
+    if let Some(f) = &p.files {
+        let f = match f.as_str() {
+            "kernel" => tr!("pelo kernel", "by the kernel").to_string(),
+            x => x.to_string(),
+        };
+        l.push(trf!("aberturas de arquivo: {f}", "file opens: {f}"));
+    }
     if p.pass_env.is_empty() {
         l.push(tr!("pass-env: nenhuma", "pass-env: none").into());
     } else {

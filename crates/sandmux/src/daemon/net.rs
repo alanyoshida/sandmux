@@ -170,6 +170,16 @@ pub fn recompile(shared: &Shared, id: u32) -> anyhow::Result<Recompiled> {
                 .and_then(|b| serde_json::from_slice::<sandmux_spec::files::FilePolicy>(&b).ok())
                 .and_then(|o| o.exec_log);
             crate::launch::write_file_policy(&f, &p)?;
+            // A aba confinada pelo kernel: as marcas acompanham a política.
+            let files = shared
+                .lock()
+                .sessions
+                .values()
+                .find(|s| s.tags.last() == Some(tag))
+                .and_then(|s| s.tab_kernel.as_ref().and_then(|t| t.files.clone()));
+            if let Some(files) = files {
+                let _ = files.refresh(Some(p.clone()));
+            }
         }
     }
     let new = eff

@@ -303,6 +303,15 @@ pub struct Usage {
     pub processes_max: Option<u64>,
 }
 
+/// O escopo de um sandbox no auxiliar root, para o daemon registrá-lo de
+/// novo: o processo 1 (no host), o filtro de `ioctl` e os dispositivos.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabScope {
+    pub init_pid: u32,
+    pub ioctl: bool,
+    pub devs: Vec<(u32, u32)>,
+}
+
 /// O que foi aplicado no lançamento de uma sessão: a proteção ativa.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PolicySummary {
@@ -332,6 +341,10 @@ pub struct PolicySummary {
     /// `supervisor: <motivo>` (protocolo 41).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exec: Option<String>,
+    /// Quem decide e registra as aberturas de arquivo: `kernel` ou
+    /// `supervisor: <motivo>` (protocolo 43).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<String>,
 }
 
 /// Consumo do Docker privado da pasta de uma sessão.
@@ -696,6 +709,24 @@ pub enum Msg {
         ip: String,
         port: u16,
     },
+    /// O lançador da aba `tag` pede o confinamento dos arquivos pelo kernel,
+    /// antes de liberar o comando; `mounts` são as montagens (`mnt_id`) das
+    /// pastas do registro, e `roots` e `exclude` as pastas na visão do
+    /// agente, que filtram as aberturas (protocolo 43). O processo vem das
+    /// credenciais do socket.
+    ConfineTab {
+        tag: String,
+        mounts: Vec<u32>,
+        #[serde(default)]
+        roots: Vec<PathBuf>,
+        #[serde(default)]
+        exclude: Vec<PathBuf>,
+        /// O escopo do sandbox pelo auxiliar root (Landlock abaixo do ABI
+        /// 6): com ele, o user namespace vem logo depois do quadro, num byte
+        /// com o descritor por `SCM_RIGHTS` (protocolo 44).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<TabScope>,
+    },
     /// Tokens reais capturados numa resposta de login (papel e valor), do
     /// gateway de um lançamento ao daemon, que os guarda e devolve os falsos
     /// (protocolo 26). `harness` é o dono do login (`claude`, `agy`), que
@@ -833,6 +864,16 @@ pub enum Msg {
         pid: Option<u32>,
         exe: Option<String>,
         kernel: bool,
+    },
+    /// Resposta ao `ConfineTab`: os arquivos da aba pelo kernel, ou o motivo
+    /// de ficar com o supervisor (protocolo 43).
+    ConfineTabReply {
+        kernel: bool,
+        reason: Option<String>,
+        /// O daemon vigia o escopo do sandbox e o registra de novo quando o
+        /// auxiliar reinicia (protocolo 44).
+        #[serde(default)]
+        scope: bool,
     },
     StatusInfo {
         pid: u32,

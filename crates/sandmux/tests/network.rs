@@ -687,6 +687,13 @@ fn host_get(port: u16) -> Option<String> {
     (!out.is_empty()).then_some(out)
 }
 
+/// Espera, no shell do sandbox, o arquivo `nome` na pasta de trabalho (até
+/// 60 s): o teste o cria depois das conferências, e o servidor não morre por
+/// tempo numa máquina ocupada.
+fn until_file(nome: &str) -> String {
+    format!("t=0; while [ ! -e {nome} ] && [ $t -lt 300 ]; do sleep 0.2; t=$((t+1)); done")
+}
+
 fn wait_until(secs: u64, f: impl Fn() -> bool) -> bool {
     let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     while std::time::Instant::now() < end {
@@ -704,32 +711,39 @@ fn porta_do_sandbox_publicada_no_host() {
     let p = free_port();
     let other = free_port();
     let script = format!(
-        "python3 -m http.server {p} --bind 0.0.0.0 >/dev/null 2>&1 & S=$!; python3 -m http.server {other} --bind 10.0.2.100 >/dev/null 2>&1 & sleep 4; kill $S; sleep 3"
+        "python3 -m http.server {p} --bind 0.0.0.0 >/dev/null 2>&1 & S=$!; python3 -m http.server {other} --bind 10.0.2.100 >/dev/null 2>&1 & {}; kill $S; {}",
+        until_file(".parar"),
+        until_file(".fim")
     );
     let mut child = env
         .cmd(&env.work, &["run", "shell", "--", "-c", &script])
         .spawn()
         .unwrap();
+    let file = env
+        .runtime
+        .join(format!("sandmux/net/run-{}.ports.json", child.id()));
     assert!(
-        wait_until(4, || host_get(p).is_some_and(|r| r.contains("200 OK"))),
-        "a porta {p} não foi publicada"
+        wait_until(10, || host_get(p).is_some_and(|r| r.contains("200 OK"))),
+        "a porta {p} não foi publicada; lista: {:?}; resposta: {:?}",
+        std::fs::read_to_string(&file),
+        host_get(p).map(|r| r.lines().next().unwrap_or("").to_string())
     );
     // Só no 10.0.2.100 do sandbox: não publicada.
     assert!(host_get(other).is_none());
     // A lista do lançamento.
-    let file = env
-        .runtime
-        .join(format!("sandmux/net/run-{}.ports.json", child.id()));
     let list = std::fs::read_to_string(&file).unwrap();
     assert!(
         list.contains(&format!("\"guest\":{p},\"host\":{p}")),
         "{list}"
     );
     // Servidor encerrado: a porta do host fecha.
+    std::fs::write(env.work.join(".parar"), "").unwrap();
     assert!(
-        wait_until(4, || host_get(p).is_none()),
-        "a porta {p} continuou aberta"
+        wait_until(10, || host_get(p).is_none()),
+        "a porta {p} continuou aberta; lista: {:?}",
+        std::fs::read_to_string(&file)
     );
+    std::fs::write(env.work.join(".fim"), "").unwrap();
     assert!(child.wait().unwrap().success());
     assert!(!file.exists(), "a lista ficou depois do fim");
 }
@@ -798,7 +812,8 @@ fn allowlist_de_portas_endereco_e_registro() {
     let env = Env::new();
     let (wide, local, out) = (free_port(), free_port(), free_port());
     let script = format!(
-        "for p in {wide} {local} {out}; do python3 -m http.server $p --bind 0.0.0.0 >/dev/null 2>&1 & done; sleep 8"
+        "for p in {wide} {local} {out}; do python3 -m http.server $p --bind 0.0.0.0 >/dev/null 2>&1 & done; {}",
+        until_file(".parar")
     );
     let wide_rule = format!("{wide}@0.0.0.0");
     let local_rule = local.to_string();
@@ -819,10 +834,16 @@ fn allowlist_de_portas_endereco_e_registro() {
         )
         .spawn()
         .unwrap();
+    let file = env
+        .runtime
+        .join(format!("sandmux/net/run-{}.ports.json", child.id()));
     assert!(
-        wait_until(5, || host_get(wide).is_some_and(|r| r.contains("200 OK"))
+        wait_until(10, || host_get(wide).is_some_and(|r| r.contains("200 OK"))
             && host_get(local).is_some_and(|r| r.contains("200 OK"))),
-        "as portas da allowlist não foram publicadas"
+        "as portas da allowlist não foram publicadas; lista: {:?}; respostas: {:?} {:?}",
+        std::fs::read_to_string(&file),
+        host_get(wide).map(|r| r.lines().next().unwrap_or("").to_string()),
+        host_get(local).map(|r| r.lines().next().unwrap_or("").to_string())
     );
     // Fora da allowlist: não publicada.
     assert!(host_get(out).is_none(), "a porta {out} foi publicada");
@@ -831,9 +852,6 @@ fn allowlist_de_portas_endereco_e_registro() {
         assert!(get_at(ip, wide).is_some_and(|r| r.contains("200 OK")));
         assert!(get_at(ip, local).is_none(), "a {local} aceitou por {ip}");
     }
-    let file = env
-        .runtime
-        .join(format!("sandmux/net/run-{}.ports.json", child.id()));
     let list = std::fs::read_to_string(&file).unwrap();
     assert!(
         list.contains(&format!(
@@ -841,6 +859,7 @@ fn allowlist_de_portas_endereco_e_registro() {
         )),
         "{list}"
     );
+    std::fs::write(env.work.join(".parar"), "").unwrap();
     assert!(child.wait().unwrap().success());
     // Cada conexão aceita vira uma linha `inbound`.
     let inbound: Vec<_> = log_lines(&env)

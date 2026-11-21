@@ -6,6 +6,7 @@
 //! seccomp) e executa o comando dentro dele. Não conhece harnesses nem
 //! política.
 
+pub mod bwrap;
 mod connector;
 pub mod enter;
 pub mod files;
@@ -16,9 +17,13 @@ mod mounts;
 mod namer;
 mod net;
 mod relay;
+pub mod scope;
 pub mod seccomp;
 pub mod support;
 mod sys;
+mod viewmounts;
 
 pub use landlock_rules::REQUIRED_ABI;
-pub use launch::{EXIT_EXEC, EXIT_SETUP, LaunchError, check_kernel, exec_view, launch};
+pub use launch::{
+    EXIT_EXEC, EXIT_SETUP, KernelLevel, LaunchError, check_kernel, exec_view, launch,
+};

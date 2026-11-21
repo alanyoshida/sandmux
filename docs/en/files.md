@@ -2,7 +2,7 @@
 
 > Português: [files.md](../files.md)
 
-sandmux sees every file open by the agent, with the agent running, and logs the accesses to the agent's folders. It also denies and allows files on the spot and hides the secret-looking files of the work folder.
+sandmux sees every file open by the agent, with the agent running, and logs the accesses to the agent's folders. It also denies and allows files on the spot and hides the secret-looking files of the work folder. The decision is made by the sandbox supervisor or, with the root helper, by the [kernel](#by-the-kernel).
 
 ## How it works
 
@@ -20,6 +20,36 @@ Special cases:
 - **`/proc/self`, `/dev/fd/<n>`, `/dev/stdin`:** are translated to the process itself, and `cat <(echo hi)` works. `/proc/net`, `/proc/mounts` and `/etc/mtab` too.
 - **Magic links of other processes** (`/proc/<pid>/fd`, `cwd`, `root`, `exe`): refused with `EACCES`. Tools like `lsof` do not see the open files of other processes inside the sandbox.
 - **`O_PATH`:** goes through the kernel, under Landlock, without logging. An `O_PATH` descriptor gives no access to the content; reading requires another open, which goes through the supervisor.
+
+## By the kernel
+
+With the [root helper](helper.md) and the BPF LSM, a tab's opens leave the supervisor: the kernel decides and logs, without the round trip of each `open`. The daemon attaches the confinement BPF LSM programs to the tab, the same ones as the [private Docker](docker.md#ebpf-confinement), and marks the files by inode:
+
+- the secret-looking files of the work folder give `ENOENT`, as with the supervisor;
+- the `file-deny` ones, with what exists inside the denied folders, give `EACCES`;
+- `.git` is protected as in Docker.
+
+The opens in the agent's folders arrive through the kernel queue, with the path in the agent's view, and go into the log like the supervisor's. Only the mounts of those folders send events: the system, the toolchains and the caches do not go through the queue.
+
+It applies on its own when all of this exists; without one of them, the tab stays with the supervisor, and the summary says why:
+
+- a daemon session (`run` without a terminal stays with the supervisor);
+- the BPF LSM active and the root helper, in a version that confines tabs;
+- the tab's own scope in the user systemd (the same as the [caps](limits.md));
+- a `file-deny` with paths inside the work folder only. A name (`*.sql`) or a path outside may apply in any folder, and the marks cover the work folder only.
+
+The launcher asks the daemon after it builds the sandbox root and before it creates the command, and waits up to 10 s for the answer. In kernel mode, the command has no open filter; the execution filter stays when executions are logged by the supervisor. The entry shell (`Ctrl+b t`) follows the tab's mode: in a kernel tab it also has no open filter, and the kernel decides and logs its opens. It already runs in the tab's scope, where the programs are attached. An entry request that arrives before the daemon's answer waits up to 15 s and, without it, stays with the supervisor. In a tab launched by an earlier version, the shell stays with the supervisor until the tab is restarted.
+
+Differences from the supervisor:
+
+- **New files from the host:** a secret, or a file in a denied folder, created outside the sandbox during the session is marked by the folder watch (inotify, or the scan every 10 s without watches) within ~1 s. In that window, the agent can open the file. The secrets the agent itself creates stay its own, as with the supervisor.
+- **Live policy:** denying and allowing on the spot mark and unmark the files within 1 s.
+- **Access:** the line says `r`, `w` or `rw`, as with the supervisor, also for a blocked open. With a helper older than version 0.1.31, a read-write open shows as `w` until `sandmux setup` updates it.
+- **Bulk reads:** the log comes out complete. The kernel does not send again the open of a file, in the same mode, less than 1 s after the last one. Renaming the file or creating a link to it, from inside the tab, makes the next open go into the log with the new path. When the queue fills anyway, the helper freezes the tab for a few milliseconds, until the queue drains ([the events](helper.md#a-tabs-files)). A file renamed on the host during the session and opened by the new name less than 1 s after the last open by the old name stays in the log with the old name only. The same holds for a file seen through two of the agent's folders.
+- **Helper drop:** without the marks, nothing runs in the tab. The daemon freezes its scope (`cgroup.freeze`) until the helper is back (systemd starts it on the next connection) and redoes the confinement, with the current policy; the tab goes on where it stopped. Without the confinement back within 30 s, the daemon kills everything in the scope (`cgroup.kill`). On a clean exit of the helper (`systemctl restart`, an upgrade), it tells the daemon before dropping the rules; killed by force, a short window is left between the exit and the freeze.
+- **Special cases:** magic links and `/proc/self` follow the kernel and Landlock rules; a marked file stays denied through any path, because the mark belongs to the inode.
+
+The launch protection, in `sandmux stats <id>` and in the panel, shows the "file opens" line: "by the kernel" or "supervisor: <reason>". `sandmux doctor` shows whether the kernel path can apply on this machine.
 
 ## File policy
 
@@ -94,6 +124,8 @@ How it works: a supervisor helper enters the sandbox's user namespace and create
 ## Cost
 
 Measured on the reference machine (median of 3 runs): `opencode --version` 1.0x; hermes importing the CLI 1.1x to 1.2x; incremental `cargo check` 1.2x to 1.3x; reading 13 thousand files in a row 3.2x. Four supervisor threads serve the opens.
+
+[By the kernel](#by-the-kernel), in an Ubuntu 24.04 VM (median of 3 runs, against the same work outside the sandbox): reading 13 thousand files of the work folder 1.05x on kernel 6.8 and 1.14x on 7.0, against 2.7x and 3.0x for the supervisor in the same VM (measured on 2026-11-21, with repeats removed in the kernel); the Python module import stays the same as outside (the system does not go through the queue).
 
 ## Log
 
