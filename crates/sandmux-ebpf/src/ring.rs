@@ -26,6 +26,8 @@ pub const EV_DENY: u32 = 1;
 pub const EV_CREATE: u32 = 2;
 pub const EV_EXEC: u32 = 3;
 pub const EV_CONN: u32 = 4;
+/// Saída de um processo observado (só o cabeçalho, sem nome nem argumentos).
+pub const EV_EXIT: u32 = 5;
 
 /// Tamanho do evento de conexão.
 pub const CONN_EVENT: usize = 48;
@@ -78,11 +80,12 @@ pub struct Event {
     pub kind: u32,
     /// Posição do gancho em [`crate::prog::HOOKS`].
     pub hook: u32,
-    /// Os bits da marca que negaram (bloqueios).
+    /// Os bits da marca que negaram (bloqueios); em [`EV_EXEC`], o `ppid`.
     pub bits: u32,
     /// A abertura negada era para escrita.
     pub write: bool,
-    /// O inode marcado que negou, ou o diretório da criação.
+    /// O inode marcado que negou, ou o diretório da criação; em [`EV_EXEC`]
+    /// e em [`EV_EXIT`], o pid.
     pub ino: u64,
     /// O `s_dev` do superbloco do diretório (criações).
     pub dev: u32,
@@ -106,7 +109,7 @@ impl Event {
             return None;
         }
         let kind = u32_at(b, 0);
-        if kind != EV_DENY && kind != EV_CREATE && kind != EV_EXEC {
+        if kind != EV_DENY && kind != EV_CREATE && kind != EV_EXEC && kind != EV_EXIT {
             return None;
         }
         let len = u32_at(b, 28) as i32;
@@ -351,10 +354,11 @@ mod tests {
         assert_eq!((k.pid, k.sport, k.dport), (321, 40000, 443));
         assert_eq!(k.ip, std::net::IpAddr::from([1, 1, 1, 1]));
         assert!(Event::decode(&c).is_none());
-        // Execução: o pid no lugar do inode, o tamanho dos argumentos no do
-        // dispositivo.
+        // Execução: o pid no lugar do inode, o ppid no lugar dos bits, o
+        // tamanho dos argumentos no do dispositivo.
         let mut x = vec![0u8; EV_HEADER + EV_NAME + EXEC_ARGS];
         x[0..4].copy_from_slice(&EV_EXEC.to_le_bytes());
+        x[8..12].copy_from_slice(&999u32.to_le_bytes());
         x[16..24].copy_from_slice(&777u64.to_le_bytes());
         let argv = b"ls\0-la\0/tmp\0";
         x[24..28].copy_from_slice(&(argv.len() as u32).to_le_bytes());
@@ -363,10 +367,17 @@ mod tests {
         x[EV_HEADER + EV_NAME..EV_HEADER + EV_NAME + argv.len()].copy_from_slice(argv);
         let e = Event::decode(&x).unwrap();
         assert_eq!(
-            (e.kind, e.ino, e.name.as_str()),
-            (EV_EXEC, 777, "/usr/bin/ls")
+            (e.kind, e.bits, e.ino, e.name.as_str()),
+            (EV_EXEC, 999, 777, "/usr/bin/ls")
         );
         assert_eq!(e.args, ["ls", "-la", "/tmp"]);
         assert!(Event::decode(&[9; EV_HEADER]).is_none());
+        // Saída: só o cabeçalho, com o pid no lugar do inode.
+        let mut y = vec![0u8; EV_HEADER];
+        y[0..4].copy_from_slice(&EV_EXIT.to_le_bytes());
+        y[16..24].copy_from_slice(&777u64.to_le_bytes());
+        let e = Event::decode(&y).unwrap();
+        assert_eq!((e.kind, e.ino, e.name.as_str()), (EV_EXIT, 777, ""));
+        assert!(e.args.is_empty());
     }
 }
