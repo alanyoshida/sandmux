@@ -443,6 +443,29 @@ fn documentacao_do_cofre_acompanha_o_codigo() {
         sandmux_proto::SessionState::AguardandoCofre.to_string(),
         "aguardando cofre"
     );
+    // O grafo do cofre: as teclas, os grupos e a chave das arestas.
+    for c in [
+        "### Grafo do cofre",
+        "Arestas do grafo",
+        "0.5x",
+        "2.0x",
+        "`h` `j` `k` `l`",
+        "\"Sem domínio\"",
+        "\"Bancos\"",
+        "`●` token, `◆` chave SSH, `■` conexão de banco",
+    ] {
+        assert!(doc.contains(c), "docs/vault.md não cita {c}");
+    }
+    let i = doc
+        .find("```toml\n[tui]\ngraph-edges")
+        .expect("exemplo de graph-edges")
+        + "```toml\n".len();
+    let end = i + doc[i..].find("```").unwrap();
+    let c =
+        sandmux_policy::config::Config::parse(std::path::Path::new("docs/vault.md"), &doc[i..end])
+            .unwrap();
+    assert!(c.tui.graph_blocks);
+    assert!(!sandmux_policy::config::TuiConfig::default().graph_blocks);
 }
 
 #[test]

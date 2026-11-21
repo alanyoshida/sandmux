@@ -6,7 +6,7 @@ O sandmux funciona sem nenhuma configuração: a baseline embutida e o preset do
 
 `$XDG_CONFIG_HOME/sandmux/config.toml`, ou `~/.config/sandmux/config.toml` quando `XDG_CONFIG_HOME` não está definido. O `sandmux doctor` mostra o caminho e se o arquivo é válido.
 
-O arquivo é opcional. Ele tem três tipos de seção de política, e mais duas que não mudam os sandboxes: `[tui]`, com a tecla de prefixo, os atalhos, o tema e a barra da interface ([docs/tui.md](tui.md)), e `[assistant]`, com os modelos do chat e do modal de comando e os provedores próprios ([docs/chat.md](chat.md)):
+O arquivo é opcional. Ele tem três tipos de seção de política, e mais duas que não mudam os sandboxes: `[tui]`, com a tecla de prefixo, os atalhos, o tema e a barra da interface ([docs/tui.md](tui.md)) e as arestas do grafo do cofre (`graph-edges`, em [docs/vault.md](vault.md#grafo-do-cofre)), e `[assistant]`, com os modelos do chat e do modal de comando e os provedores próprios ([docs/chat.md](chat.md)):
 
 ```toml
 # Vale para toda execução.

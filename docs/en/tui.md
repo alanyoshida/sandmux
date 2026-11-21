@@ -184,7 +184,7 @@ Ctrl+b `e`, or "settings" in the menu, opens a full-screen page with the options
 | Section | Options |
 |---|---|
 | General | language (`auto`, which follows the system, `pt` or `en`; [config.md](config.md#language)); history on disk ([sessions.md](sessions.md#history-on-disk)); desktop notifications ([see below](#desktop-notifications)) |
-| Appearance | theme (with color samples), bar style and position, side panel |
+| Appearance | theme (with color samples), bar style and position, side panel, edges of the [vault graph](vault.md#vault-graph) |
 | Shortcuts | prefix key |
 | Sandbox | repo, KVM, GPU, window, clipboard, memory, processes, extra folders, `pass-env`, SSH keys, databases |
 | Network | mode, denylist, allowlist, catalogs, decryption, inbound ports, host ports |
@@ -192,7 +192,7 @@ Ctrl+b `e`, or "settings" in the menu, opens a full-screen page with the options
 | MCP | denied and allowed servers |
 | Assistant | chat and command models, suggested models (Enter, or `a` in the list, opens the [providers' list](chat.md#model-list); `e` edits the text) |
 | Logging | days and cap of the network log |
-| Vault | the vault state and secrets, without the values; create, unlock, lock, change the password, add a secret and an SSH key, edit domains and remove ([vault.md](vault.md#from-the-tui)) |
+| Vault | the vault state and secrets, without the values; create, unlock, lock, change the password, add a secret and an SSH key, edit domains and remove ([vault.md](vault.md#from-the-tui)); `g` opens the [vault graph](vault.md#vault-graph), with the domains and the secrets of each one |
 | Diagnosis | the `sandmux doctor` checks, and the real keys moved to the vault ([see below](#diagnosis)) |
 | Processes | the process tree of the active tab, with zoom, folding and entering branches ([see below](#processes)) |
 
@@ -214,7 +214,7 @@ Each item shows the current value and where it comes from ("default", "from glob
 | Enter | Edits a text (Enter saves, empty goes back to the default) or opens a list |
 | `a` and `x` (in the list) | Add and remove |
 | `x` (on an item) | Resets the item to the default |
-| `g` | Switches the target between the global one and the project of the active tab's folder |
+| `g` | Switches the target between the global one and the project of the active tab's folder; in the Vault section, opens the vault graph |
 | Esc or `q` | Closes |
 
 A click selects a section or an item, and toggles a toggle.
@@ -225,7 +225,7 @@ The page footer shows only the keys that work at that moment, depending on the s
 
 **When it applies:**
 
-- language, theme, bar, panel and prefix: right away;
+- language, theme, bar, panel, graph edges and prefix: right away;
 - assistant models: on the next request;
 - session policy: at the tab's next launch (Ctrl+b `r`).
 
@@ -353,6 +353,7 @@ On the first run of a harness with configuration to import, the modal itself ask
   - the wheel scrolls the tab's history, with a notice on the last line;
   - dragging selects text, which on release goes to your terminal's clipboard through OSC 52 and to the system clipboard (Wayland or X11), which also works inside tmux. Copying through the TUI always works, even with clipboard writing blocked for the harness.
 - **Copy by the harness** (opencode copies through OSC 52): blocked by default. With `clipboard = true` in the configuration, or `sandmux run --allow-clipboard`, the TUI passes the copy on to your terminal and to the system clipboard.
+- **Vault graph:** the wheel changes the zoom, dragging moves the graph and a click picks a domain or a secret ([vault.md](vault.md#vault-graph)).
 - **Shift with drag:** keeps your terminal's native selection, which also works when the harness uses the mouse.
 
 ## Pasting an image

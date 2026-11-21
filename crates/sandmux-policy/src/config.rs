@@ -761,6 +761,9 @@ pub struct TuiConfig {
     pub style: BarStyle,
     /// Barra na primeira linha (`bar = "top"`); por padrão, na última.
     pub bar_top: bool,
+    /// Arestas do grafo do cofre em meio-bloco (`graph-edges = "blocos"`);
+    /// por padrão, em Braille.
+    pub graph_blocks: bool,
     /// Ordem das seções do painel (`panel-order`), sempre com todas.
     pub panel_order: Vec<String>,
     /// Seções do painel recolhidas (`panel-collapsed`).
@@ -779,6 +782,7 @@ impl Default for TuiConfig {
             panel: true,
             style: BarStyle::Blocos,
             bar_top: false,
+            graph_blocks: false,
             panel_order: PANEL_SECTIONS.iter().map(|s| s.to_string()).collect(),
             panel_collapsed: Vec::new(),
         }
@@ -1631,6 +1635,22 @@ fn tui_section(t: &dyn toml_edit::TableLike, err: &ErrFn<'_>) -> Result<TuiConfi
                     }
                 };
             }
+            "graph-edges" => {
+                cfg.graph_blocks = match item.as_str() {
+                    Some("braille") => false,
+                    Some("blocos") => true,
+                    _ => {
+                        return Err(err(
+                            vspan.clone(),
+                            tr!(
+                                "`graph-edges` precisa ser \"braille\" ou \"blocos\" (meio-bloco, para fontes sem Braille)",
+                                "`graph-edges` must be \"braille\" or \"blocos\" (half blocks, for fonts without Braille)"
+                            )
+                            .into(),
+                        ));
+                    }
+                };
+            }
             "panel-order" | "panel-collapsed" => {
                 let msg = || {
                     trf!(
@@ -2174,6 +2194,7 @@ pub fn value_label(key: &str, v: &str) -> String {
         ("window", "direct") => "direct",
         ("style", "blocos") => "blocks",
         ("style", "simples") => "plain",
+        ("graph-edges", "blocos") => "blocks",
         ("theme", "padrao") => "default",
         ("theme", "escuro") => "dark",
         ("theme", "claro") => "light",
@@ -2954,6 +2975,18 @@ repo = true
         assert_eq!((c.tui.style, c.tui.bar_top), (BarStyle::Simples, true));
         assert!(parse("[tui]\nstyle = \"bonito\"\n").is_err());
         assert!(parse("[tui]\nbar = \"lado\"\n").is_err());
+        assert!(!d.graph_blocks);
+        let c = parse("[tui]\ngraph-edges = \"blocos\"\n").unwrap();
+        assert!(c.tui.graph_blocks);
+        let c = parse("[tui]\ngraph-edges = \"braille\"\n").unwrap();
+        assert!(!c.tui.graph_blocks);
+        let e = parse("[tui]\nbar = \"top\"\ngraph-edges = \"linhas\"\n").unwrap_err();
+        assert_eq!(e.line, Some(3));
+        assert!(
+            e.message.contains("braille") && e.message.contains("blocos"),
+            "{}",
+            e.message
+        );
         let c =
             parse("[tui]\npanel-order = [\"rede\", \"mcp\"]\npanel-collapsed = [\"protecao\"]\n")
                 .unwrap();

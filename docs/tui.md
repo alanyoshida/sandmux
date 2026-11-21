@@ -182,7 +182,7 @@ Ctrl+b `e`, ou "configurações" no menu, abre uma página de tela cheia com as 
 | Seção | Opções |
 |---|---|
 | Geral | idioma (`auto`, que segue o sistema, `pt` ou `en`; [config.md](config.md#idioma)); histórico em disco ([sessions.md](sessions.md#histórico-em-disco)); notificações do desktop ([veja abaixo](#notificações-do-desktop)) |
-| Aparência | tema (com amostras de cor), estilo e posição da barra, painel lateral |
+| Aparência | tema (com amostras de cor), estilo e posição da barra, painel lateral, arestas do [grafo do cofre](vault.md#grafo-do-cofre) |
 | Atalhos | tecla de prefixo |
 | Sandbox | repo, KVM, GPU, janela, clipboard, memória, processos, pastas extras, `pass-env`, chaves SSH, bancos |
 | Rede | modo, denylist, allowlist, catálogos, decifração, portas de entrada, portas do host |
@@ -190,7 +190,7 @@ Ctrl+b `e`, ou "configurações" no menu, abre uma página de tela cheia com as 
 | MCP | servidores negados e liberados |
 | Assistente | modelos do chat e de comandos, modelos sugeridos (Enter, ou `a` na lista, abre a [lista dos provedores](chat.md#lista-de-modelos); `e` edita o texto) |
 | Registro | dias e teto do registro de rede |
-| Cofre | o estado e os segredos do cofre, sem os valores; criar, desbloquear, trancar, trocar a senha, acrescentar segredo e chave SSH, editar domínios e apagar ([vault.md](vault.md#pela-tui)) |
+| Cofre | o estado e os segredos do cofre, sem os valores; criar, desbloquear, trancar, trocar a senha, acrescentar segredo e chave SSH, editar domínios e apagar ([vault.md](vault.md#pela-tui)); `g` abre o [grafo do cofre](vault.md#grafo-do-cofre), com os domínios e os segredos de cada um |
 | Diagnóstico | as verificações do `sandmux doctor`, e as chaves reais levadas ao cofre ([veja abaixo](#diagnóstico)) |
 | Processos | a árvore de processos da aba ativa, com zoom, dobra e entrada nos ramos ([veja abaixo](#processos)) |
 
@@ -212,7 +212,7 @@ Cada item mostra o valor atual e de onde ele vem ("padrão", "do global"):
 | Enter | Edita um texto (Enter grava, vazio volta ao padrão) ou abre uma lista |
 | `a` e `x` (na lista) | Acrescentam e tiram |
 | `x` (num item) | Volta o item ao padrão |
-| `g` | Troca o alvo entre o global e o projeto da pasta da aba ativa |
+| `g` | Troca o alvo entre o global e o projeto da pasta da aba ativa; na seção Cofre, abre o grafo do cofre |
 | Esc ou `q` | Fecha |
 
 Um clique escolhe uma seção ou um item, e alterna um toggle.
@@ -223,7 +223,7 @@ O rodapé da página mostra só as teclas que valem no momento, conforme a seç�
 
 **Quando vale:**
 
-- idioma, tema, barra, painel e prefixo: na hora;
+- idioma, tema, barra, painel, arestas do grafo e prefixo: na hora;
 - modelos do assistente: no próximo pedido;
 - política das sessões: no próximo lançamento da aba (Ctrl+b `r`).
 
@@ -351,6 +351,7 @@ Na primeira execução de um harness com configuração para importar, o própri
   - a roda rola o histórico da aba, com um aviso na última linha;
   - arrastar seleciona texto, que ao soltar vai para o clipboard do seu terminal por OSC 52 e para o clipboard do sistema (Wayland ou X11), o que funciona também dentro do tmux. A cópia pela TUI funciona sempre, mesmo com a escrita no clipboard bloqueada para o harness.
 - **Cópia do harness** (o opencode copia por OSC 52): bloqueada por padrão. Com `clipboard = true` na configuração, ou `sandmux run --allow-clipboard`, a TUI repassa a cópia ao seu terminal e ao clipboard do sistema.
+- **Grafo do cofre:** a roda muda o zoom, arrastar move o grafo e um clique escolhe um domínio ou um segredo ([vault.md](vault.md#grafo-do-cofre)).
 - **Shift com arrasto:** fica com a seleção nativa do seu terminal, que funciona também quando o harness usa o mouse.
 
 ## Colar imagem
