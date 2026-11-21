@@ -1,12 +1,13 @@
-sandmux 0.1.31, antes da v1: o registro dos arquivos pelo kernel mostra as aberturas de leitura e escrita como `rw`.
+sandmux 0.1.32, antes da v1: avisa quando uma chave move para o cofre e mostra a árvore de processos da aba.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
-## Correção
+## Novidades
 
-- **`rw` no registro pelo kernel:** numa aba com os [arquivos pelo kernel](https://github.com/alanyoshida/sandmux/blob/main/docs/files.md#pelo-kernel), uma abertura de leitura e escrita aparecia como `w`, e a mesma abertura numa aba pelo supervisor aparece como `rw`. Agora o registro diz `r`, `w` ou `rw` nos dois casos, também numa abertura bloqueada. Ler um arquivo e depois abri-lo para leitura e escrita dá as duas linhas.
+- **Aviso de chave movida ao cofre:** quando o vigia de segredos move uma chave real para o cofre, a TUI mostra um modal por cima de qualquer aba, mesmo que não seja a afetada, listando cada sessão que precisa reiniciar. Reinicia uma sessão ou todas as listadas, sem trocar de aba sozinha.
+- **Árvore de processos na página de configurações:** a seção "Processos" (depois de Diagnóstico) mostra, para a aba ativa, a árvore de processos do último lançamento, com zoom de densidade (nome e pid; mais memória; ou um cartão com cmdline, CPU e cgroup), dobra manual e automática de ramos grandes, e drill-down com migalha de pão. Precisa do auxiliar root; sem ele, a seção mostra o motivo.
 
-Esta versão muda o auxiliar root. Depois de atualizar, atualize o auxiliar (`sandmux setup`); até lá, uma abertura de leitura e escrita continua aparecendo como `w`. O protocolo entre o cliente e o daemon não muda.
+Esta versão muda o cliente, o daemon e o auxiliar root. O protocolo entre o cliente e o daemon sobe para 45: depois de atualizar, rode `sandmux daemon restart`, e atualize o auxiliar (`sandmux setup`).
 
 ## Instalar
 
