@@ -1551,6 +1551,31 @@ fn cofre_gerenciado_pela_pagina() {
 }
 
 #[test]
+fn processos_na_pagina_sem_o_auxiliar() {
+    let e = Env::new();
+    sessao(&e, &e.work);
+    let mut t = tui_cols(&e, 120);
+    t.wait_text(&tab(1, "shell:app"));
+    t.write(b"\x02e");
+    t.wait_text("sandmux · configurações");
+    t.wait_text("Processos");
+    // A seção é a última da lateral.
+    for _ in 0..20 {
+        t.write(DOWN);
+    }
+    // Sem o auxiliar root nos testes, a árvore não existe, e o motivo do
+    // daemon aparece no lugar dela.
+    t.wait_text("A árvore de processos precisa do auxiliar root");
+    t.wait_text("supervisor:");
+    t.write(b"\t");
+    t.wait_text("r relê");
+    t.write(b"\x1b");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
 fn diagnostico_na_pagina_e_chaves_ao_cofre() {
     use std::io::Write;
     let e = Env::new();

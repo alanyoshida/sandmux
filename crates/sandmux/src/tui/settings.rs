@@ -64,6 +64,7 @@ pub const SECTIONS: &[[&str; 2]] = &[
     ["Registro", "Logging"],
     ["Cofre", "Vault"],
     ["Diagnóstico", "Diagnosis"],
+    ["Processos", "Processes"],
 ];
 
 /// A seção do cofre: não tem itens do arquivo, e sim a tela do cofre.
@@ -71,6 +72,9 @@ pub const VAULT: usize = 9;
 
 /// A seção do diagnóstico: as verificações do `sandmux doctor`.
 pub const DOCTOR: usize = 10;
+
+/// A seção da árvore de processos da aba ativa.
+pub const PROCS: usize = 11;
 
 /// O nome de uma seção no idioma atual.
 pub fn section_name(i: usize) -> &'static str {
@@ -830,6 +834,8 @@ pub struct Settings {
     pub vault: VaultView,
     /// A tela do diagnóstico.
     pub doctor: DoctorView,
+    /// A árvore de processos da aba ativa.
+    pub procs: super::procs::ProcsView,
 }
 
 /// A tela do diagnóstico: o relatório, a linha escolhida e o `f` em
@@ -1029,6 +1035,7 @@ impl Settings {
             path,
             vault: VaultView::default(),
             doctor: DoctorView::default(),
+            procs: Default::default(),
         }
     }
 
@@ -1254,6 +1261,9 @@ impl App {
         {
             return Some(s);
         }
+        if s.section == PROCS && s.on_items && self.procs_key(&mut s, &k) {
+            return Some(s);
+        }
         let before = s.section;
         let r = self.settings_nav(&mut s, k);
         if s.section == VAULT && before != VAULT {
@@ -1261,6 +1271,9 @@ impl App {
         }
         if s.section == DOCTOR && before != DOCTOR {
             self.doctor_refresh(&mut s);
+        }
+        if s.section == PROCS && before != PROCS {
+            self.procs_refresh(&mut s);
         }
         if r { Some(s) } else { None }
     }
@@ -1344,6 +1357,19 @@ impl App {
                 if i == DOCTOR {
                     self.doctor_refresh(&mut s);
                 }
+                if i == PROCS {
+                    self.procs_refresh(&mut s);
+                }
+            }
+            Some(Hit::Item(i)) if s.section == PROCS => {
+                s.on_items = true;
+                if let Some(r) = s.procs.rows().get(i) {
+                    s.procs.sel = Some(r.pid);
+                }
+            }
+            Some(Hit::Crumb(i)) => {
+                s.on_items = true;
+                s.procs.crumb(i);
             }
             Some(Hit::Item(i)) if s.section == VAULT => {
                 s.on_items = true;
@@ -1366,6 +1392,72 @@ impl App {
             None => {}
         }
         s
+    }
+}
+
+// ---- processos ----
+
+impl App {
+    /// Pede ao daemon a árvore de processos da aba ativa.
+    pub(super) fn procs_refresh(&mut self, s: &mut Settings) {
+        let Some(id) = self.tabs.get(self.active).map(|t| t.id) else {
+            s.procs.set(
+                Vec::new(),
+                Some(tr!("nenhuma aba aberta", "no open tab").into()),
+            );
+            return;
+        };
+        match self.call(&Msg::ProcessTree { id }) {
+            Ok(Msg::ProcessTreeOf {
+                nodes, unavailable, ..
+            }) => s.procs.set(nodes, unavailable),
+            Ok(Msg::Error { message }) => s.procs.set(Vec::new(), Some(message)),
+            Ok(_) => {}
+            Err(e) => s.procs.set(Vec::new(), Some(format!("{e:#}"))),
+        }
+    }
+
+    /// A árvore da página aberta na seção de processos, a cada segundo.
+    pub(super) fn refresh_procs(&mut self) {
+        if !matches!(&self.modal, Some(Modal::Settings(s)) if s.section == PROCS) {
+            return;
+        }
+        if let Some(Modal::Settings(mut s)) = self.modal.take() {
+            self.procs_refresh(&mut s);
+            self.modal = Some(Modal::Settings(s));
+        }
+    }
+
+    /// As teclas da árvore de processos; `true` quando a tecla foi usada.
+    fn procs_key(&mut self, s: &mut Settings, k: &Key) -> bool {
+        let v = &mut s.procs;
+        match k {
+            Key::Up => v.step(-1),
+            Key::Down => v.step(1),
+            Key::Right => {
+                v.unfold();
+            }
+            Key::Left => {
+                if !v.fold() {
+                    s.on_items = false;
+                }
+            }
+            Key::Char(' ') => v.toggle(),
+            Key::Enter => v.enter(),
+            Key::Backspace => {
+                v.back();
+            }
+            Key::Esc => {
+                if !v.back() {
+                    s.on_items = false;
+                }
+            }
+            Key::Char('+') | Key::Char('=') => v.zoom_in(),
+            Key::Char('-') => v.zoom_out(),
+            Key::Char('r') => self.procs_refresh(s),
+            _ => return false,
+        }
+        true
     }
 }
 
@@ -2051,7 +2143,7 @@ mod tests {
     #[test]
     fn todas_as_secoes_tem_itens() {
         for (s, name) in SECTIONS.iter().enumerate() {
-            if s == VAULT || s == DOCTOR {
+            if s == VAULT || s == DOCTOR || s == PROCS {
                 continue;
             }
             assert!(!items_of(s).is_empty(), "{}", name[0]);

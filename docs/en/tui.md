@@ -194,6 +194,7 @@ Ctrl+b `e`, or "settings" in the menu, opens a full-screen page with the options
 | Logging | days and cap of the network log |
 | Vault | the vault state and secrets, without the values; create, unlock, lock, change the password, add a secret and an SSH key, edit domains and remove ([vault.md](vault.md#from-the-tui)) |
 | Diagnosis | the `sandmux doctor` checks, and the real keys moved to the vault ([see below](#diagnosis)) |
+| Processes | the process tree of the active tab, with zoom, folding and entering branches ([see below](#processes)) |
 
 Each item shows the current value and where it comes from ("default", "from global"):
 
@@ -232,7 +233,7 @@ The options of `[tui]`, `[assistant]` and of the log apply only in the global on
 
 ### Diagnosis
 
-The Diagnosis section, at the end of the page, shows the `sandmux doctor` checks ([install.md](install.md)). Ctrl+b `D`, or "diagnosis" in the menu, opens the page right on it.
+The Diagnosis section, after the Vault, shows the `sandmux doctor` checks ([install.md](install.md)). Ctrl+b `D`, or "diagnosis" in the menu, opens the page right on it.
 
 - **In the sidebar:** the section name shows how many checks failed, such as `Diagnosis ✗1`. The checks run when the page opens and when you enter the section, and `r` runs them again. The status line shows the time of the last check.
 - **In the list:** one line per check, grouped into Sandbox, Installation, Configuration, Daemon, Vault and Real keys. The mark is `✓` (fine), `✗` (failure), `!` (warning) or `·` (information).
@@ -250,6 +251,29 @@ The Diagnosis section, at the end of the page, shows the `sandmux doctor` checks
 6. At the end, a notice says how many keys were moved and which tabs to restart (Ctrl+b `r`).
 
 The real values never show up on screen.
+
+### Processes
+
+The Processes section, at the end of the page, shows the tree of the live processes of the active tab: who started whom, one process per line, indented under its parent. It is updated every second while open, without changing the selection, the folds or the branch you entered.
+
+The tree comes from the kernel observation of executions ([helper.md](helper.md)): each execution brings its parent, and each process that ends leaves the tree. Without the root helper there is no tree, and the section shows the reason (the same one the panel's protection shows for the source of executions). The pids are the host's, not the ones inside the sandbox. A process that forks without `exec` after the tab started (a subshell, workers that copy themselves) does not show up.
+
+- **Breadcrumb:** the first line shows the path to the root of the screen, starting with "tab", and the zoom level. A click on a segment goes back to it.
+- **Zoom (`+` and `-`):** three levels for the whole tree: name and pid; plus the resident memory; and a card with the command line, the CPU used, the memory, how long ago the process started and the cgroup.
+- **Folding:** `▾` open, `▸` folded (with `+N`, the hidden descendants), `·` without children. A branch with more than 12 descendants starts folded, except the roots of the screen.
+- **Entering a branch (Enter):** the chosen process becomes the root of the screen, with its descendants, and goes to the end of the breadcrumb.
+
+| Key | Action |
+|---|---|
+| ↑ ↓ | Move the selection |
+| → | Unfolds |
+| ← | Folds; on a process with nothing to fold, goes back to the sections |
+| Space | Folds and unfolds |
+| Enter | Enters the branch |
+| Backspace | Goes up one level in the breadcrumb |
+| Esc | Goes up one level; at the root, goes back to the sections |
+| `+` `-` | Zoom |
+| `r` | Reads again |
 
 ## Color theme
 

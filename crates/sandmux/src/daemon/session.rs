@@ -69,6 +69,8 @@ pub struct Session {
     pub cgroup: Option<std::path::PathBuf>,
     /// A observação das execuções pelo kernel (o auxiliar root).
     pub exec_obs: Option<super::execlog::ExecObs>,
+    /// A árvore de processos do lançamento atual, pela observação.
+    pub proc_tree: super::proctree::ProcTree,
     /// Os arquivos da aba confinados pelo kernel (change 78); `None`, com o
     /// supervisor.
     pub tab_kernel: Option<super::tabfiles::TabKernel>,
@@ -154,6 +156,7 @@ impl Session {
             limits: None,
             cgroup: None,
             exec_obs: None,
+            proc_tree: Default::default(),
             tab_kernel: None,
             conns: Default::default(),
             oom_kills: 0,
@@ -1066,6 +1069,7 @@ pub fn attach_process(shared: &Arc<Shared>, id: u32, spawned: Spawned, size: Siz
             }
             s.cgroup = None;
             s.exec_obs = None;
+            s.proc_tree = Default::default();
             s.tab_kernel = None;
             s.conns = Default::default();
             s.oom_kills = 0;

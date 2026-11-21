@@ -387,6 +387,24 @@ pub struct Stats {
     pub cpu_usec: u64,
 }
 
+/// Um processo vivo da árvore de uma aba (protocolo 45). Os pids são os do
+/// host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcNode {
+    pub pid: u32,
+    /// O pai na árvore; 0 quando o processo é uma raiz.
+    pub ppid: u32,
+    pub name: String,
+    pub cmdline: String,
+    /// Memória residente, em bytes.
+    pub rss: u64,
+    /// Tempo de CPU usado, em milissegundos.
+    pub cpu_ms: u64,
+    /// Há quantos segundos o processo começou.
+    pub age_secs: u64,
+    pub cgroup: String,
+}
+
 /// Um segredo do cofre, sem o valor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VaultEntry {
@@ -569,6 +587,10 @@ pub enum Msg {
     Stop,
     /// Detalhe do consumo de uma sessão.
     Stats {
+        id: u32,
+    },
+    /// A árvore de processos de uma sessão (protocolo 45).
+    ProcessTree {
         id: u32,
     },
     /// Troca o nome de uma sessão.
@@ -802,6 +824,13 @@ pub enum Msg {
         /// Portas publicadas da sessão e do Docker da pasta (protocolo 9).
         #[serde(default)]
         ports: Vec<PortInfo>,
+    },
+    /// Os processos vivos da sessão, pelo kernel. Sem a observação pelo
+    /// kernel, nenhum nó e o motivo em `unavailable`.
+    ProcessTreeOf {
+        id: u32,
+        nodes: Vec<ProcNode>,
+        unavailable: Option<String>,
     },
     NetLog {
         lines: Vec<NetLine>,
@@ -1108,6 +1137,31 @@ mod tests {
         };
         let back: Msg = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
         assert_eq!(back, m);
+        for m in [
+            Msg::ProcessTree { id: 2 },
+            Msg::ProcessTreeOf {
+                id: 2,
+                nodes: vec![ProcNode {
+                    pid: 10,
+                    ppid: 0,
+                    name: "bash".into(),
+                    cmdline: "bash -l".into(),
+                    rss: 4096,
+                    cpu_ms: 12,
+                    age_secs: 3,
+                    cgroup: "/user.slice/x.scope".into(),
+                }],
+                unavailable: None,
+            },
+            Msg::ProcessTreeOf {
+                id: 2,
+                nodes: Vec::new(),
+                unavailable: Some("supervisor: sem o auxiliar".into()),
+            },
+        ] {
+            let back: Msg = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+            assert_eq!(back, m);
+        }
         // Opções do protocolo 2, sem os tetos, ainda são lidas.
         let o: LaunchOptions = serde_json::from_str(
             r#"{"harness":"shell","workdir":"/w","ro":[],"rw":[],"pass_env":[],"profile":null,

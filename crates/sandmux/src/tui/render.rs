@@ -765,6 +765,25 @@ pub(super) fn settings_footer(s: &super::settings::Settings) -> String {
         k.push(t("Esc volta às seções", "Esc back to sections"));
         return k.join(" · ");
     }
+    if s.section == super::settings::PROCS {
+        let v = &s.procs;
+        if v.unavailable.is_none() {
+            k.push(t("↑ ↓ move", "↑ ↓ move"));
+            k.push(t("← → Espaço dobra", "← → Space fold"));
+            k.push(t("Enter entra no ramo", "Enter enters the branch"));
+            if !v.path.is_empty() {
+                k.push(t("Backspace volta", "Backspace goes up"));
+            }
+            k.push(t("+ - zoom", "+ - zoom"));
+        }
+        k.push(t("r relê", "r reloads"));
+        k.push(if v.path.is_empty() {
+            t("Esc volta às seções", "Esc back to sections")
+        } else {
+            t("Esc volta", "Esc goes up")
+        });
+        return k.join(" · ");
+    }
     if s.section == VAULT {
         let v = &s.vault;
         if let Some(f) = &v.form {
@@ -983,6 +1002,181 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
     let help_rows = 4u16;
     let bottom = inner.y + inner.height;
     let selected_item = s.selected();
+
+    if s.section == super::settings::PROCS {
+        use super::procs::{Fold, age, size};
+        let v = &s.procs;
+        // A migalha: a aba e os ramos em que se entrou, cada um clicável.
+        let mut crumbs = vec![Span::styled(
+            tr!("aba", "tab"),
+            base.fg(if v.path.is_empty() { accent } else { muted }),
+        )];
+        let mut cx = x0 + crumbs[0].content.chars().count() as u16;
+        hits.push((y, x0, cx, Hit::Crumb(0)));
+        for (i, pid) in v.path.iter().enumerate() {
+            let name = v
+                .node(*pid)
+                .map(|n| format!("{} ({pid})", n.name))
+                .unwrap_or_else(|| pid.to_string());
+            let last = i + 1 == v.path.len();
+            crumbs.push(Span::styled(" ▸ ", base.fg(muted)));
+            let len = name.chars().count() as u16;
+            crumbs.push(Span::styled(
+                name,
+                base.fg(if last { accent } else { muted }),
+            ));
+            hits.push((y, cx + 3, cx + 3 + len, Hit::Crumb(i + 1)));
+            cx += 3 + len;
+        }
+        let zoom = format!("zoom {}/{}", v.zoom + 1, super::procs::ZOOMS);
+        put(f, x0, y, w, Line::from(crumbs), base);
+        let zw = zoom.chars().count() as u16;
+        if w > zw + 2 {
+            put(
+                f,
+                x0 + w - zw,
+                y,
+                zw,
+                Line::styled(zoom, base.fg(muted)),
+                base,
+            );
+        }
+        y += 2;
+        if let Some(why) = &v.unavailable {
+            put(
+                f,
+                x0,
+                y,
+                w,
+                Line::styled(
+                    tr!(
+                        "A árvore de processos precisa do auxiliar root (a observação das execuções pelo kernel).",
+                        "The process tree needs the root helper (the kernel exec observation)."
+                    ),
+                    base,
+                ),
+                base,
+            );
+            put(
+                f,
+                x0,
+                y + 1,
+                w,
+                Line::styled(why.clone(), base.fg(muted)),
+                base,
+            );
+        } else if !v.loaded {
+            put(
+                f,
+                x0,
+                y,
+                w,
+                Line::styled(tr!("lendo…", "reading…"), base.fg(muted)),
+                base,
+            );
+        } else {
+            let rows = v.rows();
+            if rows.is_empty() {
+                put(
+                    f,
+                    x0,
+                    y,
+                    w,
+                    Line::styled(tr!("nenhum processo", "no processes"), base.fg(muted)),
+                    base,
+                );
+            }
+            // Linhas por processo: uma, ou o cartão de quatro no zoom 3.
+            let per = if v.zoom >= 2 { 4 } else { 1 };
+            let room = (bottom.saturating_sub(y + 1) as usize / per).max(1);
+            let at = v.sel_index(&rows).unwrap_or(0);
+            let start = (at + 1).saturating_sub(room);
+            for (ri, r) in rows.iter().enumerate().skip(start).take(room) {
+                let Some(n) = v.node(r.pid) else { continue };
+                let sel = s.on_items && Some(r.pid) == v.sel;
+                let row_bg = if sel { surface } else { bg };
+                let st = Style::default().fg(fg).bg(row_bg);
+                let mark = match r.fold {
+                    Fold::Leaf => "·".to_string(),
+                    Fold::Open => "▾".to_string(),
+                    Fold::Closed(_) => "▸".to_string(),
+                };
+                let mut spans = vec![
+                    Span::styled(
+                        if sel { "▌" } else { " " },
+                        Style::default().fg(accent).bg(row_bg),
+                    ),
+                    Span::styled("  ".repeat(r.depth), st),
+                    Span::styled(format!("{mark} "), st.fg(accent)),
+                    Span::styled(
+                        n.name.clone(),
+                        st.add_modifier(if sel {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                    ),
+                    Span::styled(format!(" ({})", n.pid), st.fg(muted)),
+                ];
+                if let Fold::Closed(k) = r.fold {
+                    spans.push(Span::styled(format!(" +{k}"), st.fg(muted)));
+                }
+                if v.zoom >= 1 {
+                    spans.push(Span::styled(format!("  {}", size(n.rss)), st.fg(muted)));
+                }
+                put(f, x0, y, w, Line::from(spans), Style::default().bg(row_bg));
+                hits.push((y, x0, x0 + w, Hit::Item(ri)));
+                y += 1;
+                if per > 1 {
+                    let pad = " ".repeat(r.depth * 2 + 5);
+                    let iw = (w as usize).saturating_sub(pad.chars().count());
+                    let detail = [
+                        cut(&n.cmdline, iw),
+                        cut(
+                            &trf!(
+                                "cpu {:.1}s · mem {} · há {}",
+                                "cpu {:.1}s · mem {} · {} ago",
+                                n.cpu_ms as f64 / 1000.0,
+                                size(n.rss),
+                                age(n.age_secs)
+                            ),
+                            iw,
+                        ),
+                        cut(&n.cgroup, iw),
+                    ];
+                    for d in detail {
+                        put(
+                            f,
+                            x0,
+                            y,
+                            w,
+                            Line::from(vec![
+                                Span::styled(pad.clone(), Style::default().bg(row_bg)),
+                                Span::styled(d, Style::default().fg(muted).bg(row_bg)),
+                            ]),
+                            Style::default().bg(row_bg),
+                        );
+                        hits.push((y, x0, x0 + w, Hit::Item(ri)));
+                        y += 1;
+                    }
+                }
+            }
+        }
+        if let Some((note, is_err)) = &s.note {
+            put(
+                f,
+                x0,
+                bottom.saturating_sub(1),
+                w,
+                Line::raw(note.clone()),
+                Style::default()
+                    .fg(if *is_err { err } else { ok })
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
+        return;
+    }
 
     if s.section == super::settings::DOCTOR {
         use crate::doctor::State;

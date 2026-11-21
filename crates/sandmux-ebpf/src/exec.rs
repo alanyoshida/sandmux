@@ -27,6 +27,8 @@ pub struct ExecLayout {
     prog_type_tracing: u32,
     attach_raw_tp: u32,
     btf_id: u32,
+    /// `sched_process_exit`, quando o kernel tem o tracepoint no BTF.
+    btf_id_exit: Option<u32>,
     /// `tcp_v4_connect` e `tcp_v6_connect`, para o `fexit`.
     conn_ids: Vec<u32>,
     attach_fexit: u32,
@@ -48,6 +50,11 @@ pub struct ExecLayout {
     task_mm: i16,
     mm_arg_start: i16,
     mm_arg_end: i16,
+    /// O `pid` da tarefa (a thread), o `tgid` do processo (o pid visto pelo
+    /// usuário) e o pai.
+    task_pid: i16,
+    task_tgid: i16,
+    task_real_parent: i16,
 }
 
 fn off(b: &Btf, s: &str, p: &str) -> Result<i16, Error> {
@@ -80,6 +87,7 @@ impl ExecLayout {
                 .iter()
                 .filter_map(|f| b.find(Kind::Func, f))
                 .collect(),
+            btf_id_exit: b.find(Kind::Typedef, "btf_trace_sched_process_exit"),
             attach_fexit: uapi(b, "BPF_TRACE_FEXIT")? as u32,
             sk_num: sk("skc_num")?,
             sk_dport: sk("skc_dport")?,
@@ -102,6 +110,9 @@ impl ExecLayout {
             task_mm: off(b, "task_struct", "mm")?,
             mm_arg_start: off(b, "mm_struct", "arg_start")?,
             mm_arg_end: off(b, "mm_struct", "arg_end")?,
+            task_pid: off(b, "task_struct", "pid")?,
+            task_tgid: off(b, "task_struct", "tgid")?,
+            task_real_parent: off(b, "task_struct", "real_parent")?,
         })
     }
 }
@@ -135,7 +146,6 @@ pub fn build(
     a.mov(R7, R0);
     a.st(Size::W, R7, 0, EV_EXEC as i32);
     a.st(Size::W, R7, 4, 0);
-    a.st(Size::W, R7, 8, 0);
     a.st(Size::W, R7, 12, 0);
     a.st(Size::W, R7, 24, 0);
     a.st(Size::W, R7, 28, 0);
@@ -143,6 +153,12 @@ pub fn build(
     a.call(l.fn_pid_tgid);
     a.alu_imm(Alu::Rsh, R0, 32);
     a.stx(Size::DW, R7, 16, R0);
+    // O ppid: o tgid do pai (`task->real_parent->tgid`), no lugar dos bits
+    // (sem uso numa execução).
+    a.ldx(Size::DW, R1, R6, 0);
+    a.ldx(Size::DW, R1, R1, l.task_real_parent);
+    a.ldx(Size::W, R1, R1, l.task_tgid);
+    a.stx(Size::W, R7, 8, R1);
     // O caminho executado.
     a.mov(R1, R7);
     a.alu_imm(Alu::Add, R1, EV_HEADER as i32);
@@ -259,14 +275,77 @@ pub fn build_conn(
     a.finish()
 }
 
+/// Monta o programa de saída: um `tp_btf` no tracepoint
+/// `sched_process_exit`, filtrado pelo mesmo cgroup. Manda só o cabeçalho,
+/// com o pid (o `tgid` do processo que terminou), sem nome nem argumentos.
+/// O tracepoint dispara por thread; só a saída do líder (`pid == tgid`) vira
+/// evento, para o fim de uma thread não parecer o fim do processo.
+pub fn build_exit(
+    l: &ExecLayout,
+    level: i32,
+    cgroup_id: u64,
+    ring_fd: i32,
+    drops_fd: i32,
+) -> Result<Vec<Insn>, Error> {
+    use crate::ring::EV_EXIT;
+    let mut a = Asm::new();
+    let out = a.label();
+    let drop = a.label();
+    a.mov(R6, R1);
+    // R8 = a tarefa que terminou (preservado nas chamadas).
+    a.ldx(Size::DW, R8, R6, 0);
+    a.ldx(Size::W, R1, R8, l.task_pid);
+    a.ldx(Size::W, R2, R8, l.task_tgid);
+    a.jmp_reg(Cond::Ne, R1, R2, out);
+    a.mov_imm(R1, level);
+    a.call(l.fn_ancestor_cgroup_id);
+    a.ld_imm64(R1, cgroup_id);
+    a.jmp_reg(Cond::Ne, R0, R1, out);
+    a.ld_map_fd(R1, ring_fd);
+    a.mov_imm(R2, EV_HEADER as i32);
+    a.mov_imm(R3, 0);
+    a.call(l.fn_ringbuf_reserve);
+    a.jmp_imm(Cond::Eq, R0, 0, drop);
+    a.mov(R7, R0);
+    a.st(Size::W, R7, 0, EV_EXIT as i32);
+    a.st(Size::W, R7, 4, 0);
+    a.st(Size::W, R7, 8, 0);
+    a.st(Size::W, R7, 12, 0);
+    a.st(Size::W, R7, 24, 0);
+    a.st(Size::W, R7, 28, 0);
+    // O pid (o tgid) de quem terminou, lido da tarefa que o tracepoint
+    // recebeu.
+    a.ldx(Size::W, R1, R8, l.task_tgid);
+    a.stx(Size::DW, R7, 16, R1);
+    a.mov(R1, R7);
+    a.mov_imm(R2, 0);
+    a.call(l.fn_ringbuf_submit);
+    a.ja(out);
+    a.bind(drop);
+    a.st(Size::W, R10, -8, 0);
+    a.ld_map_fd(R1, drops_fd);
+    a.mov(R2, R10);
+    a.alu_imm(Alu::Add, R2, -8);
+    a.call(l.fn_map_lookup_elem);
+    a.jmp_imm(Cond::Eq, R0, 0, out);
+    a.mov_imm(R1, 1);
+    a.atomic_add64(R0, 0, R1);
+    a.bind(out);
+    a.mov_imm(R0, 0);
+    a.exit();
+    a.finish()
+}
+
 /// Uma observação carregada: a fila, o contador e os programas presos (o de
-/// execução e, quando o kernel tem o tracepoint, o de conexões).
+/// execução e, quando o kernel tem o tracepoint, os de conexões e de saída).
 pub struct Observation {
     ring: OwnedFd,
     drops: OwnedFd,
     _progs: Vec<(OwnedFd, OwnedFd)>,
     /// O programa de conexões foi preso.
     pub conns: bool,
+    /// O programa de saída de processo foi preso.
+    pub exits: bool,
 }
 
 impl Observation {
@@ -298,11 +377,19 @@ impl Observation {
             }
             Err(_) => false,
         };
+        let exits = match Observation::attach_exit(l, level, cgroup_id, &ring, &drops) {
+            Ok(p) => {
+                progs.push(p);
+                true
+            }
+            Err(_) => false,
+        };
         Ok(Observation {
             ring,
             drops,
             _progs: progs,
             conns,
+            exits,
         })
     }
 
@@ -365,6 +452,37 @@ impl Observation {
         Ok(out)
     }
 
+    /// Carrega e prende o programa de saída, quando o kernel tem
+    /// `sched_process_exit` no BTF.
+    pub fn attach_exit(
+        l: &ExecLayout,
+        level: i32,
+        cgroup_id: u64,
+        ring: &impl AsRawFd,
+        drops: &impl AsRawFd,
+    ) -> Result<(OwnedFd, OwnedFd), Error> {
+        let btf_id = l.btf_id_exit.ok_or_else(|| {
+            Error::Btf(trf!(
+                "o kernel não tem sched_process_exit no BTF",
+                "the kernel has no sched_process_exit in BTF"
+            ))
+        })?;
+        let insns = build_exit(l, level, cgroup_id, ring.as_raw_fd(), drops.as_raw_fd())?;
+        let prog = sys::prog_load(&sys::ProgSpec {
+            prog_type: l.prog_type_tracing,
+            expected_attach_type: l.attach_raw_tp,
+            attach_btf_id: btf_id,
+            name: "sm_exit",
+            license: crate::prog::LICENSE,
+            insns: &insns,
+        })?;
+        let link = match sys::link_create(&prog, 0, l.attach_raw_tp) {
+            Ok(k) => k,
+            Err(_) => sys::raw_tracepoint_open(&prog)?,
+        };
+        Ok((prog, link))
+    }
+
     pub fn ring(&self) -> std::io::Result<OwnedFd> {
         self.ring.try_clone()
     }
@@ -410,12 +528,40 @@ mod tests {
         );
         assert!(p.iter().any(|i| i.code == 0xdb));
         assert_eq!(EXEC_EVENT, 32 + 256 + 1024);
+        // O ppid: duas leituras encadeadas (task->real_parent, depois
+        // ->tgid) e a gravação no lugar dos bits (offset 8).
+        assert!(p.iter().any(|i| i.code == 0x61 && i.off == l.task_tgid));
+        assert!(p.iter().any(|i| i.code == 0x63 && i.off == 8 && i.imm == 0));
         let c = build_conn(&l, 5, 1234, 4, 5).unwrap();
         assert_eq!(c.last().unwrap().code, 0x95);
         assert_eq!(l.conn_ids.len(), 2);
         assert!(
             c.iter()
                 .any(|i| i.code == 0x85 && i.imm == l.fn_ringbuf_reserve)
+        );
+        // O programa de saída: só o cabeçalho, com o pid no lugar do inode.
+        let x = build_exit(&l, 5, 1234, 4, 5).unwrap();
+        assert_eq!(x.last().unwrap().code, 0x95);
+        // Só o líder: lê pid e tgid e compara antes do filtro do cgroup.
+        let cg = x
+            .iter()
+            .position(|i| i.code == 0x85 && i.imm == l.fn_ancestor_cgroup_id)
+            .unwrap();
+        assert!(cg < 8);
+        let pid = x
+            .iter()
+            .position(|i| i.code == 0x61 && i.off == l.task_pid)
+            .unwrap();
+        assert!(pid < cg);
+        assert!(
+            x[..cg].iter().any(|i| i.code == 0x5d),
+            "falta o jne entre pid e tgid"
+        );
+        assert!(x.iter().any(|i| i.code == 0x61 && i.off == l.task_tgid));
+        assert!(x.iter().any(|i| i.code == 0x7b && i.off == 16));
+        assert!(
+            x.iter()
+                .any(|i| i.code == 0x85 && i.imm == l.fn_ringbuf_submit)
         );
     }
 }
