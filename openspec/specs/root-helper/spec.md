@@ -4,6 +4,7 @@
 O auxiliar root (`sandmux-helper`): o serviço do sistema que prende ao cgroup do Docker privado de uma pasta os programas BPF LSM do confinamento, a pedido do usuário dono do cgroup, só para restringir, e só enquanto a conexão do pedido estiver aberta.
 
 ## Requirements
+
 ### Requirement: Pedidos ao auxiliar root
 O `sandmux-helper` MUST rodar como serviço do sistema, com root, num socket Unix local que qualquer usuário alcança. Ele MUST aceitar só seis pedidos: o estado (versão e BPF LSM ativo), o confinamento e a observação de um cgroup v2 de quem pede, a marcação e a desmarcação de arquivos, e o escopo de um user namespace de quem pede, os cinco últimos com descritores abertos por quem pede. Outro pedido, ou um cgroup ou namespace de outro usuário, MUST ser recusado com erro, sem efeito.
 
@@ -67,7 +68,7 @@ O auxiliar MUST mandar a quem pediu o confinamento, pela conexão dele, um event
 - **THEN** o daemon recebe um evento de abertura com o caminho de `notas.md`, que lê e grava
 
 ### Requirement: Observação das execuções
-O pedido `observe` MUST carregar só a observação das execuções e das conexões TCP no cgroup pedido e nos de baixo, sem regra de arquivos nem marca, e o `confine` MUST incluir a das execuções. Cada execução MUST virar um evento com o caminho executado, o pid e os argumentos; cada conexão TCP, um evento com o pid, a porta de origem e o destino, pela conexão que fez o pedido. A observação MUST NOT negar nem atrasar nada, e MUST terminar quando a conexão com o auxiliar fecha.
+O pedido `observe` MUST carregar só a observação das execuções e das conexões TCP no cgroup pedido e nos de baixo, sem regra de arquivos nem marca, e o `confine` MUST incluir a das execuções. Cada execução MUST virar um evento com o caminho executado, o pid, o ppid e os argumentos; cada conexão TCP, um evento com o pid, a porta de origem e o destino, pela conexão que fez o pedido. A observação MUST NOT negar nem atrasar nada, e MUST terminar quando a conexão com o auxiliar fecha.
 
 #### Scenario: Aba observada
 - **WHEN** o daemon pede o `observe` do escopo de uma aba e o agente roda `ls -la`
@@ -80,6 +81,10 @@ O pedido `observe` MUST carregar só a observação das execuções e das conex�
 #### Scenario: Conexão fechada
 - **WHEN** o daemon que pediu o `observe` termina
 - **THEN** o auxiliar solta os programas, e as execuções e as conexões daquele cgroup deixam de gerar eventos
+
+#### Scenario: Evento de execução traz o ppid
+- **WHEN** um processo dentro do cgroup observado executa um programa
+- **THEN** o evento mandado ao daemon MUST incluir o ppid de quem o executou, além do caminho, do pid e dos argumentos
 
 ### Requirement: Escopo de um sandbox
 O pedido `scope` MUST receber o user namespace de um sandbox, criado por quem pede, e MUST negar aos processos desse namespace e dos namespaces abaixo dele: a conexão a um socket abstrato criado fora do sandbox, um sinal a um processo de fora do sandbox e um `ioctl` num dispositivo fora da lista do pedido, com as mesmas exceções do Landlock. O escopo MUST valer até a conexão do pedido fechar. São até 256 escopos ativos por usuário.
@@ -150,3 +155,14 @@ O auxiliar MUST descongelar a aba que congelou pela fila só com a conexão do c
 #### Scenario: Conexão termina com a aba congelada
 - **WHEN** a conexão do daemon com o auxiliar termina enquanto a aba está congelada pela fila
 - **THEN** a aba continua congelada, e só o daemon a descongela, depois de refazer o confinamento
+
+### Requirement: Saída de processo observado
+O pedido `observe` MUST mandar um evento com o pid quando um processo do cgroup observado termina, só pela saída do processo (não pela de cada thread dele), quando o kernel tem o tracepoint. Esse evento MUST seguir as regras da observação: não nega nem atrasa a saída, e termina quando a conexão com o auxiliar fecha.
+
+#### Scenario: Processo observado termina
+- **WHEN** um processo do cgroup observado termina
+- **THEN** o auxiliar MUST mandar ao daemon um evento de saída com o pid dele, pela mesma conexão
+
+#### Scenario: Thread termina
+- **WHEN** uma thread que não é a principal de um processo observado termina, e o processo continua
+- **THEN** o auxiliar MUST NOT mandar evento de saída
