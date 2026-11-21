@@ -48,7 +48,7 @@ O auxiliar MUST limitar por usuário o número de confinamentos ativos (16) e o 
 - **THEN** o auxiliar recusa o pedido com um erro que diz o limite
 
 ### Requirement: Eventos do confinamento
-O auxiliar MUST mandar a quem pediu o confinamento, pela mesma conexão, um evento a cada operação negada pelos programas, a cada arquivo criado pelos processos do cgroup e, quando o pedido lista montagens a registrar, a cada abertura nelas, com o caminho e se grava. O evento MUST ter o tipo, o gancho e o inode ou o nome, e MUST NOT ter o conteúdo de arquivo nenhum. No Docker privado, com a fila cheia, os eventos a mais MUST ser descartados e contados, sem bloquear os processos do cgroup.
+O auxiliar MUST mandar a quem pediu o confinamento, pela conexão dele, um evento a cada operação negada pelos programas, a cada arquivo criado no cgroup e, quando o pedido lista montagens a registrar, a cada abertura nelas, com o caminho. Numa abertura, negada ou não, MUST dizer se lê e se grava. O evento MUST ter o tipo, o gancho e o inode ou o nome, e MUST NOT ter conteúdo de arquivo. No Docker privado, com a fila cheia, os eventos a mais MUST ser descartados e contados, sem bloquear o cgroup.
 
 #### Scenario: Leitura negada
 - **WHEN** um contêiner do confinamento tenta ler um arquivo marcado como negado
@@ -61,6 +61,10 @@ O auxiliar MUST mandar a quem pediu o confinamento, pela mesma conexão, um even
 #### Scenario: Abertura registrada
 - **WHEN** o confinamento de uma aba lista a montagem da pasta de trabalho e o agente lê `src/main.rs`
 - **THEN** o daemon recebe um evento de abertura com o caminho de `src/main.rs`, de leitura
+
+#### Scenario: Abertura de leitura e escrita
+- **WHEN** o confinamento de uma aba lista a montagem da pasta de trabalho e o agente abre `notas.md` para leitura e escrita
+- **THEN** o daemon recebe um evento de abertura com o caminho de `notas.md`, que lê e grava
 
 ### Requirement: Observação das execuções
 O pedido `observe` MUST carregar só a observação das execuções e das conexões TCP no cgroup pedido e nos de baixo, sem regra de arquivos nem marca, e o `confine` MUST incluir a das execuções. Cada execução MUST virar um evento com o caminho executado, o pid e os argumentos; cada conexão TCP, um evento com o pid, a porta de origem e o destino, pela conexão que fez o pedido. A observação MUST NOT negar nem atrasar nada, e MUST terminar quando a conexão com o auxiliar fecha.

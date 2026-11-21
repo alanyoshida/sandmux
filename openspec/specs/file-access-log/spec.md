@@ -54,6 +54,10 @@ Cada acesso distinto (caminho e tipo de acesso) às pastas do agente (pasta de t
 - **WHEN** o agente roda `ls /usr/bin`
 - **THEN** nenhuma linha de `/usr` vai para o registro
 
+#### Scenario: Leitura e escrita numa aba confinada pelo kernel
+- **WHEN** a aba é confinada pelo kernel e o agente abre um arquivo da pasta de trabalho para leitura e escrita, e outro numa pasta em `file-deny`
+- **THEN** o registro tem uma linha `rw` do primeiro e uma linha `rw` bloqueada do segundo, como numa aba pelo supervisor
+
 ### Requirement: Consulta e retenção do registro de arquivos
 `sandmux files [<id>]` MUST mostrar as linhas recentes do registro de arquivos, de uma sessão ou de todas, com a hora, a sessão, o acesso e o caminho. O daemon MUST aplicar à pasta `files` a retenção do registro de rede (`net-log-days` e `net-log-max`).
 

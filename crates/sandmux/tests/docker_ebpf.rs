@@ -705,7 +705,8 @@ fn arquivos_da_aba_pelo_kernel() {
 
 /// O shell de entrada de uma aba pelo kernel (change 81): as mesmas
 /// negações, as aberturas pela fila do kernel e os mesmos filtros seccomp
-/// do comando, sem o supervisor de aberturas.
+/// do comando, sem o supervisor de aberturas (vinte mil aberturas custam no
+/// shell o mesmo que no comando, e não uma ida e volta ao supervisor cada).
 #[test]
 fn shell_de_entrada_pela_aba_no_kernel() {
     if helper().is_none() {
@@ -735,6 +736,15 @@ fn shell_de_entrada_pela_aba_no_kernel() {
     };
     let da_aba = run_in(&mut t, &e.work, "grep Seccomp_filters /proc/self/status");
     let da_aba = filtros(&da_aba).unwrap_or_else(|| panic!("{da_aba}"));
+    const ABERTURAS: &str = "python3 -c \"import os,time\nfor _ in range(3):\n t=time.perf_counter()\n for _ in range(20000): os.close(os.open('comum.txt', os.O_RDONLY))\n print('T', int((time.perf_counter()-t)*1e6))\"";
+    let menor = |s: &str| -> u64 {
+        s.lines()
+            .filter_map(|l| l.trim().strip_prefix("T "))
+            .filter_map(|x| x.parse().ok())
+            .min()
+            .unwrap_or_else(|| panic!("sem a medida: {s}"))
+    };
+    let t_aba = menor(&run_in(&mut t, &e.work, ABERTURAS));
 
     let mut cmd = e.cmd(&e.work, &["enter", "1"]);
     cmd.env("SHELL", "/bin/bash");
@@ -750,6 +760,11 @@ fn shell_de_entrada_pela_aba_no_kernel() {
     assert!(s.contains("dados.sql: Permission denied"), "{s}");
     assert!(s.contains("comum\n"), "{s}");
     assert_eq!(filtros(&s), Some(da_aba), "{s}");
+    let t_shell = menor(&run_in(&mut d, &e.work, ABERTURAS));
+    assert!(
+        t_shell < 3 * t_aba.max(20_000),
+        "as aberturas do shell passam pelo supervisor: {t_shell} µs, contra {t_aba} µs na aba"
+    );
     std::thread::sleep(Duration::from_millis(1000));
     let l = all_file_lines(&e);
     let de = |nome: &str| {
@@ -764,12 +779,75 @@ fn shell_de_entrada_pela_aba_no_kernel() {
             .is_some_and(|b| b.starts_with("file-deny"))),
         "{l:?}"
     );
-    // A leitura e escrita vem do kernel (`w`); o supervisor daria `rw`.
+    // A leitura e escrita, `rw` como no supervisor (change 82).
     let misto = de("/misto.txt");
-    assert!(misto.iter().any(|x| x["access"] == "w"), "{misto:?}");
-    assert!(!misto.iter().any(|x| x["access"] == "rw"), "{misto:?}");
+    assert!(misto.iter().any(|x| x["access"] == "rw"), "{misto:?}");
     d.write(b"exit\r");
     d.wait_exit();
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
+}
+
+/// O acesso das aberturas numa aba pelo kernel (change 82): `r`, `w` e
+/// `rw` como no supervisor, também numa abertura bloqueada, e o mesmo
+/// arquivo lido e depois aberto para leitura e escrita com as duas linhas.
+#[test]
+fn acesso_de_leitura_e_escrita_pelo_kernel() {
+    if helper().is_none() {
+        return;
+    }
+    let e = Env::new();
+    let privado = e.work.join("privado");
+    std::fs::create_dir_all(&privado).unwrap();
+    std::fs::write(privado.join("dados.sql"), "segredo\n").unwrap();
+    for n in ["le.txt", "grava.txt", "ambos.txt", "depois.txt"] {
+        std::fs::write(e.work.join(n), "x\n").unwrap();
+    }
+    e.write_config(&format!(
+        "[project.\"{}\"]\nfile-deny = [\"{}\"]\n",
+        e.work.display(),
+        privado.display()
+    ));
+    let mut t = term(&e, &e.work);
+    let s = run_in(&mut t, &e.work, "sleep 1; echo PRONTO");
+    assert!(s.contains("PRONTO"), "{s}");
+    assert!(stats(&e).contains("aberturas de arquivo: pelo kernel"));
+    let s = run_in(
+        &mut t,
+        &e.work,
+        "cat le.txt >/dev/null; echo y > grava.txt; exec 3<>ambos.txt; exec 3>&-; \
+         cat depois.txt >/dev/null; exec 4<>depois.txt; exec 4>&-; \
+         (exec 5<>privado/dados.sql) 2>&1; echo FIM",
+    );
+    assert!(s.contains("FIM"), "{s}");
+    assert!(s.contains("Permission denied"), "{s}");
+    std::thread::sleep(Duration::from_millis(1000));
+    let l = all_file_lines(&e);
+    let acessos = |nome: &str| -> Vec<String> {
+        let mut v: Vec<String> = l
+            .iter()
+            .filter(|x| x["path"].as_str().is_some_and(|p| p.ends_with(nome)))
+            .filter(|x| x["blocked"].is_null())
+            .filter_map(|x| x["access"].as_str().map(String::from))
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(acessos("/le.txt"), ["r"], "{l:?}");
+    assert_eq!(acessos("/grava.txt"), ["w"], "{l:?}");
+    assert_eq!(acessos("/ambos.txt"), ["rw"], "{l:?}");
+    assert_eq!(acessos("/depois.txt"), ["r", "rw"], "{l:?}");
+    assert!(
+        l.iter().any(|x| x["path"]
+            .as_str()
+            .is_some_and(|p| p.ends_with("/dados.sql"))
+            && x["access"] == "rw"
+            && x["blocked"]
+                .as_str()
+                .is_some_and(|b| b.starts_with("file-deny"))),
+        "{l:?}"
+    );
     t.write(b"exit\r");
     t.wait_exit();
     limpar(&e);

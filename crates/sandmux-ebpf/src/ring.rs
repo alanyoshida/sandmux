@@ -85,7 +85,10 @@ pub struct Event {
     pub hook: u32,
     /// Os bits da marca que negaram (bloqueios).
     pub bits: u32,
-    /// A abertura negada era para escrita.
+    /// A abertura (registrada ou negada) era para leitura (`FMODE_READ`).
+    pub read: bool,
+    /// A abertura era para escrita, ou a operação negada grava
+    /// (`FMODE_WRITE`).
     pub write: bool,
     /// O inode marcado que negou, ou o diretório da criação.
     pub ino: u64,
@@ -104,7 +107,7 @@ fn u32_at(b: &[u8], o: usize) -> u32 {
 
 impl Event {
     /// Lê um evento do formato que os programas gravam: `kind`, `hook`,
-    /// `bits`, `write` (u32 cada), `ino` (u64), `dev`, o tamanho do nome com o
+    /// `bits`, o modo (u32 cada; os bits `FMODE_READ` e `FMODE_WRITE`), `ino` (u64), `dev`, o tamanho do nome com o
     /// NUL (u32) e, nas criações, o nome.
     pub fn decode(b: &[u8]) -> Option<Event> {
         if b.len() < EV_HEADER {
@@ -138,7 +141,8 @@ impl Event {
             kind,
             hook: u32_at(b, 4),
             bits: u32_at(b, 8),
-            write: u32_at(b, 12) != 0,
+            read: u32_at(b, 12) & 1 != 0,
+            write: u32_at(b, 12) & 2 != 0,
             ino: u64::from_le_bytes(b[16..24].try_into().expect("8 bytes")),
             dev: u32_at(b, 24),
             name,
@@ -351,10 +355,16 @@ mod tests {
         let mut d = vec![0u8; EV_HEADER];
         d[0..4].copy_from_slice(&EV_DENY.to_le_bytes());
         d[8..12].copy_from_slice(&1u32.to_le_bytes());
-        d[12..16].copy_from_slice(&1u32.to_le_bytes());
+        d[12..16].copy_from_slice(&2u32.to_le_bytes());
         d[16..24].copy_from_slice(&7u64.to_le_bytes());
         let e = Event::decode(&d).unwrap();
-        assert!(e.write && e.bits == 1 && e.ino == 7 && e.name.is_empty());
+        assert!(e.write && !e.read && e.bits == 1 && e.ino == 7 && e.name.is_empty());
+        // O modo: leitura (1), escrita (2) ou as duas (3).
+        for (m, r, w) in [(1u32, true, false), (2, false, true), (3, true, true)] {
+            d[12..16].copy_from_slice(&m.to_le_bytes());
+            let e = Event::decode(&d).unwrap();
+            assert_eq!((e.read, e.write), (r, w), "modo {m}");
+        }
         assert!(Event::decode(&[0; 8]).is_none());
         let mut c = vec![0u8; CONN_EVENT];
         c[0..4].copy_from_slice(&EV_CONN.to_le_bytes());
