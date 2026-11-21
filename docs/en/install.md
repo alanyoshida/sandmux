@@ -74,8 +74,8 @@ It is the configuration step for every channel: script, packages, Homebrew and `
 | Tarball | `sandmux-<version>-x86_64-linux.tar.gz` | wherever `install.sh` puts it | `install.sh` already runs setup |
 
 ```sh
-sudo apt install ./sandmux_0.1.29_amd64.deb
-sudo dnf install ./sandmux-0.1.29-1.x86_64.rpm
+sudo apt install ./sandmux_0.1.30_amd64.deb
+sudo dnf install ./sandmux-0.1.30-1.x86_64.rpm
 ```
 
 ## From source
