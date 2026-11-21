@@ -1,15 +1,17 @@
-sandmux 0.1.28, antes da v1: o escopo do sandbox sobrevive a um reinício do auxiliar root.
+sandmux 0.1.29, antes da v1: o registro das aberturas de arquivo sai completo numa leitura em massa.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Correção
 
-- **Ubuntu 24.04 com o kernel 6.8:** quando o [auxiliar root](https://github.com/alanyoshida/sandmux/blob/main/docs/helper.md#escopo-do-sandbox) reiniciava (uma atualização, um travamento), as abas que rodavam perdiam o escopo do sandbox sem aviso. Perdiam o bloqueio dos sockets abstratos de fora, dos sinais para fora e para o processo 1, e do `ioctl` em dispositivo. Agora o daemon congela cada aba, registra o escopo de novo no auxiliar seguinte e descongela; a aba segue de onde parou. Sem o escopo de volta em 30 s, a aba para. Num `sandmux run` sem terminal, o próprio lançador registra de novo.
-- **Lançamento durante a troca do auxiliar:** podia ser recusado com "o auxiliar root não respondeu ao pedido". Agora o lançador tenta de novo por até 30 s, e o auxiliar, ao sair, não atende conexões novas. No 6.8, os programas do escopo carregam quando o auxiliar sobe e ficam carregados por 60 s depois da última aba, porque carregá-los leva segundos nesse kernel.
+- **Registro completo com os [arquivos pelo kernel](https://github.com/alanyoshida/sandmux/blob/main/docs/files.md#pelo-kernel):** numa leitura em massa (um `grep -r`, um indexador, milhares de arquivos de uma vez), a fila do kernel podia encher. As aberturas a mais saíam do registro, e só a linha de descarte aparecia. Agora o registro sai completo:
+  - o kernel não manda de novo a abertura do mesmo arquivo, no mesmo modo, em menos de 1 s;
+  - o evento leva só os bytes do caminho;
+  - o auxiliar root esvazia a fila numa thread própria;
+  - quando a fila enche mesmo assim, o auxiliar congela a aba por alguns milissegundos, até ela esvaziar. Cada congelamento vai para o journal do auxiliar.
+- **Mais rápido:** ler 13 mil arquivos da pasta de trabalho, numa VM do Ubuntu 24.04, custa 1,05x no kernel 6.8 e 1,14x no 7.0 (eram 1,14x e 1,39x), contra 2,7x e 3,0x do supervisor.
 
-Nos kernels 6.12 ou mais novos (Landlock ABI 6), o escopo não depende do auxiliar, e nada muda.
-
-Esta versão muda o lançador, o daemon e o auxiliar root. O protocolo entre o cliente e o daemon sobe para 44: depois de atualizar, rode `sandmux daemon restart`, e atualize o auxiliar (`sandmux setup`).
+Esta versão muda só o auxiliar root. Depois de atualizar, atualize o auxiliar (`sandmux setup`). O protocolo entre o cliente e o daemon não muda.
 
 ## Instalar
 
