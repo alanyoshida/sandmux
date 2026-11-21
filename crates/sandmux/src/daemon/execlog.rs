@@ -183,17 +183,34 @@ fn run(shared: &Arc<Shared>, id: u32, pid: i32, cg: &Path) {
         return;
     }
     set_supervisor(&tag, false);
+    // Os processos que já estão no escopo; os eventos de agora em diante
+    // esperam na fila e entram depois.
+    let mut seeded = super::proctree::ProcTree::default();
+    seeded.seed(cg, Path::new("/proc"));
+    {
+        let mut st = shared.lock();
+        if let Some(s) = st.sessions.get_mut(&id)
+            && s.pid() == Some(pid)
+        {
+            s.proc_tree = seeded;
+        }
+    }
     for msg in rx {
         for e in entries(&msg, &tag, &workdir) {
             super::dockerfiles::write_entry(&e);
         }
         let conns = conn_events(&msg);
-        if !conns.is_empty() {
-            let mut st = shared.lock();
-            if let Some(s) = st.sessions.get_mut(&id) {
-                for (k, v) in conns {
-                    s.conns.insert(k, v);
-                }
+        let tree = super::proctree::changes(&msg, Path::new("/proc"));
+        if conns.is_empty() && tree.is_empty() {
+            continue;
+        }
+        let mut st = shared.lock();
+        if let Some(s) = st.sessions.get_mut(&id)
+            && s.pid() == Some(pid)
+        {
+            s.proc_tree.commit(tree);
+            for (k, v) in conns {
+                s.conns.insert(k, v);
             }
         }
     }
@@ -207,6 +224,7 @@ fn run(shared: &Arc<Shared>, id: u32, pid: i32, cg: &Path) {
         let mut st = shared.lock();
         if let Some(s) = st.sessions.get_mut(&id) {
             s.exec_obs = None;
+            s.proc_tree = Default::default();
         }
     }
 }

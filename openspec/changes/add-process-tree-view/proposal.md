@@ -14,24 +14,23 @@ A seção "Recursos" do painel lateral já mostra memória, CPU e a contagem de 
   - Dobra automática: um ramo com mais descendentes que um limiar nasce dobrado, para um processo com muitos filhos diretos não dominar a tela.
   - Atualização ao vivo, amortizada a 1 vez por segundo — a mesma cadência da seção "Recursos".
 - **Observação das execuções (`root-helper`) ganha o `ppid` e a saída do processo**: o programa de execução do pedido `observe`/`confine` passa a mandar também o pid de quem lançou cada execução, e um evento novo quando um processo observado termina. Sem esses dois dados não é possível montar nem manter uma árvore — só uma lista plana de execuções, como hoje.
-- **Nova capability `process-tree`**: o daemon monta e mantém, por aba, a árvore de processos vivos a partir desses eventos (kernel, pelo auxiliar root) ou, nas máquinas sem o auxiliar, a partir do que o supervisor de aberturas já acompanha para o registro de execuções (mesma fonte e a mesma marcação `kernel`/`supervisor` que o registro de execuções já usa), e expõe essa árvore ao cliente pelo protocolo.
+- **Nova capability `process-tree`**: o daemon monta e mantém, por aba, a árvore de processos vivos a partir desses eventos, que chegam pela observação das execuções do auxiliar root, e a entrega ao cliente por um pedido no molde de `Stats`. Sem o auxiliar root, não há árvore: a resposta traz o motivo (decisão do usuário, 2026-11-21, depois de ver que o supervisor só grava o registro em arquivo, sem canal ao vivo até o daemon).
 
 ## Capabilities
 
 ### New Capabilities
-- `process-tree`: o daemon acompanha, por sessão, a árvore de processos vivos do seu sandbox (quem lançou quem, nome, pid, memória, cmdline), a partir dos eventos de execução e saída, com a fonte dos dados (kernel ou supervisor) marcada como no registro de execuções, e expõe essa árvore ao cliente da TUI.
+- `process-tree`: o daemon acompanha, por sessão, a árvore de processos vivos do seu sandbox (quem lançou quem, nome, pid, memória, cmdline), a partir dos eventos de execução e saída vistos pelo kernel, e a entrega ao cliente da TUI.
 
 ### Modified Capabilities
-- `root-helper`: a "Observação das execuções" passa a incluir o `ppid` no evento de execução e ganha um evento novo para a saída do processo.
+- `root-helper`: a "Observação das execuções" passa a incluir o `ppid` no evento de execução, e o `observe` ganha um evento novo para a saída do processo.
 - `terminal-ui`: a página de configurações ganha a seção "Processos", com a árvore de processos da aba ativa, zoom de densidade, drill-down e dobra de ramos.
 
 ## Impact
 
-- `crates/sandmux-ebpf/src/exec.rs`: ler e mandar o `ppid` no evento de execução (`EV_EXEC`); programa `tp_btf` novo, ou evento novo no mesmo programa, para `sched_process_exit`.
-- `crates/sandmux/src/helper.rs`: os pedidos `observe` e `confine` passam o `ppid` e o evento de saída pela conexão.
-- `crates/sandmux-launcher/src/seccomp.rs` e `crates/sandmux-launcher/src/files.rs`: o caminho do supervisor (sem auxiliar) passa a acompanhar `ppid` e saída de processo, para alimentar a árvore na mesma fonte usada hoje pelo registro de execuções.
-- `crates/sandmux/src/daemon/session.rs` (e o par do Docker privado): monta e mantém a árvore em memória a partir dos eventos; novo estado por sessão.
-- `crates/sandmux-proto`: mensagem nova (ou campo novo numa existente) para o cliente pedir e receber a árvore; a versão do protocolo muda.
+- `crates/sandmux-ebpf/src/ring.rs` e `exec.rs`: o `ppid` no evento de execução (`EV_EXEC`) e um programa `tp_btf` novo para `sched_process_exit` (`EV_EXIT`), preso pelo `observe`.
+- `crates/sandmux/src/helper.rs`: o JSON dos eventos ganha o `ppid` e o evento `exit`.
+- `crates/sandmux/src/daemon/execlog.rs`, um módulo novo da árvore e `session.rs`: a árvore em memória por sessão, alimentada no laço da observação.
+- `crates/sandmux-proto` e `daemon/conn.rs`: `Msg::ProcessTree` e `Msg::ProcessTreeOf`; a versão do protocolo vai a 45.
 - `crates/sandmux/src/tui/settings.rs` e `crates/sandmux/src/tui/render.rs`: seção "Processos" (índice novo em `SECTIONS`), desenho customizado da árvore (outline, migalha de pão, zoom, drill-down, dobra), análogo ao que "Diagnóstico" e "Cofre" já fazem para seções sem formulário.
 - `docs/config.md` (e `docs/en/config.md`): a seção nova na página de configurações.
 
@@ -39,4 +38,6 @@ A seção "Recursos" do painel lateral já mostra memória, CPU e a contagem de 
 
 - Mostrar a árvore de processos do daemon inteiro ou de outras abas — só a da aba ativa.
 - Agir sobre um processo pela árvore (matar, renomear prioridade): a tela só observa.
-- Testar a extensão do eBPF fora de uma VM, ou no host, sem autorização explícita do usuário — ver `design.md`.
+- A árvore sem o auxiliar root (o supervisor não tem canal ao vivo até o daemon).
+- Processos que fazem `fork` sem `exec` depois que a observação liga (falta o tracepoint de `fork`).
+- Testar a extensão do eBPF fora da VM (`scripts/vm-ubuntu-2404.sh`), ou sem autorização explícita do usuário — ver `design.md`.

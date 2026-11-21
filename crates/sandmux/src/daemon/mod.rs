@@ -17,6 +17,7 @@ mod history;
 mod keyring;
 mod net;
 pub mod notify;
+mod proctree;
 mod secretwatch;
 mod session;
 mod sshagent;

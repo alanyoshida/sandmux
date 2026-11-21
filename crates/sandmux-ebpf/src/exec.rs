@@ -50,7 +50,9 @@ pub struct ExecLayout {
     task_mm: i16,
     mm_arg_start: i16,
     mm_arg_end: i16,
-    /// O `tgid` do processo (o pid visto pelo usuário) e o do pai.
+    /// O `pid` da tarefa (a thread), o `tgid` do processo (o pid visto pelo
+    /// usuário) e o pai.
+    task_pid: i16,
     task_tgid: i16,
     task_real_parent: i16,
 }
@@ -108,6 +110,7 @@ impl ExecLayout {
             task_mm: off(b, "task_struct", "mm")?,
             mm_arg_start: off(b, "mm_struct", "arg_start")?,
             mm_arg_end: off(b, "mm_struct", "arg_end")?,
+            task_pid: off(b, "task_struct", "pid")?,
             task_tgid: off(b, "task_struct", "tgid")?,
             task_real_parent: off(b, "task_struct", "real_parent")?,
         })
@@ -275,6 +278,8 @@ pub fn build_conn(
 /// Monta o programa de saída: um `tp_btf` no tracepoint
 /// `sched_process_exit`, filtrado pelo mesmo cgroup. Manda só o cabeçalho,
 /// com o pid (o `tgid` do processo que terminou), sem nome nem argumentos.
+/// O tracepoint dispara por thread; só a saída do líder (`pid == tgid`) vira
+/// evento, para o fim de uma thread não parecer o fim do processo.
 pub fn build_exit(
     l: &ExecLayout,
     level: i32,
@@ -287,6 +292,11 @@ pub fn build_exit(
     let out = a.label();
     let drop = a.label();
     a.mov(R6, R1);
+    // R8 = a tarefa que terminou (preservado nas chamadas).
+    a.ldx(Size::DW, R8, R6, 0);
+    a.ldx(Size::W, R1, R8, l.task_pid);
+    a.ldx(Size::W, R2, R8, l.task_tgid);
+    a.jmp_reg(Cond::Ne, R1, R2, out);
     a.mov_imm(R1, level);
     a.call(l.fn_ancestor_cgroup_id);
     a.ld_imm64(R1, cgroup_id);
@@ -303,11 +313,9 @@ pub fn build_exit(
     a.st(Size::W, R7, 12, 0);
     a.st(Size::W, R7, 24, 0);
     a.st(Size::W, R7, 28, 0);
-    // O pid (o tgid) de quem terminou, lido do contexto, não de
-    // `bpf_get_current_pid_tgid` (que seria a tarefa atual, não
-    // necessariamente a que o tracepoint recebeu).
-    a.ldx(Size::DW, R1, R6, 0);
-    a.ldx(Size::W, R1, R1, l.task_tgid);
+    // O pid (o tgid) de quem terminou, lido da tarefa que o tracepoint
+    // recebeu.
+    a.ldx(Size::W, R1, R8, l.task_tgid);
     a.stx(Size::DW, R7, 16, R1);
     a.mov(R1, R7);
     a.mov_imm(R2, 0);
@@ -523,10 +531,7 @@ mod tests {
         // O ppid: duas leituras encadeadas (task->real_parent, depois
         // ->tgid) e a gravação no lugar dos bits (offset 8).
         assert!(p.iter().any(|i| i.code == 0x61 && i.off == l.task_tgid));
-        assert!(
-            p.iter()
-                .any(|i| i.code == 0x63 && i.off == 8 && i.imm == 0)
-        );
+        assert!(p.iter().any(|i| i.code == 0x63 && i.off == 8 && i.imm == 0));
         let c = build_conn(&l, 5, 1234, 4, 5).unwrap();
         assert_eq!(c.last().unwrap().code, 0x95);
         assert_eq!(l.conn_ids.len(), 2);
@@ -537,13 +542,26 @@ mod tests {
         // O programa de saída: só o cabeçalho, com o pid no lugar do inode.
         let x = build_exit(&l, 5, 1234, 4, 5).unwrap();
         assert_eq!(x.last().unwrap().code, 0x95);
+        // Só o líder: lê pid e tgid e compara antes do filtro do cgroup.
+        let cg = x
+            .iter()
+            .position(|i| i.code == 0x85 && i.imm == l.fn_ancestor_cgroup_id)
+            .unwrap();
+        assert!(cg < 8);
+        let pid = x
+            .iter()
+            .position(|i| i.code == 0x61 && i.off == l.task_pid)
+            .unwrap();
+        assert!(pid < cg);
         assert!(
-            x.iter()
-                .take(6)
-                .any(|i| i.code == 0x85 && i.imm == l.fn_ancestor_cgroup_id)
+            x[..cg].iter().any(|i| i.code == 0x5d),
+            "falta o jne entre pid e tgid"
         );
         assert!(x.iter().any(|i| i.code == 0x61 && i.off == l.task_tgid));
         assert!(x.iter().any(|i| i.code == 0x7b && i.off == 16));
-        assert!(x.iter().any(|i| i.code == 0x85 && i.imm == l.fn_ringbuf_submit));
+        assert!(
+            x.iter()
+                .any(|i| i.code == 0x85 && i.imm == l.fn_ringbuf_submit)
+        );
     }
 }

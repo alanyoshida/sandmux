@@ -192,6 +192,7 @@ Ctrl+b `e`, ou "configurações" no menu, abre uma página de tela cheia com as 
 | Registro | dias e teto do registro de rede |
 | Cofre | o estado e os segredos do cofre, sem os valores; criar, desbloquear, trancar, trocar a senha, acrescentar segredo e chave SSH, editar domínios e apagar ([vault.md](vault.md#pela-tui)) |
 | Diagnóstico | as verificações do `sandmux doctor`, e as chaves reais levadas ao cofre ([veja abaixo](#diagnóstico)) |
+| Processos | a árvore de processos da aba ativa, com zoom, dobra e entrada nos ramos ([veja abaixo](#processos)) |
 
 Cada item mostra o valor atual e de onde ele vem ("padrão", "do global"):
 
@@ -230,7 +231,7 @@ As opções de `[tui]`, `[assistant]` e do registro valem só no global; com o a
 
 ### Diagnóstico
 
-A seção Diagnóstico, no fim da página, mostra as verificações do `sandmux doctor` ([install.md](install.md)). Ctrl+b `D`, ou "diagnóstico" no menu, abre a página direto nela.
+A seção Diagnóstico, depois do Cofre, mostra as verificações do `sandmux doctor` ([install.md](install.md)). Ctrl+b `D`, ou "diagnóstico" no menu, abre a página direto nela.
 
 - **Na lateral:** o nome da seção mostra quantas verificações falharam, como `Diagnóstico ✗1`. As verificações rodam ao abrir a página e ao entrar na seção, e `r` roda de novo. A linha de estado mostra a hora da última verificação.
 - **Na lista:** uma linha por verificação, agrupada em Sandbox, Instalação, Configuração, Daemon, Cofre e Chaves reais. A marca é `✓` (certo), `✗` (falha), `!` (aviso) ou `·` (informação).
@@ -248,6 +249,29 @@ A seção Diagnóstico, no fim da página, mostra as verificações do `sandmux 
 6. No fim, um aviso diz quantas chaves foram levadas e quais abas reiniciar (Ctrl+b `r`).
 
 Os valores reais nunca aparecem na tela.
+
+### Processos
+
+A seção Processos, no fim da página, mostra a árvore dos processos vivos da aba ativa: quem lançou quem, um processo por linha, recuado sob o pai. Ela é atualizada a cada segundo enquanto está aberta, sem mudar a seleção, as dobras nem o ramo em que se entrou.
+
+A árvore vem da observação das execuções pelo kernel ([helper.md](helper.md)): cada execução traz o pai, e cada processo que termina sai da árvore. Sem o auxiliar root, não há árvore, e a seção mostra o motivo (o mesmo que a proteção do painel mostra para a fonte das execuções). Os pids são os do host, não os de dentro do sandbox. Um processo que faz `fork` sem `exec` depois que a aba começou (um subshell, workers que se copiam) não aparece.
+
+- **Migalha de pão:** a primeira linha mostra o caminho até a raiz da tela, começando por "aba", e o nível de zoom. Um clique num segmento volta a ele.
+- **Zoom (`+` e `-`):** três níveis para a árvore inteira: nome e pid; mais a memória residente; e um cartão com a linha de comando, o CPU usado, a memória, há quanto tempo o processo começou e o cgroup.
+- **Dobra:** `▾` aberto, `▸` dobrado (com `+N`, os descendentes escondidos), `·` sem filhos. Um ramo com mais de 12 descendentes nasce dobrado, menos as raízes da tela.
+- **Entrar num ramo (Enter):** o processo escolhido vira a raiz da tela, com os descendentes dele, e entra no fim da migalha.
+
+| Tecla | Ação |
+|---|---|
+| ↑ ↓ | Movem a seleção |
+| → | Desdobra |
+| ← | Dobra; num processo sem o que dobrar, volta às seções |
+| Espaço | Dobra e desdobra |
+| Enter | Entra no ramo |
+| Backspace | Volta um nível na migalha |
+| Esc | Volta um nível; na raiz, volta às seções |
+| `+` `-` | Zoom |
+| `r` | Lê de novo |
 
 ## Tema de cores
 

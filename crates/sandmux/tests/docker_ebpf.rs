@@ -528,6 +528,114 @@ fn observacao_de_execucoes_no_kernel() {
     assert!(achou, "o evento do ls não chegou");
 }
 
+/// A árvore pelo kernel: a execução do filho traz o ppid do `sh` que o
+/// lançou, e o fim do filho e do `sh` chegam como eventos `exit`.
+#[test]
+fn ppid_e_saida_no_kernel() {
+    let Some(sock) = helper() else { return };
+    let mut child = Command::new("systemd-run")
+        .args([
+            "--user",
+            "--scope",
+            "--quiet",
+            "--",
+            "sh",
+            "-c",
+            "sleep 2; ls / >/dev/null; sleep 0.5",
+        ])
+        .spawn()
+        .unwrap();
+    // O systemd-run --scope vira o comando: o pid do `sh` é o do filho.
+    let sh = child.id() as u64;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    let dir = loop {
+        let cg = std::fs::read_to_string(format!("/proc/{sh}/cgroup")).unwrap_or_default();
+        if let Some(rel) = cg.trim().strip_prefix("0::")
+            && rel.ends_with(".scope")
+            && cg != own
+        {
+            break Path::new("/sys/fs/cgroup").join(rel.trim_start_matches('/'));
+        }
+        assert!(Instant::now() < deadline, "sem escopo: {cg}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let c = sandmux::helper::Client::connect(&sock).unwrap();
+    let ev = c.take_events().unwrap();
+    c.observe(&dir).unwrap_or_else(|e| panic!("observe: {e}"));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (mut ls, mut saidas) = (None::<u64>, Vec::new());
+    while Instant::now() < deadline
+        && !(ls.is_some_and(|p| saidas.contains(&p)) && saidas.contains(&sh))
+    {
+        if let Ok(v) = ev.recv_timeout(Duration::from_millis(200)) {
+            for e in v["ev"].as_array().into_iter().flatten() {
+                if e["kind"] == "exec" && e["path"].as_str().is_some_and(|p| p.ends_with("/ls")) {
+                    assert_eq!(e["ppid"].as_u64(), Some(sh), "{e}");
+                    ls = e["pid"].as_u64();
+                }
+                if e["kind"] == "exit" {
+                    saidas.extend(e["pid"].as_u64());
+                }
+            }
+        }
+    }
+    let _ = child.wait();
+    let ls = ls.expect("o evento do ls não chegou");
+    assert!(saidas.contains(&ls), "sem a saída do ls ({ls}): {saidas:?}");
+    assert!(saidas.contains(&sh), "sem a saída do sh ({sh}): {saidas:?}");
+}
+
+/// A seção "Processos" da página de configurações, pelo kernel: um `sleep`
+/// lançado no shell da aba aparece na árvore, um nível abaixo do shell, e
+/// sai dela quando termina.
+#[test]
+fn arvore_de_processos_na_tui() {
+    let Some(_) = helper() else { return };
+    let e = Env::new();
+    let mut s = term(&e, &e.work);
+    let out = run_in(&mut s, &e.work, "sleep 1.5; echo PRONTO");
+    assert!(out.contains("PRONTO"), "{out}");
+    s.write(b"sleep 31 & echo LANCADO\r");
+    s.wait_text("LANCADO");
+    s.write(b"\x02d");
+    assert_eq!(s.wait_exit(), 0);
+    let mut cmd = e.cmd(&e.work, &[]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut t = Term::spawn_answering(cmd, 120, 40);
+    t.wait_text(&tab(1, "shell:app"));
+    t.write(b"\x02e");
+    t.wait_text("sandmux · configurações");
+    for _ in 0..20 {
+        t.write(b"\x1b[B");
+    }
+    t.wait_text("zoom 1/3");
+    t.wait_text("sleep (");
+    t.with_screen(|sc| {
+        let c = sc.contents();
+        assert!(!c.contains("precisa do auxiliar root"), "{c}");
+        // O sleep fica recuado em relação ao shell que o lançou.
+        let col = |name: &str| {
+            c.lines()
+                .find(|l| l.contains(name))
+                .and_then(|l| l.find(name))
+                .unwrap_or(0)
+        };
+        assert!(col("sleep (") > col("bash ("), "{c}");
+    });
+    // O zoom 3 mostra o cartão com a linha de comando.
+    t.write(b"\t++");
+    t.wait_text("zoom 3/3");
+    t.wait_text("sleep 31");
+    let _ = Command::new("pkill").args(["-f", "sleep 31"]).status();
+    t.wait_for("o sleep saiu da árvore", |c| !c.contains("sleep ("));
+    t.write(b"\x1b");
+    t.write(b"\x1b");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+    limpar(&e);
+}
+
 /// Linhas `exec` do registro de arquivos deste ambiente.
 fn exec_lines(e: &Env) -> Vec<serde_json::Value> {
     let dir = e.state.join("sandmux/files");

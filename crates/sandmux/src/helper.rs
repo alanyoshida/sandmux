@@ -1120,7 +1120,10 @@ struct RealEvents {
 /// Um evento do kernel como JSON, com o nome do gancho.
 pub fn event_json(e: &sandmux_ebpf::ring::Event) -> Value {
     if e.kind == sandmux_ebpf::ring::EV_EXEC {
-        return json!({"kind": "exec", "pid": e.ino, "path": e.name, "args": e.args});
+        return json!({"kind": "exec", "pid": e.ino, "ppid": e.bits, "path": e.name, "args": e.args});
+    }
+    if e.kind == sandmux_ebpf::ring::EV_EXIT {
+        return json!({"kind": "exit", "pid": e.ino});
     }
     if e.kind == sandmux_ebpf::ring::EV_OPEN {
         return json!({"kind": "open", "read": e.read, "write": e.write, "ino": e.ino, "mnt": e.dev, "path": e.name});
@@ -2356,6 +2359,30 @@ mod tests {
         );
         assert_eq!(MarkKind::Secret.bits(), sandmux_ebpf::prog::SECRET);
         assert_eq!(MarkKind::FileDeny.bits(), sandmux_ebpf::prog::FDENY);
+    }
+
+    #[test]
+    fn execucao_com_ppid_e_saida_em_json() {
+        use sandmux_ebpf::ring::{EV_EXEC, EV_EXIT, EV_HEADER, EV_NAME, EXEC_ARGS, Event};
+        let mut x = vec![0u8; EV_HEADER + EV_NAME + EXEC_ARGS];
+        x[0..4].copy_from_slice(&EV_EXEC.to_le_bytes());
+        x[8..12].copy_from_slice(&40u32.to_le_bytes());
+        x[16..24].copy_from_slice(&41u64.to_le_bytes());
+        x[24..28].copy_from_slice(&3u32.to_le_bytes());
+        x[28..32].copy_from_slice(&8u32.to_le_bytes());
+        x[32..39].copy_from_slice(b"/bin/ls");
+        x[EV_HEADER + EV_NAME..EV_HEADER + EV_NAME + 3].copy_from_slice(b"ls\0");
+        assert_eq!(
+            event_json(&Event::decode(&x).unwrap()),
+            json!({"kind": "exec", "pid": 41, "ppid": 40, "path": "/bin/ls", "args": ["ls"]})
+        );
+        let mut y = vec![0u8; EV_HEADER];
+        y[0..4].copy_from_slice(&EV_EXIT.to_le_bytes());
+        y[16..24].copy_from_slice(&41u64.to_le_bytes());
+        assert_eq!(
+            event_json(&Event::decode(&y).unwrap()),
+            json!({"kind": "exit", "pid": 41})
+        );
     }
 
     #[test]

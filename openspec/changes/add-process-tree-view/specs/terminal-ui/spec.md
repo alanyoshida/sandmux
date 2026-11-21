@@ -13,6 +13,10 @@ A página de configurações MUST ter a seção "Processos", depois de "Diagnós
 - **WHEN** um processo novo aparece ou termina enquanto a seção está aberta
 - **THEN** a árvore MUST refletir a mudança na atualização seguinte (até 1 segundo depois), sem mover a seleção nem desfazer dobras manuais do usuário
 
+#### Scenario: Aba sem a observação pelo kernel
+- **WHEN** a aba ativa registra as execuções pelo supervisor, sem o auxiliar root
+- **THEN** a seção mostra, no lugar da árvore, que ela precisa do auxiliar root e o motivo recebido do daemon
+
 ### Requirement: Zoom de densidade na árvore de processos
 A seção MUST aceitar uma tecla de zoom que troca, para a árvore inteira, entre 3 níveis de densidade por linha: nome e pid; nome, pid e memória; e um cartão com cmdline, CPU, memória, início e cgroup. A troca de nível MUST NOT mudar a dobra ou a seleção.
 
@@ -21,10 +25,10 @@ A seção MUST aceitar uma tecla de zoom que troca, para a árvore inteira, entr
 - **THEN** cada linha visível passa a mostrar os campos do próximo nível, sem recolher nem expandir nenhum ramo
 
 ### Requirement: Dobra de ramos na árvore de processos
-Cada processo com filhos MUST poder ser dobrado ou desdobrado por um atalho dedicado, marcado por ▸ (dobrado) ou ▾ (desdobrado). Um ramo com mais descendentes que um limiar configurado MUST nascer dobrado quando a árvore é montada ou re-enraizada.
+Cada processo com filhos MUST poder ser dobrado ou desdobrado por um atalho dedicado, marcado por ▸ (dobrado) ou ▾ (desdobrado). Um ramo com mais de 12 descendentes MUST nascer dobrado quando a árvore é montada ou re-enraizada, menos as raízes da tela, que ficam sempre abertas.
 
 #### Scenario: Ramo grande nasce dobrado
-- **WHEN** a árvore é montada ou re-enraizada e um nó tem mais descendentes que o limiar
+- **WHEN** a árvore é montada ou re-enraizada e um nó tem mais de 12 descendentes
 - **THEN** esse nó aparece dobrado (▸), com a contagem dos descendentes escondidos
 
 #### Scenario: Usuário desdobra manualmente

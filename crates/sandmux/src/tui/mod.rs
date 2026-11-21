@@ -10,6 +10,7 @@ pub mod modes;
 pub mod netscreen;
 pub mod paste;
 pub mod picker;
+pub mod procs;
 pub mod render;
 pub mod settings;
 
@@ -351,6 +352,8 @@ pub enum PanelHit {
 pub enum Hit {
     Section(usize),
     Item(usize),
+    /// Um segmento da migalha de pão da árvore de processos.
+    Crumb(usize),
 }
 
 pub struct FileScreen {
@@ -3003,6 +3006,7 @@ pub fn run(group: Option<String>) -> Result<i32> {
                 app.refresh_vault();
                 app.refresh_panel();
                 app.refresh_marks();
+                app.refresh_procs();
                 dirty = true;
             }
             Ok(Ev::Winch) => {

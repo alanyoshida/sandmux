@@ -24,8 +24,12 @@ O pedido `observe` MUST carregar só a observação das execuções e das conex�
 ## ADDED Requirements
 
 ### Requirement: Saída de processo observado
-O pedido `observe` e o `confine` MUST mandar um evento quando um processo que executou dentro do cgroup observado termina, com o pid dele. Esse evento MUST seguir as mesmas regras da observação: não nega nem atrasa a saída, e termina quando a conexão com o auxiliar fecha.
+O pedido `observe` MUST mandar um evento com o pid quando um processo do cgroup observado termina, só pela saída do processo (não pela de cada thread dele), quando o kernel tem o tracepoint. Esse evento MUST seguir as regras da observação: não nega nem atrasa a saída, e termina quando a conexão com o auxiliar fecha.
 
 #### Scenario: Processo observado termina
-- **WHEN** um processo que apareceu num evento de execução termina
+- **WHEN** um processo do cgroup observado termina
 - **THEN** o auxiliar MUST mandar ao daemon um evento de saída com o pid dele, pela mesma conexão
+
+#### Scenario: Thread termina
+- **WHEN** uma thread que não é a principal de um processo observado termina, e o processo continua
+- **THEN** o auxiliar MUST NOT mandar evento de saída

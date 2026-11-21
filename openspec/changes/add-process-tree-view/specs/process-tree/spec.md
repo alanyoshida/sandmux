@@ -2,39 +2,43 @@
 
 ## Purpose
 
-Acompanha, por sessão, a árvore de processos vivos do sandbox da aba — quem lançou quem, nome, pid, memória e linha de comando — e a expõe ao cliente da TUI para navegação.
+Acompanha, por sessão, a árvore de processos vivos do sandbox da aba — quem lançou quem, nome, pid, memória e linha de comando — a partir das execuções e saídas vistas pelo kernel, e a entrega ao cliente da TUI.
 
 ## ADDED Requirements
 
 ### Requirement: Árvore de processos por sessão
-O daemon MUST manter, para a sessão de cada aba, uma árvore em memória dos processos vivos dentro do sandbox dela: pid, ppid, nome, memória residente, cmdline e cgroup. A árvore MUST se atualizar a cada evento de execução e de saída de processo recebido do auxiliar root ou do supervisor de aberturas.
+Com a observação das execuções pelo kernel ligada para a aba, o daemon MUST manter uma árvore em memória dos processos vivos no escopo dela, com o pid e o ppid de cada um, atualizada a cada evento de execução e de saída recebido do auxiliar root. Ao ligar a observação, o daemon MUST incluir os processos que já estão no escopo.
 
 #### Scenario: Execução nova entra na árvore
-- **WHEN** um processo dentro do sandbox da aba executa um programa
-- **THEN** a árvore da sessão ganha ou atualiza o nó daquele pid, com o ppid de quem o lançou
+- **WHEN** um processo dentro do escopo da aba executa um programa
+- **THEN** a árvore da sessão ganha ou atualiza o nó daquele pid, preso ao ppid de quem o lançou
 
 #### Scenario: Saída remove o nó
 - **WHEN** um processo observado termina
 - **THEN** o nó dele MUST sair da árvore da sessão
 
 #### Scenario: Órfão herda o ascendente vivo mais próximo
-- **WHEN** um processo cujo processo-pai monitorado já saiu da árvore continua vivo
-- **THEN** ele MUST continuar aparecendo na árvore, preso ao ascendente vivo mais próximo, ou à raiz quando não há nenhum
+- **WHEN** um processo do meio da árvore termina e os filhos dele continuam vivos
+- **THEN** os filhos MUST continuar na árvore, presos ao pai do processo que terminou, ou à raiz quando ele não está na árvore
 
-### Requirement: Fonte da árvore e sua marcação
-Com o auxiliar root observando a aba, a árvore MUST se basear nos eventos do kernel (pid, ppid e saída) pelo mesmo caminho da observação das execuções. Sem o auxiliar, a árvore MUST se basear no que o supervisor de aberturas já acompanha para o registro de execuções, com a mesma marcação de fonte (`kernel` ou `supervisor`) usada lá.
+#### Scenario: Processos de antes da observação
+- **WHEN** a observação liga com a aba já rodando processos
+- **THEN** a árvore MUST começar com eles, sem esperar uma execução nova
 
-#### Scenario: Fonte acompanha a do registro de execuções
-- **WHEN** a aba troca de fonte de execuções (do supervisor para o kernel, ao auxiliar assumir)
-- **THEN** a árvore de processos MUST passar a usar a mesma fonte, sem precisar reabrir a seção
+### Requirement: Árvore sem o auxiliar root
+Sem a observação das execuções pelo kernel, o daemon MUST NOT montar a árvore da aba, e a resposta ao pedido da árvore MUST trazer o motivo, o mesmo que a proteção do lançamento mostra para a fonte das execuções.
 
-### Requirement: Protocolo expõe a árvore ao cliente
-O protocolo do daemon MUST ter uma mensagem para o cliente pedir a árvore de processos da sessão de uma aba e receber as atualizações seguintes enquanto a conexão dura.
+#### Scenario: Aba com o supervisor
+- **WHEN** a aba registra as execuções pelo supervisor, porque o auxiliar root não está disponível
+- **THEN** o pedido da árvore devolve nenhum processo e o motivo
 
-#### Scenario: Cliente assina a árvore de uma aba
-- **WHEN** a TUI abre a seção "Processos" para uma aba
-- **THEN** ela MUST receber o estado atual da árvore e, depois, cada mudança, sem precisar pedir de novo
+### Requirement: Pedido da árvore pelo cliente
+O protocolo do daemon MUST ter um pedido da árvore de processos da sessão de uma aba, respondido com os processos vivos (pid, ppid, nome, linha de comando, memória residente, CPU usado, início e cgroup). Antes de responder, o daemon MUST tirar da árvore os processos que já não existem ou cujo pid passou a outro processo.
 
-#### Scenario: Fim da assinatura
-- **WHEN** a TUI fecha a seção "Processos" ou sai da aba
-- **THEN** o daemon MUST parar de mandar atualizações daquela árvore para aquele cliente
+#### Scenario: Pedido de uma aba observada
+- **WHEN** a TUI pede a árvore de uma aba com a observação pelo kernel ligada
+- **THEN** o daemon devolve os processos vivos da aba, cada um com o ppid
+
+#### Scenario: Saída perdida
+- **WHEN** um processo terminou sem que o evento de saída chegasse ao daemon
+- **THEN** o pedido seguinte da árvore MUST vir sem ele

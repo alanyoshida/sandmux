@@ -195,6 +195,61 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                 };
                 write_control(&mut stream, &reply)?;
             }
+            Msg::ProcessTree { id } => {
+                let st = shared.lock();
+                let found = st.sessions.get(&id).map(|s| {
+                    if s.exec_obs.is_some() {
+                        Ok(s.proc_tree.clone())
+                    } else if s.live.is_none() {
+                        Err(tr!("a sessão não está viva", "the session is not alive").to_string())
+                    } else {
+                        Err(s
+                            .policy
+                            .as_ref()
+                            .and_then(|p| p.exec.clone())
+                            .unwrap_or_else(|| {
+                                tr!(
+                                    "a observação pelo kernel ainda não começou",
+                                    "the kernel observation has not started yet"
+                                )
+                                .to_string()
+                            }))
+                    }
+                });
+                let text = list_text(&st);
+                drop(st);
+                let reply = match found {
+                    Some(Ok(tree)) => {
+                        let (nodes, dead) =
+                            super::proctree::render(tree, std::path::Path::new("/proc"));
+                        if !dead.is_empty() {
+                            let mut st = shared.lock();
+                            if let Some(s) = st.sessions.get_mut(&id) {
+                                for pid in dead {
+                                    s.proc_tree.exit(pid);
+                                }
+                            }
+                        }
+                        Msg::ProcessTreeOf {
+                            id,
+                            nodes,
+                            unavailable: None,
+                        }
+                    }
+                    Some(Err(why)) => Msg::ProcessTreeOf {
+                        id,
+                        nodes: Vec::new(),
+                        unavailable: Some(why),
+                    },
+                    None => Msg::Error {
+                        message: trf!(
+                            "não existe a sessão {id}.{text}",
+                            "session {id} does not exist.{text}"
+                        ),
+                    },
+                };
+                write_control(&mut stream, &reply)?;
+            }
             Msg::SetGroup { id, group } => {
                 let r = sandmux_proto::msg::check_group(&group).and_then(|()| {
                     let mut st = shared.lock();
