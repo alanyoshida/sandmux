@@ -183,10 +183,31 @@ fn sigterm_no_cliente_desanexa() {
     t.write(b"echo pronto-$((1+1))\r");
     t.wait_text("pronto-2");
     // SAFETY: sinal para o cliente deste teste.
-    unsafe { libc::kill(t.child.id() as i32, libc::SIGTERM) };
+    unsafe { libc::kill(t.pid(), libc::SIGTERM) };
     assert_eq!(t.wait_exit(), 0);
     t.wait_raw("sandmux attach 1");
     assert!(ls(&e).contains("viva"));
+}
+
+#[test]
+fn terminal_largado_mata_o_cliente_e_o_daemon_nao_volta() {
+    let e = Env::new();
+    detached_shell(&e);
+    // A TUI fica aberta, como num teste que termina sem sair dela.
+    let mut cmd = e.cmd(&e.work, &[]);
+    cmd.env("SHELL", "/bin/bash");
+    let t = Term::spawn_answering(cmd, 100, 30);
+    t.wait_text("pronto-2");
+    let pid = t.pid();
+    drop(t);
+    // SAFETY: o sinal 0 só consulta o processo.
+    let alive = unsafe { libc::kill(pid, 0) } == 0;
+    assert!(!alive, "o cliente sobreviveu ao terminal do teste");
+    // Um cliente vivo subiria o daemon de novo ao perder a conexão, e esse
+    // daemon ficaria vivo depois do teste.
+    assert!(e.run(&e.work, &["daemon", "stop"]).status.success());
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(e.daemon_pid().is_none(), "o daemon voltou depois do stop");
 }
 
 const OSC_WRITE: &str = "\x1b]52;c;b2xh\x07";
