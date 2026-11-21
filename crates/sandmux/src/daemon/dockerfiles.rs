@@ -28,11 +28,23 @@ const POLL: Duration = Duration::from_secs(10);
 const DENY: u32 = 1;
 const PROTECT: u32 = 2;
 const GITDIR: u32 = 4;
+const SECRET: u32 = 8;
+const FDENY: u32 = 16;
 
 /// O estado dos arquivos de um Docker confinado.
 pub struct Files {
     workdir: PathBuf,
     tag: String,
+    /// Os arquivos de uma aba confinada pelo kernel (e não do Docker): as
+    /// marcas de segredo e de `file-deny` separadas, e o registro das
+    /// aberturas.
+    tab: bool,
+    /// As pastas do registro e as de fora dele, na visão do agente: só as
+    /// aberturas dentro delas entram no registro da aba.
+    roots: Vec<PathBuf>,
+    exclude: Vec<PathBuf>,
+    /// A pasta de estado do registro (os caminhos conhecidos).
+    state_dir: PathBuf,
     client: Client,
     state: Mutex<State>,
     /// A vigia caiu na varredura a cada 10 s.
@@ -54,12 +66,68 @@ struct State {
     dirs: HashMap<u64, PathBuf>,
     /// Caminhos criados por contêineres já registrados nesta subida.
     created_logged: HashSet<PathBuf>,
+    /// As aberturas já registradas neste lançamento (caminho e acesso),
+    /// como o supervisor: uma linha por par.
+    opened: HashSet<(PathBuf, &'static str)>,
+    /// Os caminhos já vistos nesta pasta de trabalho, em qualquer
+    /// lançamento (o campo `new`), lidos na primeira abertura.
+    known: Option<Known>,
     /// Já avisou do teto de marcas.
     warned_cap: bool,
 }
 
 fn state_dir() -> PathBuf {
     crate::paths::state_dir().join("files")
+}
+
+/// Os caminhos já vistos numa pasta de trabalho, o mesmo arquivo do
+/// supervisor (`known/<hash>.txt`).
+struct Known {
+    paths: HashSet<PathBuf>,
+    file: Option<std::fs::File>,
+}
+
+impl Known {
+    fn load(state: &Path, workdir: &Path) -> Known {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::OpenOptionsExt;
+        let f = state
+            .join("known")
+            .join(format!("{}.txt", sandmux_spec::files::dir_hash(workdir)));
+        let paths = std::fs::read(&f)
+            .map(|b| {
+                b.split(|&c| c == b'\n')
+                    .filter(|l| !l.is_empty())
+                    .map(|l| PathBuf::from(std::ffi::OsStr::from_bytes(l)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(d) = f.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(&f)
+            .ok();
+        Known { paths, file }
+    }
+
+    /// Guarda `path`; verdadeiro na primeira vez.
+    fn insert(&mut self, path: &Path) -> bool {
+        use std::io::Write;
+        use std::os::unix::ffi::OsStrExt;
+        if !self.paths.insert(path.to_path_buf()) {
+            return false;
+        }
+        if let Some(f) = self.file.as_mut() {
+            let mut line = path.as_os_str().as_bytes().to_vec();
+            line.push(b'\n');
+            let _ = f.write_all(&line);
+        }
+        true
+    }
 }
 
 fn created(workdir: &Path) -> HashSet<PathBuf> {
@@ -78,6 +146,7 @@ pub fn fixed_marks(m: &DockerMarks, workdir: &Path) -> DockerMarks {
             .collect(),
         protect: m.protect.clone(),
         gitdir: m.gitdir.clone(),
+        ..Default::default()
     }
 }
 
@@ -99,11 +168,51 @@ pub fn desired(
     Ok(sandmux_policy::mark_set(&m))
 }
 
+/// As marcas de uma aba confinada pelo kernel: os segredos (`SECRET`) e o
+/// `file-deny` (`FDENY`) da pasta de trabalho, com o conteúdo das pastas
+/// negadas, e as fixas (a proteção do `.git`).
+pub fn desired_tab(
+    policy: &FilePolicy,
+    created: &HashSet<PathBuf>,
+    workdir: &Path,
+    fixed: &DockerMarks,
+) -> Result<MarkSet, usize> {
+    let max = crate::helper::MAX_MARKS;
+    let (secret, fdeny) =
+        sandmux_policy::tab_covers(policy, created, &[workdir.to_path_buf()], &[], max)?;
+    let mut m = fixed.clone();
+    m.secret.extend(secret);
+    m.fdeny.extend(fdeny);
+    m.expand(max)?;
+    Ok(sandmux_policy::mark_set(&m))
+}
+
+/// A política cabe nas marcas de uma aba? As marcas cobrem a pasta de
+/// trabalho: um `file-deny` que pode valer fora dela (um nome, ou um caminho
+/// de fora) fica com o supervisor. `Err` com o motivo.
+pub fn tab_policy_fits(policy: &FilePolicy, workdir: &Path) -> Result<(), String> {
+    use sandmux_spec::files::FilePattern;
+    for p in &policy.deny {
+        match p {
+            FilePattern::Path(x) if Path::new(x).starts_with(workdir) => {}
+            _ => {
+                return Err(trf!(
+                    "file-deny `{p}` vale fora da pasta de trabalho",
+                    "file-deny `{p}` applies outside the work folder"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn kinds(bits: u32) -> impl Iterator<Item = MarkKind> {
     [
         (DENY, MarkKind::Deny),
         (PROTECT, MarkKind::Protect),
         (GITDIR, MarkKind::GitDir),
+        (SECRET, MarkKind::Secret),
+        (FDENY, MarkKind::FileDeny),
     ]
     .into_iter()
     .filter(move |(b, _)| bits & b != 0)
@@ -124,6 +233,19 @@ impl Files {
         policy: FilePolicy,
         initial: &DockerMarks,
     ) -> Files {
+        Files::with_mode(workdir, tag, client, policy, initial, false)
+    }
+
+    /// Como [`Files::new`]; com `tab`, os arquivos de uma aba confinada pelo
+    /// kernel.
+    pub fn with_mode(
+        workdir: &Path,
+        tag: String,
+        client: Client,
+        policy: FilePolicy,
+        initial: &DockerMarks,
+        tab: bool,
+    ) -> Files {
         let marks = sandmux_policy::mark_set(initial);
         let mut by_ino: HashMap<u64, Vec<PathBuf>> = HashMap::new();
         for p in marks.keys() {
@@ -134,6 +256,10 @@ impl Files {
         Files {
             workdir: workdir.to_path_buf(),
             tag,
+            tab,
+            roots: Vec::new(),
+            exclude: Vec::new(),
+            state_dir: state_dir(),
             client,
             state: Mutex::new(State {
                 policy,
@@ -142,11 +268,54 @@ impl Files {
                 by_ino,
                 dirs: HashMap::new(),
                 created_logged: HashSet::new(),
+                opened: HashSet::new(),
+                known: None,
                 warned_cap: false,
             }),
             poll: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
         }
+    }
+
+    /// As pastas do registro da aba (`roots`) e as de fora dele (`exclude`).
+    pub fn with_view(mut self, (roots, exclude): (Vec<PathBuf>, Vec<PathBuf>)) -> Files {
+        self.roots = roots;
+        self.exclude = exclude;
+        self
+    }
+
+    /// Para: a queda da conexão deixa de ser um erro, e a conexão com o
+    /// auxiliar fecha (a thread dos eventos segura o `Files`).
+    pub fn stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        self.client.close();
+    }
+
+    /// Espera a conexão com o auxiliar cair ou fechar.
+    pub fn wait_closed(&self) {
+        self.client.wait_closed();
+    }
+
+    /// Quem as marcas confinam, para o log.
+    fn who(&self) -> &'static str {
+        if self.tab {
+            tr!("a aba", "tab")
+        } else {
+            "Docker"
+        }
+    }
+
+    /// Outra pasta de estado (os testes).
+    #[cfg(test)]
+    fn with_state(mut self, state: PathBuf) -> Files {
+        self.state_dir = state;
+        self
+    }
+
+    /// A abertura de `path` entra no registro da aba.
+    fn in_view(&self, path: &Path) -> bool {
+        (self.roots.is_empty() || self.roots.iter().any(|r| path.starts_with(r)))
+            && !self.exclude.iter().any(|e| path.starts_with(e))
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
@@ -187,12 +356,15 @@ impl Files {
 
     /// Recalcula as marcas com a política `policy` (ou a atual) e manda a
     /// diferença.
-    pub fn refresh(&self, policy: Option<FilePolicy>) {
+    /// `Err` quando as marcas não ficaram como a política pede (acima do teto
+    /// ou recusadas pelo auxiliar); o motivo também vai ao log.
+    pub fn refresh(&self, policy: Option<FilePolicy>) -> Result<(), String> {
         let mut st = self.lock();
         if let Some(p) = policy {
             st.policy = p;
         }
-        let new = match desired(
+        let calc = if self.tab { desired_tab } else { desired };
+        let new = match calc(
             &st.policy,
             &created(&self.workdir),
             &self.workdir,
@@ -200,31 +372,36 @@ impl Files {
         ) {
             Ok(n) => n,
             Err(n) => {
+                let max = crate::helper::MAX_MARKS;
                 if !st.warned_cap {
                     st.warned_cap = true;
-                    let max = crate::helper::MAX_MARKS;
                     eprintln!(
                         "{}",
                         trf!(
-                            "sandmuxd: Docker de {}: {n} arquivos a marcar, acima do teto de {max}; as marcas ficam como estão",
-                            "sandmuxd: Docker for {}: {n} files to mark, above the cap of {max}; marks stay as they are",
+                            "sandmuxd: {} de {}: {n} arquivos a marcar, acima do teto de {max}; as marcas ficam como estão",
+                            "sandmuxd: {} for {}: {n} files to mark, above the cap of {max}; marks stay as they are",
+                            self.who(),
                             self.workdir.display()
                         )
                     );
                 }
-                return;
+                return Err(trf!(
+                    "{n} arquivos a marcar, acima do teto de {max}",
+                    "{n} files to mark, above the cap of {max}"
+                ));
             }
         };
-        if let Err(e) = self.apply(&mut st, new) {
+        self.apply(&mut st, new).inspect_err(|e| {
             eprintln!(
                 "{}",
                 trf!(
-                    "sandmuxd: Docker de {}: marcas ao vivo: {e}",
-                    "sandmuxd: Docker for {}: live marks: {e}",
+                    "sandmuxd: {} de {}: marcas ao vivo: {e}",
+                    "sandmuxd: {} for {}: live marks: {e}",
+                    self.who(),
                     self.workdir.display()
                 )
             );
-        }
+        })
     }
 
     /// Marca os caminhos novos da vigia (criados com o Docker rodando) que a
@@ -232,15 +409,39 @@ impl Files {
     fn mark_new(&self, paths: &BTreeSet<PathBuf>) {
         let created = created(&self.workdir);
         let mut st = self.lock();
+        let dir_bit = if self.tab { FDENY } else { DENY };
         let mut denied: Vec<PathBuf> = st
             .marks
             .iter()
-            .filter(|(p, b)| *b & DENY != 0 && p.is_dir())
+            .filter(|(p, b)| *b & dir_bit != 0 && p.is_dir())
             .map(|(p, _)| p.clone())
             .collect();
         let mut new = st.marks.clone();
         for p in paths {
-            if sandmux_policy::docker_mark_for(&st.policy, |q| created.contains(q), &denied, p) {
+            if self.tab {
+                // Dentro de uma pasta negada, ou negado ou segredo pela
+                // política, cada um com a marca dele.
+                let bit = if denied.iter().any(|d| p.starts_with(d)) {
+                    FDENY
+                } else {
+                    match st.policy.decide(p, |q| created.contains(q)) {
+                        FileVerdict::Deny(_) => FDENY,
+                        FileVerdict::Secret => SECRET,
+                        FileVerdict::Pass => 0,
+                    }
+                };
+                if bit != 0 {
+                    *new.entry(p.clone()).or_default() |= bit;
+                    if bit == FDENY && p.is_dir() {
+                        denied.push(p.clone());
+                    }
+                }
+            } else if sandmux_policy::docker_mark_for(
+                &st.policy,
+                |q| created.contains(q),
+                &denied,
+                p,
+            ) {
                 *new.entry(p.clone()).or_default() |= DENY;
                 if p.is_dir() {
                     denied.push(p.clone());
@@ -304,7 +505,11 @@ impl Files {
                 )),
             ));
         }
-        out.extend(super::execlog::entries(msg, &self.tag, &self.workdir));
+        // As execuções de uma aba vêm pela observação dela (`ExecObs`); o
+        // confinamento também as manda, e seriam linhas dobradas.
+        if !self.tab {
+            out.extend(super::execlog::entries(msg, &self.tag, &self.workdir));
+        }
         for e in msg["ev"].as_array().into_iter().flatten() {
             let ino = e["ino"].as_u64().unwrap_or(0);
             match e["kind"].as_str() {
@@ -325,6 +530,25 @@ impl Files {
                     let why = reason(&st.policy, &self.workdir, &path, bits);
                     out.push(entry(path, access, Some(why)));
                 }
+                Some("open") if self.tab => {
+                    let path = e["path"].as_str().unwrap_or("");
+                    if path.is_empty() || !self.in_view(Path::new(path)) {
+                        continue;
+                    }
+                    let access = if e["write"] == true { "w" } else { "r" };
+                    let path = PathBuf::from(path);
+                    if !st.opened.insert((path.clone(), access)) {
+                        continue;
+                    }
+                    let new = st
+                        .known
+                        .get_or_insert_with(|| Known::load(&self.state_dir, &self.workdir))
+                        .insert(&path);
+                    out.push(FileEntry {
+                        new,
+                        ..entry(path, access, None)
+                    });
+                }
                 Some("create") => {
                     let Some(dir) = st.dirs.get(&ino).cloned() else {
                         continue;
@@ -334,8 +558,22 @@ impl Files {
                         continue;
                     }
                     let path = dir.join(name);
+                    // Numa aba, o segredo que o agente cria continua dele: vai
+                    // para a lista dos criados (que o supervisor fazia).
+                    if self.tab && st.policy.is_secret(&path) {
+                        let _ =
+                            sandmux_spec::files::add_created(&state_dir(), &self.workdir, &path);
+                    }
                     if st.created_logged.insert(path.clone()) {
-                        out.push(entry(path, "create", None));
+                        let new = self.tab
+                            && st
+                                .known
+                                .get_or_insert_with(|| Known::load(&self.state_dir, &self.workdir))
+                                .insert(&path);
+                        out.push(FileEntry {
+                            new,
+                            ..entry(path, "create", None)
+                        });
                     }
                 }
                 _ => {}
@@ -401,13 +639,13 @@ impl Files {
             let s = stamp(&created_file);
             if s != created_stamp {
                 created_stamp = s;
-                self.refresh(None);
+                let _ = self.refresh(None);
             }
             if polling {
                 if last_poll.elapsed() >= poll_every {
                     last_poll = Instant::now();
                     self.index_dirs(&all_dirs(&self.workdir));
-                    self.refresh(None);
+                    let _ = self.refresh(None);
                 }
                 continue;
             }
@@ -507,8 +745,11 @@ pub fn reason(policy: &FilePolicy, workdir: &Path, path: &Path, bits: u32) -> St
     if !path.starts_with(workdir) {
         return tr!("cobertura", "cover").into();
     }
-    if bits & (PROTECT | GITDIR) != 0 && bits & DENY == 0 {
+    if bits & (PROTECT | GITDIR) != 0 && bits & (DENY | SECRET | FDENY) == 0 {
         return ".git".into();
+    }
+    if bits & SECRET != 0 {
+        return tr!("segredo", "secret").into();
     }
     match policy.decide(path, |_| false) {
         FileVerdict::Deny(p) => format!("file-deny: {p}"),
@@ -602,6 +843,50 @@ mod tests {
         assert!(!m3.contains_key(&w.join(".env")));
     }
 
+    #[test]
+    fn marcas_da_aba_separam_segredo_e_file_deny() {
+        let d = tempfile::tempdir().unwrap();
+        let w = d.path().canonicalize().unwrap();
+        std::fs::write(w.join(".env"), "").unwrap();
+        std::fs::write(w.join("a.txt"), "").unwrap();
+        std::fs::create_dir_all(w.join("privado/sub")).unwrap();
+        std::fs::write(w.join("privado/sub/a"), "").unwrap();
+        let mut p = policy(&w);
+        p.deny = vec![
+            sandmux_spec::files::FilePattern::parse(&w.join("privado").display().to_string(), None)
+                .unwrap(),
+        ];
+        let fixed = DockerMarks::default();
+        let m = desired_tab(&p, &HashSet::new(), &w, &fixed).unwrap();
+        assert_eq!(m.get(&w.join(".env")), Some(&SECRET));
+        for x in ["privado", "privado/sub", "privado/sub/a"] {
+            assert_eq!(m.get(&w.join(x)), Some(&FDENY), "{x}");
+        }
+        assert!(!m.contains_key(&w.join("a.txt")));
+        // Nada de `DENY`: o Docker não está nesta conta.
+        assert!(m.values().all(|b| b & DENY == 0));
+        // O segredo criado pelo agente fica dele.
+        let created: HashSet<PathBuf> = [w.join(".env")].into();
+        let m2 = desired_tab(&p, &created, &w, &fixed).unwrap();
+        assert!(!m2.contains_key(&w.join(".env")));
+    }
+
+    #[test]
+    fn politica_que_cabe_na_aba() {
+        let w = Path::new("/w");
+        let mut p = policy(w);
+        assert!(tab_policy_fits(&p, w).is_ok());
+        p.deny = vec![sandmux_spec::files::FilePattern::parse("/w/privado", None).unwrap()];
+        assert!(tab_policy_fits(&p, w).is_ok());
+        // Um nome vale em qualquer pasta, e um caminho de fora também fica
+        // com o supervisor.
+        for fora in ["*.sql", "/etc/passwd"] {
+            p.deny = vec![sandmux_spec::files::FilePattern::parse(fora, None).unwrap()];
+            let e = tab_policy_fits(&p, w).unwrap_err();
+            assert!(e.contains(fora), "{e}");
+        }
+    }
+
     use crate::helper::{Backend, Confined, Events, Server};
 
     /// Auxiliar falso: guarda (caminho, bits, marca ou desmarca).
@@ -639,7 +924,12 @@ mod tests {
         fn observe(&self, _: &std::os::fd::OwnedFd) -> Result<Box<dyn Events>, String> {
             Err("sem observação".into())
         }
-        fn confine(&self, _: &std::os::fd::OwnedFd, _: u32) -> Result<Box<dyn Confined>, String> {
+        fn confine(
+            &self,
+            _: &std::os::fd::OwnedFd,
+            _: u32,
+            _: &[u32],
+        ) -> Result<Box<dyn Confined>, String> {
             Ok(Box::new(FakeConfined(self.0.clone(), 0)))
         }
         fn check_cgroup(&self, _: &std::os::fd::OwnedFd, _: u32) -> Result<(), String> {
@@ -746,7 +1036,7 @@ mod tests {
         let (_d, w, f, log) = setup(false);
         std::fs::write(w.join("dados.csv"), "x").unwrap();
         std::fs::write(w.join(".env"), "x").unwrap();
-        f.refresh(None);
+        f.refresh(None).unwrap();
         wait_mark(&log, &w.join(".env"), true);
         let mut p = policy(&w);
         p.deny = vec![sandmux_spec::files::FilePattern::parse("*.csv", None).unwrap()];
@@ -754,7 +1044,7 @@ mod tests {
             sandmux_spec::files::FilePattern::parse(&w.join(".env").display().to_string(), None)
                 .unwrap(),
         ];
-        f.refresh(Some(p));
+        f.refresh(Some(p)).unwrap();
         wait_mark(&log, &w.join("dados.csv"), true);
         wait_mark(&log, &w.join(".env"), false);
     }
@@ -763,7 +1053,7 @@ mod tests {
     fn eventos_viram_linhas() {
         let (_d, w, f, _log) = setup(false);
         std::fs::write(w.join(".env"), "x").unwrap();
-        f.refresh(None);
+        f.refresh(None).unwrap();
         f.index_dirs(std::slice::from_ref(&w));
         let env_ino = ino_of(&w.join(".env")).unwrap();
         let w_ino = ino_of(&w).unwrap();
@@ -799,10 +1089,104 @@ mod tests {
             deny: vec![PathBuf::from("/w/.env"), PathBuf::from("/etc/a")],
             protect: vec![PathBuf::from("/w/.git/hooks")],
             gitdir: vec![PathBuf::from("/w/.git")],
+            ..Default::default()
         };
         let f = fixed_marks(&m, w);
         assert_eq!(f.deny, vec![PathBuf::from("/etc/a")]);
         assert_eq!(f.protect.len(), 1);
         assert_eq!(f.gitdir.len(), 1);
+    }
+
+    #[test]
+    fn aberturas_da_aba_entram_no_registro() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().canonicalize().unwrap();
+        let w = base.join("w");
+        std::fs::create_dir_all(&w).unwrap();
+        let log: Log = Arc::new(Mutex::new(Vec::new()));
+        let sock = base.join("h.sock");
+        let server = Server::new(Box::new(FakeBackend(log.clone())));
+        let l = crate::helper::listen(&sock).unwrap();
+        std::thread::spawn(move || crate::helper::accept_loop(server, l));
+        let c = Client::connect(&sock).unwrap();
+        c.confine_with(&w, 0, &[7]).unwrap();
+        let p = policy(&w);
+        let f = Files::with_mode(
+            &w,
+            "aba-t".into(),
+            c,
+            p.clone(),
+            &DockerMarks::default(),
+            true,
+        )
+        .with_view((
+            vec![w.clone(), PathBuf::from("/home/u")],
+            vec![PathBuf::from("/home/u/.cache")],
+        ))
+        .with_state(base.join("estado"));
+        std::fs::write(w.join(".env"), "x").unwrap();
+        f.refresh(None).unwrap();
+        assert!(
+            log.lock()
+                .unwrap()
+                .iter()
+                .any(|x| x.0 == w.join(".env") && x.1 == SECRET && x.2)
+        );
+        let msg = serde_json::json!({"ev": [
+            {"kind": "open", "write": false, "ino": 1, "mnt": 7, "path": w.join("a.txt")},
+            {"kind": "open", "write": true, "ino": 2, "mnt": 7, "path": "/home/u/notas.md"},
+            {"kind": "open", "write": false, "ino": 3, "mnt": 7, "path": "/home/u/.cache/x"},
+            {"kind": "open", "write": false, "ino": 4, "mnt": 7, "path": "/tmp/fora"},
+            {"kind": "open", "write": false, "ino": 5, "mnt": 7, "path": ""},
+            {"kind": "exec", "pid": 9, "path": "/usr/bin/ls", "args": ["ls"]},
+        ]});
+        let got = |f: &Files| -> Vec<(PathBuf, String, bool)> {
+            f.entries(&msg)
+                .into_iter()
+                .map(|e| (e.path, e.access, e.new))
+                .collect()
+        };
+        assert_eq!(
+            got(&f),
+            vec![
+                (w.join("a.txt"), "r".to_string(), true),
+                (PathBuf::from("/home/u/notas.md"), "w".to_string(), true),
+            ]
+        );
+        // Uma linha por caminho e acesso no lançamento, como o supervisor.
+        assert!(got(&f).is_empty());
+        // Num lançamento novo, os caminhos já são conhecidos.
+        let c2 = Client::connect(&sock).unwrap();
+        c2.confine_with(&w, 0, &[7]).unwrap();
+        let f2 = Files::with_mode(&w, "aba-u".into(), c2, p, &DockerMarks::default(), true)
+            .with_view((vec![w.clone(), PathBuf::from("/home/u")], vec![]))
+            .with_state(base.join("estado"));
+        assert_eq!(
+            got(&f2),
+            vec![
+                (w.join("a.txt"), "r".to_string(), false),
+                (PathBuf::from("/home/u/notas.md"), "w".to_string(), false),
+                (PathBuf::from("/home/u/.cache/x"), "r".to_string(), true),
+            ]
+        );
+        // O Docker não registra aberturas (os eventos nem chegam, mas a
+        // conta é da aba); as execuções, sim (na aba, vêm pela observação).
+        let (_d2, _w2, docker, _) = setup(false);
+        let d: Vec<String> = docker.entries(&msg).into_iter().map(|e| e.access).collect();
+        assert_eq!(d, vec!["exec".to_string()]);
+    }
+
+    #[test]
+    fn negacao_de_segredo_na_aba() {
+        let w = Path::new("/w");
+        let p = policy(w);
+        assert_eq!(
+            reason(&p, w, &w.join(".env"), SECRET),
+            tr!("segredo", "secret")
+        );
+        assert_eq!(
+            reason(&p, w, &w.join("a.sql"), FDENY | PROTECT),
+            "file-deny"
+        );
     }
 }

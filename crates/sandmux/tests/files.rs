@@ -129,6 +129,12 @@ fn sandmux_files_mostra_a_sessao() {
     );
     let other = stdout(&env.run(&env.work, &["files", "2"]));
     assert!(other.contains("Nenhum acesso"), "{other}");
+    // Sem o auxiliar root (ou sem o BPF LSM), as aberturas ficam com o
+    // supervisor, e o resumo diz por quê.
+    if std::env::var_os("SANDMUX_HELPER_SOCKET").is_none() {
+        let st = stdout(&env.run(&env.work, &["stats", "1"]));
+        assert!(st.contains("aberturas de arquivo: supervisor: "), "{st}");
+    }
     t.write(b"\x02d");
     t.wait_exit();
 }

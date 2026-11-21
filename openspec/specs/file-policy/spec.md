@@ -6,7 +6,7 @@ Define a política de arquivos que muda com o agente em execução: negar e libe
 ## Requirements
 
 ### Requirement: Negar e liberar arquivos na hora
-Uma abertura de arquivo cujo caminho, na visão do agente, casa com um padrão de `file-deny` MUST falhar com `EACCES` e ser registrada como bloqueada. Um padrão de `file-allow` MUST vencer `file-deny` e o esconder dos segredos. Uma mudança na política MUST valer na abertura seguinte, sem relançar o agente.
+Uma abertura de arquivo cujo caminho, na visão do agente, casa com um padrão de `file-deny` MUST falhar com `EACCES` e ser registrada como bloqueada. Um padrão de `file-allow` MUST vencer `file-deny` e o esconder dos segredos. Uma mudança na política MUST valer na abertura seguinte, sem relançar o agente; numa aba confinada pelo kernel, MUST valer em até 1 s.
 
 #### Scenario: Negar com a sessão viva
 - **WHEN** o agente lê `dados.sql` na pasta de trabalho e o usuário roda `sandmux files deny dados.sql 1`
@@ -30,6 +30,10 @@ Na pasta de trabalho, um arquivo cujo nome casa com a lista de segredos MUST NOT
 #### Scenario: Exemplo continua visível
 - **WHEN** a pasta de trabalho tem `.env.example`
 - **THEN** o agente lê o arquivo
+
+#### Scenario: Segredo criado no host com a aba confinada pelo kernel
+- **WHEN** a aba é confinada pelo kernel e o usuário cria `nova.pem` na pasta de trabalho, no host, com a sessão aberta
+- **THEN** depois de no máximo 1 s, o agente não abre `nova.pem` (`ENOENT`)
 
 ### Requirement: Sem .git/commondir criado pelo agente
 Criar `.git/commondir` sob a pasta de trabalho MUST falhar com `EACCES`, por abertura, rename, link ou symlink. As chamadas `rename`, `renameat`, `renameat2`, `link`, `linkat`, `symlink` e `symlinkat` MUST ser feitas pelo supervisor no lugar do processo, conferindo as regras de escrita do Landlock nas pastas de origem e de destino, e o `file-deny` no destino.

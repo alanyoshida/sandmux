@@ -7,6 +7,8 @@
 #   scripts/vm-ubuntu-2404.sh put <arq>   copia arquivos para ~ na VM
 #   scripts/vm-ubuntu-2404.sh lsm-bpf     põe o bpf no lsm= do boot e reinicia
 #   scripts/vm-ubuntu-2404.sh hwe         instala o kernel HWE e reinicia
+#   scripts/vm-ubuntu-2404.sh kernel <ver> sobe no kernel instalado que começa
+#                                         com <ver> (6.8, 7.0) e reinicia
 #   scripts/vm-ubuntu-2404.sh docker      instala o Docker sem root na VM
 #   scripts/vm-ubuntu-2404.sh check-root [filtro]
 #                                         roda os testes com root na VM
@@ -214,6 +216,19 @@ lsm-bpf)
     ;;
 hwe)
     ssh_vm 'sudo apt-get update -q && sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq linux-generic-hwe-24.04'
+    reboot_vm
+    ;;
+kernel)
+    # O kernel do boot pelo GRUB_DEFAULT, entre os instalados: o 6.8 do 24.04
+    # ou o HWE, para os testes nos dois.
+    [ $# -ge 2 ] || { echo "uso: $0 kernel <versão>" >&2; exit 2; }
+    # shellcheck disable=SC2029
+    ssh_vm "set -e
+        v=\$(ls /boot/vmlinuz-$2* 2>/dev/null | sort -V | tail -n 1 | sed 's,^/boot/vmlinuz-,,')
+        [ -n \"\$v\" ] || { echo 'kernel $2 não instalado' >&2; exit 1; }
+        echo \"GRUB_DEFAULT='Advanced options for Ubuntu>Ubuntu, with Linux \$v'\" |
+            sudo tee /etc/default/grub.d/98-sandmux-kernel.cfg >/dev/null
+        sudo update-grub 2>/dev/null"
     reboot_vm
     ;;
 docker)

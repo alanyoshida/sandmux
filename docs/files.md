@@ -1,6 +1,6 @@
 # Arquivos
 
-O sandmux vê cada abertura de arquivo do agente, com o agente rodando, e registra os acessos às pastas do agente. Ele também nega e libera arquivos na hora e esconde os arquivos com cara de segredo da pasta de trabalho.
+O sandmux vê cada abertura de arquivo do agente, com o agente rodando, e registra os acessos às pastas do agente. Ele também nega e libera arquivos na hora e esconde os arquivos com cara de segredo da pasta de trabalho. Quem decide é o supervisor do sandbox ou, com o auxiliar root, o [kernel](#pelo-kernel).
 
 ## Como funciona
 
@@ -18,6 +18,35 @@ Casos especiais:
 - **`/proc/self`, `/dev/fd/<n>`, `/dev/stdin`:** são traduzidos para o próprio processo, e `cat <(echo oi)` funciona. `/proc/net`, `/proc/mounts` e `/etc/mtab` também.
 - **Links mágicos de outros processos** (`/proc/<pid>/fd`, `cwd`, `root`, `exe`): recusados com `EACCES`. Ferramentas como o `lsof` não veem os arquivos abertos de outros processos dentro do sandbox.
 - **`O_PATH`:** segue pelo kernel, sob o Landlock, sem registro. Um descritor `O_PATH` não dá acesso ao conteúdo; ler exige outra abertura, que passa pelo supervisor.
+
+## Pelo kernel
+
+Com o [auxiliar root](helper.md) e o BPF LSM, as aberturas de uma aba saem do supervisor: o kernel decide e registra, sem a ida e volta de cada `open`. O daemon prende à aba os programas BPF LSM do confinamento, os mesmos do [Docker privado](docker.md#confinamento-por-ebpf), e marca os arquivos pelo inode:
+
+- os arquivos com cara de segredo da pasta de trabalho dão `ENOENT`, como no supervisor;
+- os do `file-deny`, com o que existe dentro das pastas negadas, dão `EACCES`;
+- o `.git` fica protegido como no Docker.
+
+As aberturas das pastas do agente chegam pela fila do kernel, com o caminho na visão do agente, e entram no registro como as do supervisor. Só as montagens dessas pastas mandam eventos: o sistema, as toolchains e os caches não passam pela fila.
+
+Vale sozinho quando tudo isto existe; sem um deles, a aba fica com o supervisor, e o resumo diz por quê:
+
+- uma sessão do daemon (o `run` sem terminal fica com o supervisor);
+- o BPF LSM ativo e o auxiliar root, numa versão que confina abas;
+- o escopo próprio da aba no systemd de usuário (o mesmo dos [tetos](limits.md));
+- um `file-deny` só com caminhos dentro da pasta de trabalho. Um nome (`*.sql`) ou um caminho de fora pode valer em qualquer pasta, e as marcas cobrem só a pasta de trabalho.
+
+O lançador pede ao daemon depois de montar a raiz do sandbox e antes de criar o comando, e espera até 10 s pela resposta. No modo kernel, o comando não tem o filtro de aberturas; o de execuções continua quando o registro das execuções é pelo supervisor. O shell de entrada (`Ctrl+b t`) continua com o supervisor.
+
+Diferenças do supervisor:
+
+- **Arquivos novos do host:** um segredo ou um arquivo de pasta negada criado fora do sandbox durante a sessão é marcado pela vigia da pasta (inotify, ou a varredura a cada 10 s sem vigias), em até ~1 s. Nessa janela, o agente consegue abrir o arquivo. Os segredos que o próprio agente cria continuam dele, como no supervisor.
+- **Política ao vivo:** negar e liberar na hora marcam e desmarcam os arquivos em até 1 s.
+- **Acesso:** a linha diz `r` ou `w`; uma abertura de leitura e escrita aparece como `w`.
+- **Queda do auxiliar:** sem as marcas, nada roda na aba. O daemon congela o escopo dela (`cgroup.freeze`) até o auxiliar voltar (o systemd o sobe na conexão seguinte) e refaz o confinamento, com a política atual; a aba segue de onde parou. Sem o confinamento de volta em 10 s, o daemon mata tudo no escopo (`cgroup.kill`). Numa saída limpa do auxiliar (`systemctl restart`, uma atualização), ele avisa o daemon antes de soltar as regras; morto à força, sobra uma janela curta entre a saída e o congelamento.
+- **Casos especiais:** os links mágicos e o `/proc/self` seguem as regras do kernel e do Landlock; um arquivo marcado continua negado por qualquer caminho, porque a marca é do inode.
+
+A proteção do lançamento, no `sandmux stats <id>` e no painel, mostra a linha "aberturas de arquivo": "pelo kernel" ou "supervisor: <motivo>". O `sandmux doctor` mostra se o caminho do kernel pode valer nesta máquina.
 
 ## Política de arquivos
 
@@ -92,6 +121,8 @@ Como funciona: um auxiliar do supervisor entra no user namespace do sandbox e cr
 ## Custo
 
 Medido na máquina de referência (mediana de 3 rodadas): `opencode --version` 1,0x; o hermes importando o CLI 1,1x a 1,2x; `cargo check` incremental 1,2x a 1,3x; ler 13 mil arquivos seguidos 3,2x. Quatro threads do supervisor atendem as aberturas.
+
+[Pelo kernel](#pelo-kernel), numa VM do Ubuntu 24.04 (mediana de 3 rodadas, contra o mesmo trabalho fora do sandbox): ler 13 mil arquivos da pasta de trabalho 1,1x no kernel 6.8 e 1,4x no 7.0, contra 2,6x e 3,1x do supervisor na mesma VM; o import de módulos do Python fica igual ao de fora (o sistema não passa pela fila).
 
 ## Registro
 

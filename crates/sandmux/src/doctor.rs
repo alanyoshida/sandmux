@@ -746,6 +746,20 @@ fn sandbox_group(r: &support::SupportReport, host: Option<&Host>) -> Group {
             ),
         });
     }
+    let tabs = tr!("arquivos das abas pelo kernel", "tab files by the kernel");
+    // Opcional: sem o caminho do kernel, o supervisor, como antes.
+    checks.push(match sandmux::helper::tab_availability() {
+        Ok(detail) => support_check(true, tabs, &detail, None),
+        Err(why) => {
+            let hint = tr!(
+                "  Sem ele, o supervisor do sandmux decide e registra cada abertura de arquivo\n  das abas, de 3 a 3,5 vezes mais lento na leitura em massa. Com o auxiliar\n  root (`sandmux setup`) e o `bpf` na lista de LSMs, o kernel decide. Detalhes\n  em docs/files.md.",
+                "  Without it, the sandmux supervisor decides and logs each file open of the\n  tabs, 3 to 3.5 times slower on bulk reads. With the root helper\n  (`sandmux setup`) and `bpf` in the LSM list, the kernel decides. Details in\n  docs/en/files.md."
+            );
+            Check::new(State::Info, tabs, why.clone())
+                .help(flat(hint))
+                .cli(format!("[info] {tabs}: {why}\n{hint}"))
+        }
+    });
 
     let tun = std::fs::metadata("/dev/net/tun")
         .map(|m| std::os::unix::fs::FileTypeExt::is_char_device(&m.file_type()))

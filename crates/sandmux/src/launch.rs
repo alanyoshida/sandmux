@@ -519,6 +519,15 @@ pub fn prepare_with(
             )
             .into(),
         ),
+        // E por `kernel` quando o lançador pede os arquivos da aba e o
+        // auxiliar aceita (o motivo, quando não aceita).
+        files: policy_file.is_some().then(|| {
+            tr!(
+                "supervisor: aguardando o lançamento",
+                "supervisor: waiting for the launch"
+            )
+            .into()
+        }),
     };
     for d in &composed.dirs_to_create {
         if d.starts_with(&host.data_dir) {

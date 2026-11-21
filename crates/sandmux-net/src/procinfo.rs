@@ -205,16 +205,11 @@ pub fn descendants(root: u32, parents: &[(u32, u32)]) -> Vec<u32> {
     out
 }
 
-/// Pergunta ao daemon: (pid, executável, a aba está pelo kernel).
-fn ask(
-    a: &VaultAccess,
-    tag: &str,
-    sport: u16,
-    dst: SocketAddr,
-) -> Option<(Option<u32>, Option<String>, bool)> {
+/// Conecta ao daemon, com o `Hello` aceito, e o prazo de cada leitura.
+fn hello(a: &VaultAccess, wait: Duration) -> Option<UnixStream> {
     let mut s = UnixStream::connect(&a.socket).ok()?;
-    let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
-    let _ = s.set_write_timeout(Some(Duration::from_secs(2)));
+    let _ = s.set_read_timeout(Some(wait));
+    let _ = s.set_write_timeout(Some(wait));
     let hello = Msg::Hello {
         protocol: PROTOCOL,
         version: env!("CARGO_PKG_VERSION").into(),
@@ -229,6 +224,48 @@ fn ask(
     ) {
         return None;
     }
+    Some(s)
+}
+
+/// Pede ao daemon os arquivos da aba `tag` pelo kernel (o lançador, antes de
+/// liberar o comando). `Err` com o motivo de ficar com o supervisor.
+pub fn confine_tab(
+    a: &VaultAccess,
+    tag: &str,
+    mounts: Vec<u32>,
+    roots: Vec<std::path::PathBuf>,
+    exclude: Vec<std::path::PathBuf>,
+) -> Result<(), String> {
+    let no_daemon =
+        || sandmux_spec::tr!("o daemon não respondeu", "the daemon did not answer").to_string();
+    let mut s = hello(a, Duration::from_secs(10)).ok_or_else(no_daemon)?;
+    write_control(
+        &mut s,
+        &Msg::ConfineTab {
+            tag: tag.into(),
+            mounts,
+            roots,
+            exclude,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    match read_frame(&mut s) {
+        Ok(Some(Frame::Control(Msg::ConfineTabReply { kernel: true, .. }))) => Ok(()),
+        Ok(Some(Frame::Control(Msg::ConfineTabReply { reason, .. }))) => {
+            Err(reason.unwrap_or_default())
+        }
+        _ => Err(no_daemon()),
+    }
+}
+
+/// Pergunta ao daemon: (pid, executável, a aba está pelo kernel).
+fn ask(
+    a: &VaultAccess,
+    tag: &str,
+    sport: u16,
+    dst: SocketAddr,
+) -> Option<(Option<u32>, Option<String>, bool)> {
+    let mut s = hello(a, Duration::from_secs(2))?;
     write_control(
         &mut s,
         &Msg::ConnProcess {

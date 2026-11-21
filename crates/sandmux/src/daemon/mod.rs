@@ -21,6 +21,7 @@ mod secretwatch;
 mod session;
 mod sshagent;
 pub mod store;
+mod tabfiles;
 pub mod vault;
 
 use std::collections::{BTreeMap, HashMap};

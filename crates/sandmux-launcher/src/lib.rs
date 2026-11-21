@@ -21,6 +21,7 @@ pub mod scope;
 pub mod seccomp;
 pub mod support;
 mod sys;
+mod viewmounts;
 
 pub use landlock_rules::REQUIRED_ABI;
 pub use launch::{

@@ -20,12 +20,17 @@ const HDR: usize = 8;
 
 /// Tamanho dos dados da fila de cada confinamento.
 pub const RING_SIZE: u32 = 256 * 1024;
+/// A fila de uma aba confinada pelo kernel, com os eventos de abertura.
+pub const RING_SIZE_TAB: u32 = 1024 * 1024;
 
 /// Tipos de evento.
 pub const EV_DENY: u32 = 1;
 pub const EV_CREATE: u32 = 2;
 pub const EV_EXEC: u32 = 3;
 pub const EV_CONN: u32 = 4;
+/// Uma abertura de arquivo numa montagem registrada: o caminho no nome, o
+/// `mnt_id` no lugar do `dev`.
+pub const EV_OPEN: u32 = 5;
 
 /// Tamanho do evento de conexão.
 pub const CONN_EVENT: usize = 48;
@@ -106,7 +111,7 @@ impl Event {
             return None;
         }
         let kind = u32_at(b, 0);
-        if kind != EV_DENY && kind != EV_CREATE && kind != EV_EXEC {
+        if kind != EV_DENY && kind != EV_CREATE && kind != EV_EXEC && kind != EV_OPEN {
             return None;
         }
         let len = u32_at(b, 28) as i32;

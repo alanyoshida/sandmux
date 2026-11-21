@@ -54,6 +54,10 @@ pub enum MarkKind {
     Deny,
     Protect,
     GitDir,
+    /// Segredo de uma aba (`ENOENT`).
+    Secret,
+    /// Negado pela política de arquivos de uma aba (`EACCES`).
+    FileDeny,
 }
 
 impl MarkKind {
@@ -62,6 +66,8 @@ impl MarkKind {
             MarkKind::Deny => "deny",
             MarkKind::Protect => "protect",
             MarkKind::GitDir => "gitdir",
+            MarkKind::Secret => "secret",
+            MarkKind::FileDeny => "fdeny",
         }
     }
     fn parse(s: &str) -> Option<MarkKind> {
@@ -69,6 +75,8 @@ impl MarkKind {
             "deny" => MarkKind::Deny,
             "protect" => MarkKind::Protect,
             "gitdir" => MarkKind::GitDir,
+            "secret" => MarkKind::Secret,
+            "fdeny" => MarkKind::FileDeny,
             _ => return None,
         })
     }
@@ -77,6 +85,8 @@ impl MarkKind {
             MarkKind::Deny => sandmux_ebpf::prog::DENY,
             MarkKind::Protect => sandmux_ebpf::prog::PROTECT,
             MarkKind::GitDir => sandmux_ebpf::prog::GITDIR,
+            MarkKind::Secret => sandmux_ebpf::prog::SECRET,
+            MarkKind::FileDeny => sandmux_ebpf::prog::FDENY,
         }
     }
 }
@@ -229,7 +239,14 @@ pub trait Backend: Send + Sync {
     fn lsm(&self) -> Result<bool, String>;
     /// Liga o confinamento no cgroup. `dev` é o `s_dev` do superbloco da
     /// pasta de trabalho (0 quando não se sabe), que filtra as criações.
-    fn confine(&self, cgroup: &OwnedFd, dev: u32) -> Result<Box<dyn Confined>, String>;
+    /// `open_mnts` são as montagens (`mnt_id`) cujas aberturas vão para os
+    /// eventos (o registro de arquivos de uma aba); vazio no Docker.
+    fn confine(
+        &self,
+        cgroup: &OwnedFd,
+        dev: u32,
+        open_mnts: &[u32],
+    ) -> Result<Box<dyn Confined>, String>;
     /// Observa as execuções do cgroup, sem regras de arquivos. Devolve a
     /// fonte dos eventos.
     fn observe(&self, cgroup: &OwnedFd) -> Result<Box<dyn Events>, String>;
@@ -336,6 +353,9 @@ pub struct Server {
     active: Mutex<HashMap<u32, usize>>,
     observing: Mutex<HashMap<u32, usize>>,
     scoping: Mutex<HashMap<u32, usize>>,
+    /// As conexões abertas, para a saída limpa ([`Server::close_all`]).
+    conns: Mutex<HashMap<u64, Arc<OwnedFd>>>,
+    next_conn: std::sync::atomic::AtomicU64,
 }
 
 struct Conn {
@@ -360,7 +380,34 @@ impl Server {
             active: Mutex::new(HashMap::new()),
             observing: Mutex::new(HashMap::new()),
             scoping: Mutex::new(HashMap::new()),
+            conns: Mutex::new(HashMap::new()),
+            next_conn: std::sync::atomic::AtomicU64::new(0),
         })
+    }
+
+    /// A saída limpa (`SIGTERM`): cada conexão recebe o fim (`SHUT_WR`)
+    /// enquanto as regras dela ainda valem, e quem pediu reage antes de elas
+    /// saírem. Espera as conexões terminarem, até `wait`.
+    pub fn close_all(&self, wait: std::time::Duration) {
+        for fd in self
+            .conns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+        {
+            // SAFETY: shutdown num descritor vivo (o `Arc` o segura).
+            unsafe { libc::shutdown(fd.as_raw_fd(), libc::SHUT_WR) };
+        }
+        let deadline = std::time::Instant::now() + wait;
+        while std::time::Instant::now() < deadline
+            && !self
+                .conns
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     fn handle(&self, c: &mut Conn, msg: &[u8], fds: Vec<OwnedFd>) -> Value {
@@ -377,8 +424,11 @@ impl Server {
                     Ok(()) => (true, Value::Null),
                     Err(e) => (false, Value::String(e)),
                 };
+                // `tab`: as marcas de segredo e de `file-deny` e os eventos
+                // de abertura (change 78); um auxiliar antigo não manda, e a
+                // aba fica com o supervisor.
                 json!({"ok": true, "version": env!("CARGO_PKG_VERSION"), "lsm": lsm, "reason": reason,
-                    "scope": scope, "scope_reason": scope_reason})
+                    "scope": scope, "scope_reason": scope_reason, "tab": true})
             }
             Some("confine") => {
                 if c.confined.is_some() || c.observing {
@@ -408,7 +458,16 @@ impl Server {
                     *n += 1;
                 }
                 let dev = v.get("dev").and_then(Value::as_u64).unwrap_or(0) as u32;
-                match self.backend.confine(&cg, dev) {
+                let open_mnts: Vec<u32> = v
+                    .get("open_mnts")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_u64().map(|n| n as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                match self.backend.confine(&cg, dev, &open_mnts) {
                     Ok(x) => {
                         let attach = x.attach();
                         eprintln!(
@@ -587,6 +646,13 @@ impl Server {
     pub fn serve(self: &Arc<Server>, sock: OwnedFd) {
         let Ok(uid) = peer_uid(&sock) else { return };
         let sock = Arc::new(sock);
+        let id = self
+            .next_conn
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.conns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, sock.clone());
         let send_lock = Arc::new(Mutex::new(()));
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut c = Conn {
@@ -635,6 +701,11 @@ impl Server {
         if c.scoped.take().is_some() {
             self.release_scope(uid);
         }
+        drop(c);
+        self.conns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
     }
 }
 
@@ -768,7 +839,7 @@ impl Confined for Real {
     fn events(&self) -> Option<Box<dyn Events>> {
         let ring = self.0.ring().ok()?;
         let drops = self.0.drops().ok()?;
-        let reader = sandmux_ebpf::ring::Reader::new(ring, sandmux_ebpf::ring::RING_SIZE).ok()?;
+        let reader = sandmux_ebpf::ring::Reader::new(ring, self.0.ring_size()).ok()?;
         Some(Box::new(RealEvents { reader, drops }))
     }
     fn attach(&self) -> &'static str {
@@ -788,6 +859,9 @@ struct RealEvents {
 pub fn event_json(e: &sandmux_ebpf::ring::Event) -> Value {
     if e.kind == sandmux_ebpf::ring::EV_EXEC {
         return json!({"kind": "exec", "pid": e.ino, "path": e.name, "args": e.args});
+    }
+    if e.kind == sandmux_ebpf::ring::EV_OPEN {
+        return json!({"kind": "open", "write": e.write, "ino": e.ino, "mnt": e.dev, "path": e.name});
     }
     let hook = sandmux_ebpf::prog::HOOKS
         .get(e.hook as usize)
@@ -981,7 +1055,12 @@ impl Backend for Ebpf {
         }))
     }
 
-    fn confine(&self, cg: &OwnedFd, dev: u32) -> Result<Box<dyn Confined>, String> {
+    fn confine(
+        &self,
+        cg: &OwnedFd,
+        dev: u32,
+        open_mnts: &[u32],
+    ) -> Result<Box<dyn Confined>, String> {
         if !sandmux_ebpf::lsm_active()? {
             return Err(tr!(
                 "o BPF LSM não está ativo no kernel",
@@ -999,11 +1078,11 @@ impl Backend for Ebpf {
             .as_ref()
             .map_err(Clone::clone)?;
         use sandmux_ebpf::prog::{Attach, Confinement};
-        match Confinement::load(l, cg.as_raw_fd(), Attach::Cgroup, dev) {
+        match Confinement::load_with(l, cg.as_raw_fd(), Attach::Cgroup, dev, open_mnts) {
             Ok(c) => Ok(Box::new(self.with_exec(c, cg))),
             Err(first) => {
                 let (level, cgroup_id) = cgroup_level_id(cg)?;
-                Confinement::load(l, -1, Attach::Global { level, cgroup_id }, dev)
+                Confinement::load_with(l, -1, Attach::Global { level, cgroup_id }, dev, open_mnts)
                     .map(|c| Box::new(self.with_exec(c, cg)) as Box<dyn Confined>)
                     .map_err(|e| {
                         trf!(
@@ -1026,6 +1105,8 @@ pub struct Client {
     call_lock: Mutex<()>,
     replies: Mutex<std::sync::mpsc::Receiver<Value>>,
     events: Mutex<Option<std::sync::mpsc::Receiver<Value>>>,
+    /// Fecha quando a leitura da conexão termina.
+    closed: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
 }
 
 /// Abre o caminho com `O_PATH | O_NOFOLLOW`, sem precisar de permissão de
@@ -1059,6 +1140,9 @@ pub struct Status {
     /// Os programas do escopo de sandbox carregam (o pedido `scope`).
     pub scope: bool,
     pub scope_reason: Option<String>,
+    /// Confina os arquivos de uma aba: as marcas de segredo e de
+    /// `file-deny` e os eventos de abertura.
+    pub tab: bool,
 }
 
 fn seqpacket() -> io::Result<OwnedFd> {
@@ -1149,10 +1233,14 @@ impl Client {
         let sock = Arc::new(s);
         let (rep_tx, rep_rx) = std::sync::mpsc::channel();
         let (ev_tx, ev_rx) = std::sync::mpsc::channel();
+        let (closed_tx, closed_rx) = std::sync::mpsc::channel::<()>();
         let r = sock.clone();
         std::thread::Builder::new()
             .name("helper-leitura".into())
             .spawn(move || {
+                // Solto no fim da leitura: a queda da conexão chega a quem
+                // espera em `wait_closed`, sem esperar a fila de eventos.
+                let _closed = closed_tx;
                 while let Ok(Some((msg, _))) = recv(&*r) {
                     let Ok(v) = serde_json::from_slice::<Value>(&msg) else {
                         continue;
@@ -1169,6 +1257,7 @@ impl Client {
             call_lock: Mutex::new(()),
             replies: Mutex::new(rep_rx),
             events: Mutex::new(Some(ev_rx)),
+            closed: Mutex::new(Some(closed_rx)),
         })
     }
 
@@ -1218,6 +1307,7 @@ impl Client {
             reason: v["reason"].as_str().map(str::to_string),
             scope: v["scope"] == true,
             scope_reason: v["scope_reason"].as_str().map(str::to_string),
+            tab: v["tab"] == true,
         })
     }
 
@@ -1234,8 +1324,17 @@ impl Client {
     /// Liga o confinamento no cgroup do diretório `dir`. Devolve o anexo
     /// usado (`cgroup` ou `global`).
     pub fn confine(&self, dir: &Path, dev: u32) -> Result<String, String> {
+        self.confine_with(dir, dev, &[])
+    }
+
+    /// Como [`Client::confine`], com as montagens (`mnt_id`) cujas aberturas
+    /// vêm nos eventos (o registro de arquivos de uma aba).
+    pub fn confine_with(&self, dir: &Path, dev: u32, open_mnts: &[u32]) -> Result<String, String> {
         let f = std::fs::File::open(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let v = self.call(json!({"op": "confine", "dev": dev}), &[f.as_raw_fd()])?;
+        let v = self.call(
+            json!({"op": "confine", "dev": dev, "open_mnts": open_mnts}),
+            &[f.as_raw_fd()],
+        )?;
         Ok(v["attach"].as_str().unwrap_or("").to_string())
     }
 
@@ -1269,6 +1368,23 @@ impl Client {
             n += files.len();
         }
         Ok(n)
+    }
+}
+
+impl Client {
+    /// Espera a conexão cair (ou fechar). Só uma thread pode esperar.
+    pub fn wait_closed(&self) {
+        let rx = self.closed.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(rx) = rx {
+            let _ = rx.recv();
+        }
+    }
+
+    /// Fecha a conexão já, mesmo com outra thread segurando o cliente: o
+    /// auxiliar solta o confinamento, e o canal dos eventos fecha.
+    pub fn close(&self) {
+        // SAFETY: shutdown num descritor nosso.
+        unsafe { libc::shutdown(self.sock.as_raw_fd(), libc::SHUT_RDWR) };
     }
 }
 
@@ -1323,6 +1439,39 @@ pub fn availability() -> Result<String, String> {
 }
 
 pub fn availability_with(lsm: Result<bool, String>, socket: &Path) -> Result<String, String> {
+    let st = status_with(lsm, socket)?;
+    Ok(sandmux_spec::trf!(
+        "auxiliar root {} em {}, BPF LSM ativo",
+        "root helper {} at {}, BPF LSM active",
+        st.version,
+        socket.display()
+    ))
+}
+
+/// Os arquivos das abas podem ir ao kernel (o BPF LSM e um auxiliar que
+/// confina abas); `Err` com o motivo de ficarem com o supervisor.
+pub fn tab_availability() -> Result<String, String> {
+    tab_availability_with(sandmux_ebpf::lsm_active(), &socket_path())
+}
+
+pub fn tab_availability_with(lsm: Result<bool, String>, socket: &Path) -> Result<String, String> {
+    use sandmux_spec::{tr, trf};
+    let st = status_with(lsm, socket)?;
+    if !st.tab {
+        return Err(trf!(
+            "o auxiliar root {} não confina os arquivos de uma aba; atualize o auxiliar",
+            "the root helper {} does not confine a tab's files; update the helper",
+            st.version
+        ));
+    }
+    Ok(tr!(
+        "segredos e file-deny negados pelo kernel, aberturas pela fila do kernel (com o escopo próprio da aba)",
+        "secrets and file-deny denied by the kernel, opens through the kernel queue (with the tab's own scope)"
+    )
+    .into())
+}
+
+fn status_with(lsm: Result<bool, String>, socket: &Path) -> Result<Status, String> {
     use sandmux_spec::{tr, trf};
     match lsm {
         Ok(true) => {}
@@ -1352,12 +1501,7 @@ pub fn availability_with(lsm: Result<bool, String>, socket: &Path) -> Result<Str
             .into()
         }));
     }
-    Ok(trf!(
-        "auxiliar root {} em {}, BPF LSM ativo",
-        "root helper {} at {}, BPF LSM active",
-        st.version,
-        socket.display()
-    ))
+    Ok(st)
 }
 
 #[cfg(test)]
@@ -1439,8 +1583,17 @@ mod tests {
         fn observe(&self, _cg: &OwnedFd) -> Result<Box<dyn Events>, String> {
             Ok(Box::new(ExecEvents(0)))
         }
-        fn confine(&self, _cg: &OwnedFd, _dev: u32) -> Result<Box<dyn Confined>, String> {
+        fn confine(
+            &self,
+            _cg: &OwnedFd,
+            _dev: u32,
+            open_mnts: &[u32],
+        ) -> Result<Box<dyn Confined>, String> {
             self.loaded.fetch_add(1, Ordering::SeqCst);
+            // As montagens das aberturas, somadas (o teste confere).
+            if !open_mnts.is_empty() {
+                *self.asked.lock().unwrap() = Some(open_mnts.iter().sum());
+            }
             Ok(Box::new(FakeConfined {
                 loaded: self.loaded.clone(),
                 marks: Arc::new(Mutex::new(Vec::new())),
@@ -1637,6 +1790,98 @@ mod tests {
         assert_eq!(loaded.load(Ordering::SeqCst), 1);
         drop(c);
         wait_for(|| loaded.load(Ordering::SeqCst) == 0);
+    }
+
+    #[test]
+    fn confina_a_aba_com_montagens_e_marcas_novas() {
+        let (d, p, loaded, asked) = start(true);
+        let c = Client::connect(&p).unwrap();
+        assert!(c.status().unwrap().tab);
+        assert_eq!(c.confine_with(d.path(), 0, &[7, 9]).unwrap(), "cgroup");
+        assert_eq!(*asked.lock().unwrap(), Some(16));
+        let env = d.path().join(".env");
+        let sql = d.path().join("dados.sql");
+        std::fs::write(&env, "").unwrap();
+        std::fs::write(&sql, "").unwrap();
+        assert_eq!(
+            c.mark(MarkKind::Secret, std::slice::from_ref(&env))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.mark(MarkKind::FileDeny, std::slice::from_ref(&sql))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.unmark(MarkKind::Secret, std::slice::from_ref(&env))
+                .unwrap(),
+            1
+        );
+        // Um tipo de marca desconhecido é recusado.
+        let e = c
+            .call(json!({"op": "mark", "kind": "outra"}), &[])
+            .unwrap_err();
+        assert!(!e.is_empty());
+        drop(c);
+        wait_for(|| loaded.load(Ordering::SeqCst) == 0);
+    }
+
+    #[test]
+    fn espera_a_conexao_fechar() {
+        let (_d, p, _, _) = start(true);
+        let c = Arc::new(Client::connect(&p).unwrap());
+        let c2 = c.clone();
+        let t = std::thread::spawn(move || c2.wait_closed());
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!t.is_finished());
+        c.close();
+        wait_for(|| t.is_finished());
+    }
+
+    #[test]
+    fn saida_limpa_avisa_antes_de_soltar() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("h.sock");
+        let loaded = Arc::new(AtomicUsize::new(0));
+        let server = Server::new(Box::new(Fake {
+            loaded: loaded.clone(),
+            cgroup_ok: true,
+            asked: Arc::new(Mutex::new(None)),
+        }));
+        let l = listen(&path).unwrap();
+        let s = server.clone();
+        std::thread::spawn(move || accept_loop(s, l));
+        let c = Client::connect(&path).unwrap();
+        c.confine(dir.path(), 0).unwrap();
+        let s = server.clone();
+        let t = std::thread::spawn(move || s.close_all(std::time::Duration::from_secs(5)));
+        // O cliente fica sabendo com o confinamento ainda carregado.
+        c.wait_closed();
+        assert_eq!(loaded.load(Ordering::SeqCst), 1);
+        drop(c);
+        t.join().unwrap();
+        assert_eq!(loaded.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn evento_de_abertura_em_json() {
+        let e = sandmux_ebpf::ring::Event {
+            kind: sandmux_ebpf::ring::EV_OPEN,
+            hook: 0,
+            bits: 0,
+            write: true,
+            ino: 42,
+            dev: 31,
+            name: "/home/u/p/novo.txt".into(),
+            args: Vec::new(),
+        };
+        assert_eq!(
+            event_json(&e),
+            json!({"kind": "open", "write": true, "ino": 42, "mnt": 31, "path": "/home/u/p/novo.txt"})
+        );
+        assert_eq!(MarkKind::Secret.bits(), sandmux_ebpf::prog::SECRET);
+        assert_eq!(MarkKind::FileDeny.bits(), sandmux_ebpf::prog::FDENY);
     }
 
     #[test]

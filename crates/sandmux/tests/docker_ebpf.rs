@@ -605,6 +605,196 @@ docker run --rm sx sh -c 'ls / >/dev/null'; echo FIM"
     limpar(&e);
 }
 
+/// Todas as linhas do registro de arquivos deste ambiente.
+fn all_file_lines(e: &Env) -> Vec<serde_json::Value> {
+    let dir = e.state.join("sandmux/files");
+    let mut out = Vec::new();
+    for f in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        if f.path().extension().is_some_and(|x| x == "jsonl") {
+            let text = std::fs::read_to_string(f.path()).unwrap();
+            out.extend(
+                text.lines()
+                    .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()),
+            );
+        }
+    }
+    out
+}
+
+/// Os arquivos da aba pelo kernel (change 78): o `.env` some, o `file-deny`
+/// nega, o segredo do agente fica dele, o criado no host fica negado em até
+/// ~1 s, as aberturas entram no registro, e a queda do auxiliar para a aba.
+#[test]
+fn arquivos_da_aba_pelo_kernel() {
+    let Some(sock) = helper() else { return };
+    let e = Env::new();
+    let privado = e.work.join("privado");
+    std::fs::create_dir_all(&privado).unwrap();
+    std::fs::write(privado.join("dados.sql"), "segredo\n").unwrap();
+    std::fs::write(e.work.join(".env"), "SEGREDO=1\n").unwrap();
+    std::fs::write(e.work.join("livre.txt"), "livre\n").unwrap();
+    e.write_config(&format!(
+        "[project.\"{}\"]\nfile-deny = [\"{}\"]\n",
+        e.work.display(),
+        privado.display()
+    ));
+    let mut t = term(&e, &e.work);
+    let s = run_in(&mut t, &e.work, "sleep 1; echo PRONTO");
+    assert!(s.contains("PRONTO"), "{s}");
+    let st = stats(&e);
+    assert!(st.contains("aberturas de arquivo: pelo kernel"), "{st}");
+    let s = run_in(
+        &mut t,
+        &e.work,
+        "cat .env 2>&1; cat privado/dados.sql 2>&1; cat livre.txt; \
+         echo novo > criado.txt; echo X=1 > .env.local; cat .env.local; echo FIM",
+    );
+    assert!(s.contains("FIM"), "{s}");
+    assert!(s.contains(".env: No such file"), "{s}");
+    assert!(s.contains("dados.sql: Permission denied"), "{s}");
+    assert!(s.contains("livre\n") || s.contains("livre\r\n"), "{s}");
+    assert!(s.contains("X=1"), "o segredo do agente é dele: {s}");
+    // Renomear ou ligar o segredo não o expõe: a marca é do inode.
+    let s = run_in(
+        &mut t,
+        &e.work,
+        "mv .env outro.txt 2>/dev/null; ln .env elo.txt 2>/dev/null; \
+         cat outro.txt elo.txt 2>/dev/null | grep -c SEGREDO; echo FIM3",
+    );
+    assert!(s.contains("0\n") || s.contains("0\r\n"), "{s}");
+    // Um segredo criado no host durante a sessão: negado pela vigia.
+    std::fs::write(e.work.join(".env.prod"), "P=1\n").unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    let s = run_in(&mut t, &e.work, "cat .env.prod 2>&1; echo FIM2");
+    assert!(s.contains(".env.prod: No such file"), "{s}");
+    // O registro: leituras e escritas pela fila do kernel, e as negações.
+    std::thread::sleep(Duration::from_millis(1000));
+    let l = all_file_lines(&e);
+    let tem = |nome: &str, access: &str| {
+        l.iter()
+            .any(|x| x["path"].as_str().is_some_and(|p| p.ends_with(nome)) && x["access"] == access)
+    };
+    assert!(tem("/livre.txt", "r"), "{l:?}");
+    assert!(tem("/criado.txt", "w"), "{l:?}");
+    assert!(
+        l.iter().any(|x| x["path"]
+            .as_str()
+            .is_some_and(|p| p.ends_with("/dados.sql"))
+            && x["blocked"]
+                .as_str()
+                .is_some_and(|b| b.starts_with("file-deny"))),
+        "{l:?}"
+    );
+    // O auxiliar cai: a aba fica congelada até o confinamento voltar, com
+    // as mesmas marcas, e segue.
+    std::fs::write(format!("{}.restart", sock.display()), "").unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let s = run_in(
+        &mut t,
+        &e.work,
+        "cat .env.prod 2>&1; cat livre.txt; echo FIM4",
+    );
+    assert!(s.contains(".env.prod: No such file"), "{s}");
+    assert!(s.contains("FIM4"), "{s}");
+    let st = stats(&e);
+    assert!(st.contains("aberturas de arquivo: pelo kernel"), "{st}");
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
+}
+
+/// Custo das aberturas de uma aba: ler 13 mil arquivos da pasta e o import
+/// do Python, no host, com os arquivos pelo kernel e pelo supervisor (um
+/// `file-deny` por nome deixa a aba com ele). Só mede; roda com
+/// `scripts/vm-ubuntu-2404.sh check-root --ignored custo_dos_arquivos --nocapture`.
+#[test]
+#[ignore]
+fn custo_dos_arquivos_da_aba() {
+    if helper().is_none() {
+        return;
+    }
+    const SCRIPT: &str = "s=$(date +%s%N); cat arv/*/* >/dev/null; m=$(date +%s%N); \
+        python3 -c 'import json, email.parser, http.client, asyncio, xml.dom.minidom, decimal, sqlite3'; \
+        f=$(date +%s%N); echo T $(( (m-s)/1000000 )) $(( (f-m)/1000000 ))";
+    let parse = |s: &str| -> (u64, u64) {
+        let l = s
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("T "))
+            .unwrap_or_else(|| panic!("sem a medida: {s}"));
+        let mut it = l.split_whitespace().map(|x| x.parse::<u64>().unwrap());
+        (it.next().unwrap(), it.next().unwrap())
+    };
+    let arvore = |w: &Path| {
+        for d in 0..130 {
+            let dir = w.join(format!("arv/d{d:03}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            for f in 0..100 {
+                std::fs::write(dir.join(format!("f{f:03}")), "x\n").unwrap();
+            }
+        }
+    };
+    let mediana = |mut v: Vec<u64>| {
+        v.sort();
+        v[v.len() / 2]
+    };
+    // No host, sem sandbox.
+    let host = tempfile::tempdir().unwrap();
+    arvore(host.path());
+    let mut hv = (Vec::new(), Vec::new());
+    for _ in 0..3 {
+        let o = Command::new("sh")
+            .args(["-c", SCRIPT])
+            .current_dir(host.path())
+            .output()
+            .unwrap();
+        let (a, b) = parse(&String::from_utf8_lossy(&o.stdout));
+        hv.0.push(a);
+        hv.1.push(b);
+    }
+    let mut linhas = vec![format!(
+        "host: leitura {} ms, import {} ms",
+        mediana(hv.0),
+        mediana(hv.1)
+    )];
+    for (nome, supervisor) in [("kernel", false), ("supervisor", true)] {
+        let e = Env::new();
+        arvore(&e.work);
+        if supervisor {
+            e.write_config(&format!(
+                "[project.\"{}\"]\nfile-deny = [\"*.nunca\"]\n",
+                e.work.display()
+            ));
+        }
+        let mut t = term(&e, &e.work);
+        let s = run_in(&mut t, &e.work, "sleep 1; echo PRONTO");
+        assert!(s.contains("PRONTO"), "{s}");
+        let st = stats(&e);
+        assert_eq!(
+            st.contains("aberturas de arquivo: pelo kernel"),
+            !supervisor,
+            "{st}"
+        );
+        let mut v = (Vec::new(), Vec::new());
+        // A primeira rodada aquece o cache de páginas e o registro.
+        let _ = run_in(&mut t, &e.work, SCRIPT);
+        for _ in 0..3 {
+            let (a, b) = parse(&run_in(&mut t, &e.work, SCRIPT));
+            v.0.push(a);
+            v.1.push(b);
+        }
+        linhas.push(format!(
+            "{nome}: leitura {} ms, import {} ms",
+            mediana(v.0),
+            mediana(v.1)
+        ));
+        t.write(b"exit\r");
+        t.wait_exit();
+        limpar(&e);
+    }
+    let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    eprintln!("CUSTO {} | {}", kernel.trim(), linhas.join(" | "));
+}
+
 /// Custo do programa de execução: 2000 `/bin/true` no host, com e sem um
 /// escopo observado, e numa aba. Só mede; roda com
 /// `sudo scripts/check-root.sh --ignored custo_das_exec --nocapture`.
@@ -972,6 +1162,142 @@ fn escopo_de_sandbox_no_kernel() {
     let depois = round();
     assert_eq!(depois["abstrato_host"], "ok", "{depois}");
     assert_eq!(depois["sinal_host"], "ok", "{depois}");
+    drop(input);
+    let _ = kid.wait();
+}
+
+/// O processo da aba confinada pelo kernel: espera uma linha e tenta as
+/// aberturas, escrevendo o resultado de cada uma.
+const ABA_PY: &str = r#"
+import os, sys, json
+d = sys.argv[1]
+def tenta(f):
+    try:
+        f(); return "ok"
+    except OSError as e:
+        return e.errno
+for linha in sys.stdin:
+    r = {
+        "segredo": tenta(lambda: open(os.path.join(d, ".env")).read()),
+        "negado": tenta(lambda: open(os.path.join(d, "dados.sql")).read()),
+        "livre": tenta(lambda: open(os.path.join(d, "livre.txt")).read()),
+        "grava": tenta(lambda: open(os.path.join(d, "novo.txt"), "w").write("x")),
+    }
+    print(json.dumps(r), flush=True)
+"#;
+
+/// As marcas das abas (`SECRET` com `ENOENT`, `FDENY` com `EACCES`) e os
+/// eventos de abertura de uma montagem registrada, num escopo do systemd
+/// confinado pelo auxiliar real.
+#[test]
+fn marcas_e_aberturas_da_aba_no_kernel() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::fs::MetadataExt;
+    let Some(sock) = std::env::var_os("SANDMUX_HELPER_SOCKET").map(PathBuf::from) else {
+        return;
+    };
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().canonicalize().unwrap();
+    for (n, c) in [(".env", "S=1"), ("dados.sql", "x"), ("livre.txt", "ok")] {
+        std::fs::write(dir.join(n), c).unwrap();
+    }
+    // A montagem da pasta: o `mnt_id` dela no `mountinfo` deste processo.
+    let mi = std::fs::read_to_string("/proc/self/mountinfo").unwrap();
+    let mnt_of = |p: &Path| -> u32 {
+        let mut best = (0usize, 0u32);
+        for l in mi.lines() {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let mp = Path::new(f[4]);
+            if p.starts_with(mp) && mp.as_os_str().len() >= best.0 {
+                best = (mp.as_os_str().len(), f[0].parse().unwrap());
+            }
+        }
+        best.1
+    };
+    let mnt = mnt_of(&dir);
+    let unit = format!("sandmux-aba-{}", std::process::id());
+    let mut kid = Command::new("systemd-run")
+        .args([
+            "--user",
+            "--scope",
+            "-q",
+            &format!("--unit={unit}"),
+            "python3",
+            "-c",
+            ABA_PY,
+        ])
+        .arg(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = kid.stdin.take().unwrap();
+    let mut out = BufReader::new(kid.stdout.take().unwrap());
+    let mut round = || -> serde_json::Value {
+        input.write_all(b"\n").unwrap();
+        let mut s = String::new();
+        out.read_line(&mut s).unwrap();
+        serde_json::from_str(&s).unwrap_or_else(|e| panic!("{e}: {s:?}"))
+    };
+    let antes = round();
+    assert_eq!(antes["segredo"], "ok", "{antes}");
+    // O escopo do processo.
+    let cg = loop {
+        let c = std::fs::read_to_string(format!("/proc/{}/cgroup", kid.id())).unwrap();
+        if c.contains(&unit) {
+            break PathBuf::from("/sys/fs/cgroup").join(c.trim().trim_start_matches("0::/"));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let c = sandmux::helper::Client::connect(&sock).unwrap();
+    let dev = std::fs::metadata(&dir).unwrap().dev();
+    let kdev = ((libc::major(dev) as u32) << 20) | (libc::minor(dev) as u32 & 0xf_ffff);
+    c.confine_with(&cg, kdev, &[mnt]).unwrap();
+    c.mark(sandmux::helper::MarkKind::Secret, &[dir.join(".env")])
+        .unwrap();
+    c.mark(
+        sandmux::helper::MarkKind::FileDeny,
+        &[dir.join("dados.sql")],
+    )
+    .unwrap();
+    let ev = c.take_events().unwrap();
+    let dentro = round();
+    eprintln!("ABA {dentro}");
+    assert_eq!(dentro["segredo"], libc::ENOENT, "{dentro}");
+    assert_eq!(dentro["negado"], libc::EACCES, "{dentro}");
+    assert_eq!(dentro["livre"], "ok", "{dentro}");
+    assert_eq!(dentro["grava"], "ok", "{dentro}");
+    // Os eventos: as aberturas de `livre.txt` (leitura) e de `novo.txt`
+    // (escrita), com o caminho, e os bloqueios.
+    let fim = Instant::now() + Duration::from_secs(5);
+    let (mut leu, mut gravou, mut negou) = (false, false, 0);
+    while Instant::now() < fim && !(leu && gravou && negou >= 2) {
+        let Ok(m) = ev.recv_timeout(Duration::from_millis(300)) else {
+            continue;
+        };
+        for e in m["ev"].as_array().cloned().unwrap_or_default() {
+            match e["kind"].as_str() {
+                Some("open") if e["path"] == dir.join("livre.txt").to_str().unwrap() => {
+                    leu |= e["write"] == false
+                }
+                Some("open") if e["path"] == dir.join("novo.txt").to_str().unwrap() => {
+                    gravou |= e["write"] == true
+                }
+                Some("deny") => negou += 1,
+                _ => {}
+            }
+        }
+    }
+    assert!(
+        leu && gravou && negou >= 2,
+        "leu {leu} gravou {gravou} negou {negou}"
+    );
+    // Fora do escopo, nada muda.
+    assert_eq!(std::fs::read_to_string(dir.join(".env")).unwrap(), "S=1");
+    drop(c);
+    std::thread::sleep(Duration::from_millis(300));
+    let depois = round();
+    assert_eq!(depois["segredo"], "ok", "{depois}");
     drop(input);
     let _ = kid.wait();
 }
