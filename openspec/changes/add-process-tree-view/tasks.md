@@ -36,5 +36,5 @@
 ## 6. Verificação
 
 - [x] 6.1 `./scripts/check.sh` no host (sem BPF), sob a vigia de memória: fmt, clippy e 783 testes, nenhuma falha (2026-11-21).
-- [ ] 6.2 Com a autorização do usuário, os testes com root na VM (`scripts/vm-ubuntu-2404.sh check-root`), no 7.0 e no 6.8, com o teste do grupo 2.2; nada de BPF no host.
+- [x] 6.2 Com a autorização do usuário (2026-11-21), os testes com root na VM (`scripts/vm-ubuntu-2404.sh check-root`): 21 passaram e 4 de medida ficaram ignorados no 6.8 e no 7.0, com `ppid_e_saida_no_kernel` e `arvore_de_processos_na_tui`, sem oops no `dmesg`; nada de BPF no host.
 - [ ] 6.3 Conferência à mão na TUI com uma aba viva (pelo usuário, no build local).
