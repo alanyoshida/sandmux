@@ -490,6 +490,8 @@ Release `v0.1.30` (2026-11-21), com o change 81 (etapa 16). Pelo fluxo do usuár
 
 Release `v0.1.31` (2026-11-21), com o change 82 (etapa 16). Pelo fluxo do usuário, publicada depois do `check.sh` verde e do `check-root` na VM verde no 7.0 e no 6.8. Muda o auxiliar root (`sandmux setup`); o protocolo entre o cliente e o daemon não muda.
 
+Release `v0.1.32` (2026-11-21), com os changes 83 e 84 (etapa 16). Pelo fluxo do usuário, publicada depois do `check.sh` verde no `main` com os dois changes juntos; o `check-root` na VM (7.0 e 6.8) já tinha sido verificado na implementação do change 83, que é quem muda o auxiliar root e o protocolo (sobe para 45) — o change 84 só muda o cliente.
+
 ### Etapa 14 - Confinamento do Docker privado
 
 Objetivo: o Docker privado sob as mesmas regras do sandbox do agente. Hoje o que limita o `dockerd` e os contêineres é só a visão de arquivos (achados de 2026-11-16, na seção 6). Decisões do usuário (2026-11-16), na exploração do backend eBPF: o eBPF entra para dar uma capacidade nova, o confinamento do Docker privado e de outros processos que rodam fora do Landlock; o confinamento cobre os arquivos e as chamadas de sistema; o trabalho se divide em dois changes, com o endurecimento sem privilégio primeiro.
