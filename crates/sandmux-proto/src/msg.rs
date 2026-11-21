@@ -332,6 +332,10 @@ pub struct PolicySummary {
     /// `supervisor: <motivo>` (protocolo 41).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exec: Option<String>,
+    /// Quem decide e registra as aberturas de arquivo: `kernel` ou
+    /// `supervisor: <motivo>` (protocolo 43).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<String>,
 }
 
 /// Consumo do Docker privado da pasta de uma sessão.
@@ -696,6 +700,19 @@ pub enum Msg {
         ip: String,
         port: u16,
     },
+    /// O lançador da aba `tag` pede o confinamento dos arquivos pelo kernel,
+    /// antes de liberar o comando; `mounts` são as montagens (`mnt_id`) das
+    /// pastas do registro, e `roots` e `exclude` as pastas na visão do
+    /// agente, que filtram as aberturas (protocolo 43). O processo vem das
+    /// credenciais do socket.
+    ConfineTab {
+        tag: String,
+        mounts: Vec<u32>,
+        #[serde(default)]
+        roots: Vec<PathBuf>,
+        #[serde(default)]
+        exclude: Vec<PathBuf>,
+    },
     /// Tokens reais capturados numa resposta de login (papel e valor), do
     /// gateway de um lançamento ao daemon, que os guarda e devolve os falsos
     /// (protocolo 26). `harness` é o dono do login (`claude`, `agy`), que
@@ -833,6 +850,12 @@ pub enum Msg {
         pid: Option<u32>,
         exe: Option<String>,
         kernel: bool,
+    },
+    /// Resposta ao `ConfineTab`: os arquivos da aba pelo kernel, ou o motivo
+    /// de ficar com o supervisor (protocolo 43).
+    ConfineTabReply {
+        kernel: bool,
+        reason: Option<String>,
     },
     StatusInfo {
         pid: u32,

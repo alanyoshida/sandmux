@@ -32,6 +32,14 @@ A decisão é pelo arquivo (o inode), e não pelo caminho. Por isso, desmontar u
 - **Desmarcar:** o daemon também pede `unmark`, quando a política de arquivos da pasta muda e um caminho deixa de ser negado. O auxiliar tira a marca e solta o descritor do arquivo.
 - **Eventos:** os programas mandam um evento por uma fila do kernel quando negam uma operação e quando um contêiner cria um arquivo no sistema de arquivos da pasta. O auxiliar lê a fila e manda os eventos ao daemon pela mesma conexão do confinamento. O evento tem o tipo, o gancho, o inode e o nome do arquivo criado, nunca o conteúdo de um arquivo. Com a fila cheia, os eventos a mais são descartados e contados, e os contêineres não esperam.
 
+## Arquivos de uma aba
+
+O daemon também pede o `confine` para o escopo de uma aba, quando o lançador dela pede os [arquivos pelo kernel](files.md#pelo-kernel). O pedido leva, além do `dev` da pasta de trabalho, as montagens (`mnt_id`) das pastas do agente na visão do sandbox. Mudam três coisas em relação ao Docker:
+
+- **Marcas novas:** `secret` dá `ENOENT` (o segredo some, como no supervisor) e `fdeny` dá `EACCES`, nas aberturas e nas operações dentro de uma pasta marcada.
+- **Evento de abertura:** o programa do `file_open` manda, para cada arquivo aberto numa das montagens pedidas, o caminho (por `bpf_d_path`, na visão do sandbox), o inode, a montagem e se a abertura grava. As outras montagens não mandam nada. A fila desse confinamento tem 1 MiB.
+- **Status:** o `status` diz `tab`: um auxiliar que confina abas. Com um auxiliar antigo, sem esse campo, a aba fica com o supervisor.
+
 ## Observação das execuções e das conexões
 
 O pedido `observe` liga só a observação das execuções num cgroup do usuário (o escopo de uma aba), sem regras de arquivos nem marcas. Um programa no tracepoint `sched_process_exec` manda o caminho executado, o processo e os argumentos pela mesma conexão. Dois programas `fexit`, na saída de `tcp_v4_connect` e `tcp_v6_connect`, mandam cada conexão TCP que um processo do cgroup abre: o pid, a porta de origem e o destino. O daemon usa esses eventos para o [processo de cada conexão](network.md#processo-de-cada-conexão) no registro de rede. O confinamento do Docker (`confine`) inclui a mesma observação. São até 64 observações ativas por usuário, além dos 16 confinamentos. A observação só registra: nenhuma execução ou conexão é negada nem atrasada.
@@ -54,11 +62,11 @@ O escopo vale enquanto a conexão do lançador está aberta, isto é, enquanto o
 
 As regras e as marcas valem enquanto a conexão do daemon com o auxiliar estiver aberta. Elas somem quando:
 
-- o Docker da pasta para;
+- o Docker da pasta para, ou a aba termina;
 - o daemon termina, mesmo morto por `SIGKILL`;
 - o auxiliar para.
 
-Se o auxiliar parar com o Docker rodando, o daemon para o Docker da pasta, que não segue sem as regras. O próximo `docker` sobe outro Docker e liga o confinamento de novo, se o auxiliar responder. O socket do systemd sobe o auxiliar de volta na conexão seguinte.
+Se o auxiliar parar com o Docker rodando, o daemon para o Docker da pasta, que não segue sem as regras. Uma aba com os arquivos pelo kernel fica congelada até o confinamento ser refeito com o auxiliar de volta, e para se ele não voltar em 10 s. No `SIGTERM` (o `systemctl restart`, uma atualização), o auxiliar fecha a escrita de cada conexão antes de sair: quem pediu fica sabendo com as regras ainda valendo, e elas saem quando ele fecha a conexão (ou em 2 s). O próximo `docker` sobe outro Docker e liga o confinamento de novo, se o auxiliar responder. O socket do systemd sobe o auxiliar de volta na conexão seguinte.
 
 ## Instalar
 

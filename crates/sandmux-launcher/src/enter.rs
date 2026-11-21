@@ -243,7 +243,7 @@ fn shell(pty: OwnedFd, files_w: &OwnedFd, ns: &Namespaces, spec: &LaunchSpec) ->
     if let Err(e) = seccomp::install(&spec.seccomp) {
         fail(format!("seccomp: {e}"));
     }
-    match seccomp::install_notify(spec.files.as_ref().is_some_and(|f| f.exec_log)) {
+    match seccomp::install_notify(true, spec.files.as_ref().is_some_and(|f| f.exec_log)) {
         Ok(listener) => {
             if let Err(e) = net::send_fd(files_w, &listener) {
                 fail(sandmux_spec::trf!(

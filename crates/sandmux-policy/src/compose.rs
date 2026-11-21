@@ -1471,11 +1471,19 @@ pub struct DockerMarks {
     pub deny: Vec<PathBuf>,
     pub protect: Vec<PathBuf>,
     pub gitdir: Vec<PathBuf>,
+    /// Segredos de uma aba confinada pelo kernel (`ENOENT`); vazio no Docker.
+    pub secret: Vec<PathBuf>,
+    /// Negados pela política de uma aba (`EACCES`); vazio no Docker.
+    pub fdeny: Vec<PathBuf>,
 }
 
 impl DockerMarks {
     pub fn len(&self) -> usize {
-        self.deny.len() + self.protect.len() + self.gitdir.len()
+        self.deny.len()
+            + self.protect.len()
+            + self.gitdir.len()
+            + self.secret.len()
+            + self.fdeny.len()
     }
 
     /// Acrescenta às pastas negadas e protegidas tudo o que existe dentro
@@ -1504,7 +1512,7 @@ impl DockerMarks {
             true
         }
         let mut n = self.len();
-        for v in [&mut self.deny, &mut self.protect] {
+        for v in [&mut self.deny, &mut self.protect, &mut self.fdeny] {
             let mut more = Vec::new();
             for p in v.iter() {
                 let is_dir = std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
@@ -1528,15 +1536,73 @@ impl DockerMarks {
     }
 }
 
+/// Os arquivos das pastas `roots` que a política decide esconder (segredos)
+/// e negar (`file-deny`), para as marcas de uma aba confinada pelo kernel. As
+/// pastas negadas entram sem descer nelas (o `expand` as completa); os links
+/// simbólicos e as pastas de `exclude` são pulados. Acima de `max` caminhos,
+/// devolve `Err` com a contagem.
+pub fn tab_covers(
+    policy: &sandmux_spec::files::FilePolicy,
+    created: &std::collections::HashSet<PathBuf>,
+    roots: &[PathBuf],
+    exclude: &[PathBuf],
+    max: usize,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>), usize> {
+    use sandmux_spec::files::FileVerdict;
+    let (mut secret, mut deny) = (Vec::new(), Vec::new());
+    let mut seen = 0usize;
+    let mut stack: Vec<PathBuf> = roots.to_vec();
+    while let Some(dir) = stack.pop() {
+        if exclude.iter().any(|x| dir.starts_with(x)) {
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            seen += 1;
+            if seen > max * 16 {
+                return Err(seen);
+            }
+            let Ok(t) = e.file_type() else { continue };
+            if t.is_symlink() {
+                continue;
+            }
+            let path = e.path();
+            match policy.decide(&path, |q| created.contains(q)) {
+                FileVerdict::Deny(_) => deny.push(path),
+                FileVerdict::Secret => secret.push(path),
+                FileVerdict::Pass if t.is_dir() => stack.push(path),
+                FileVerdict::Pass => {}
+            }
+            if secret.len() + deny.len() > max {
+                return Err(secret.len() + deny.len());
+            }
+        }
+    }
+    secret.sort();
+    deny.sort();
+    Ok((secret, deny))
+}
+
 /// As marcas do confinamento para a visão `spec` do Docker da pasta
 /// `workdir` (já canônica).
 pub fn docker_marks(spec: &LaunchSpec, workdir: &Path) -> DockerMarks {
-    let mut m = DockerMarks::default();
+    let mut m = git_marks(workdir);
     for x in &spec.mounts {
         if let Mount::Cover { dest } = x {
             m.deny.push(dest.clone());
         }
     }
+    m.deny.sort();
+    m.deny.dedup();
+    m
+}
+
+/// As marcas da proteção do `.git` da pasta `workdir` (já canônica): os
+/// binds em somente leitura protegidos contra escrita e os diretórios git.
+pub fn git_marks(workdir: &Path) -> DockerMarks {
+    let mut m = DockerMarks::default();
     let git_dir = match git::detect(workdir) {
         GitLayout::Repo { git_dir } => Some(git_dir),
         GitLayout::Worktree {
@@ -1576,7 +1642,13 @@ pub type MarkSet = std::collections::BTreeMap<PathBuf, u32>;
 /// As marcas como conjunto, com os bits de cada caminho.
 pub fn mark_set(m: &DockerMarks) -> MarkSet {
     let mut s = MarkSet::new();
-    for (v, bit) in [(&m.deny, 1u32), (&m.protect, 2), (&m.gitdir, 4)] {
+    for (v, bit) in [
+        (&m.deny, 1u32),
+        (&m.protect, 2),
+        (&m.gitdir, 4),
+        (&m.secret, 8),
+        (&m.fdeny, 16),
+    ] {
         for p in v {
             *s.entry(p.clone()).or_default() |= bit;
         }
@@ -2025,6 +2097,7 @@ mod docker_view_tests {
             deny: vec![p("/x")],
             protect: vec![p("/x"), p("/h")],
             gitdir: vec![p("/g")],
+            ..Default::default()
         };
         assert_eq!(
             mark_set(&m),
@@ -2085,6 +2158,7 @@ mod docker_view_tests {
             deny: vec![privado.clone()],
             protect: vec![hooks.clone()],
             gitdir: vec![],
+            ..Default::default()
         };
         m.clone().expand(100).unwrap();
         let mut x = m.clone();

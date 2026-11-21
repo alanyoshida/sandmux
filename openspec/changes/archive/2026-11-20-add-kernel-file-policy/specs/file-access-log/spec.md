@@ -18,3 +18,7 @@ Numa aba confinada pelo kernel (o auxiliar root, o BPF LSM e o escopo próprio),
 #### Scenario: Aba confinada pelo kernel
 - **WHEN** o auxiliar root está instalado, o BPF LSM está ativo e o agente lê mil arquivos da pasta de trabalho
 - **THEN** as leituras funcionam sem passar pelo supervisor, e o registro tem uma linha de leitura para cada arquivo
+
+#### Scenario: Auxiliar reiniciado com a aba rodando
+- **WHEN** a conexão do daemon com o auxiliar cai numa aba confinada pelo kernel, e o auxiliar volta
+- **THEN** a aba fica congelada até o confinamento ser refeito, com as marcas da política atual, e segue; sem o confinamento de volta em 10 s, tudo no escopo da aba morre

@@ -220,10 +220,11 @@ pub const OPEN_SYSCALLS: &[i64] = &[
 pub const EXEC_SYSCALLS: &[i64] = &[libc::SYS_execve, libc::SYS_execveat];
 
 /// O filtro das aberturas: `SECCOMP_RET_USER_NOTIF` para cada chamada de
-/// [`OPEN_SYSCALLS`] (e de [`EXEC_SYSCALLS`], com `exec`), o resto passa (o
-/// filtro de negação decide antes).
-pub fn build_notify(exec: bool) -> Vec<libc::sock_filter> {
-    let calls: Vec<i64> = OPEN_SYSCALLS
+/// [`OPEN_SYSCALLS`] (com `opens`; sem, o kernel decide as aberturas) e de
+/// [`EXEC_SYSCALLS`] (com `exec`), o resto passa (o filtro de negação decide
+/// antes).
+pub fn build_notify(opens: bool, exec: bool) -> Vec<libc::sock_filter> {
+    let calls: Vec<i64> = (if opens { OPEN_SYSCALLS } else { &[] })
         .iter()
         .chain(if exec { EXEC_SYSCALLS } else { &[] })
         .copied()
@@ -246,9 +247,9 @@ pub fn build_notify(exec: bool) -> Vec<libc::sock_filter> {
 
 /// Instala o filtro das aberturas e devolve o descritor de notificação.
 /// Exige `no_new_privs` já ligado.
-pub fn install_notify(exec: bool) -> io::Result<std::os::fd::OwnedFd> {
+pub fn install_notify(opens: bool, exec: bool) -> io::Result<std::os::fd::OwnedFd> {
     use std::os::fd::FromRawFd;
-    let prog = build_notify(exec);
+    let prog = build_notify(opens, exec);
     let fprog = libc::sock_fprog {
         len: prog.len() as u16,
         filter: prog.as_ptr() as *mut libc::sock_filter,
@@ -296,7 +297,7 @@ mod tests {
 
     #[test]
     fn filtro_das_aberturas() {
-        let p = build_notify(false);
+        let p = build_notify(true, false);
         for nr in OPEN_SYSCALLS {
             assert_eq!(eval(&p, *nr as u32, AUDIT_ARCH), SECCOMP_RET_USER_NOTIF);
         }
@@ -304,7 +305,7 @@ mod tests {
             eval(&p, libc::SYS_execve as u32, AUDIT_ARCH),
             SECCOMP_RET_ALLOW
         );
-        let x = build_notify(true);
+        let x = build_notify(true, true);
         for nr in OPEN_SYSCALLS.iter().chain(EXEC_SYSCALLS) {
             assert_eq!(eval(&x, *nr as u32, AUDIT_ARCH), SECCOMP_RET_USER_NOTIF);
         }
@@ -317,6 +318,14 @@ mod tests {
             SECCOMP_RET_ALLOW
         );
         assert_eq!(eval(&p, libc::SYS_openat as u32, 1), SECCOMP_RET_ALLOW);
+        // Com os arquivos pelo kernel, só as execuções vão ao supervisor.
+        let k = build_notify(false, true);
+        for nr in OPEN_SYSCALLS {
+            assert_eq!(eval(&k, *nr as u32, AUDIT_ARCH), SECCOMP_RET_ALLOW);
+        }
+        for nr in EXEC_SYSCALLS {
+            assert_eq!(eval(&k, *nr as u32, AUDIT_ARCH), SECCOMP_RET_USER_NOTIF);
+        }
     }
 
     #[test]

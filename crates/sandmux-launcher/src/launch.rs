@@ -229,9 +229,18 @@ pub fn launch(spec: &LaunchSpec) -> Result<i32, LaunchError> {
     // o comando o instala; uma thread espera por ele.
     {
         let spec = spec.clone();
+        let child_pid = child.as_raw();
         let _ = std::thread::Builder::new()
             .name("sandmux-files".into())
             .spawn(move || {
+                // Os arquivos pelo kernel: com a raiz pronta, o processo 1
+                // pergunta o modo antes de criar o comando.
+                if let Some((access, tag, f)) = kernel_files(&spec)
+                    && recv_byte(&files_r) == Some(MODE_ASK)
+                {
+                    let kernel = confine_tab(child_pid, access, tag, f);
+                    send_byte(&files_r, if kernel { MODE_KERNEL } else { MODE_SUPERVISOR });
+                }
                 if let Ok(Some(listener)) = net::recv_fd(&files_r) {
                     // A raiz está pronta: o auxiliar de nomes aplica o Landlock.
                     if let Some(n) = &namer {
@@ -416,6 +425,56 @@ fn supervise(child: Pid, mask: &SigSet) -> i32 {
     }
 }
 
+/// O processo 1 pergunta o modo dos arquivos; o supervisor responde.
+const MODE_ASK: u8 = b'R';
+const MODE_KERNEL: u8 = b'2';
+const MODE_SUPERVISOR: u8 = b'1';
+
+/// Os arquivos da aba podem ir ao kernel: uma sessão do daemon (com o
+/// socket de controle) e o acesso ao daemon. O acesso, a etiqueta e as
+/// pastas do registro.
+fn kernel_files(
+    spec: &LaunchSpec,
+) -> Option<(&sandmux_spec::VaultAccess, &str, &sandmux_spec::FilesSpec)> {
+    let f = spec.files.as_ref()?;
+    f.control_socket.as_ref()?;
+    let n = spec.network.as_ref()?;
+    Some((n.vault.as_ref()?, n.tag.as_str(), f))
+}
+
+/// Pede ao daemon os arquivos da aba pelo kernel, com as montagens das
+/// pastas do registro na visão do processo 1.
+fn confine_tab(
+    pid: i32,
+    access: &sandmux_spec::VaultAccess,
+    tag: &str,
+    f: &sandmux_spec::FilesSpec,
+) -> bool {
+    let mounts = crate::viewmounts::of_pid(pid, &f.roots, &f.exclude);
+    if mounts.is_empty() || mounts.len() > crate::viewmounts::MAX_MOUNTS {
+        return false;
+    }
+    sandmux_net::procinfo::confine_tab(access, tag, mounts, f.roots.clone(), f.exclude.clone())
+        .is_ok()
+}
+
+fn send_byte(sock: &OwnedFd, b: u8) -> bool {
+    // SAFETY: descritor válido, um byte de um buffer vivo.
+    unsafe { libc::send(sock.as_raw_fd(), [b].as_ptr().cast(), 1, libc::MSG_NOSIGNAL) == 1 }
+}
+
+fn recv_byte(sock: &OwnedFd) -> Option<u8> {
+    let mut b = [0u8];
+    loop {
+        // SAFETY: descritor válido, buffer de um byte.
+        let n = unsafe { libc::recv(sock.as_raw_fd(), b.as_mut_ptr().cast(), 1, 0) };
+        if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        return (n == 1).then_some(b[0]);
+    }
+}
+
 fn report(err_w: &OwnedFd, kind: u8, msg: &str) {
     let mut buf = vec![kind];
     buf.extend_from_slice(msg.as_bytes());
@@ -511,9 +570,15 @@ fn init_process(
         }
     }
 
+    // Os arquivos pelo kernel: com a raiz pronta, o supervisor pede ao daemon
+    // e responde o modo. Sem resposta, o supervisor de aberturas.
+    let kernel = kernel_files(spec).is_some()
+        && send_byte(&files_w, MODE_ASK)
+        && recv_byte(&files_w) == Some(MODE_KERNEL);
+
     // SAFETY: o processo 1 tem uma única thread.
     let cmd = match unsafe { nix::unistd::fork() } {
-        Ok(nix::unistd::ForkResult::Child) => command_process(spec, &err_w, &files_w),
+        Ok(nix::unistd::ForkResult::Child) => command_process(spec, &err_w, &files_w, kernel),
         Ok(nix::unistd::ForkResult::Parent { child }) => child,
         Err(e) => {
             report(
@@ -565,7 +630,7 @@ fn init_process(
 }
 
 /// Processo do comando. Nunca retorna.
-fn command_process(spec: &LaunchSpec, err_w: &OwnedFd, files_w: &OwnedFd) -> ! {
+fn command_process(spec: &LaunchSpec, err_w: &OwnedFd, files_w: &OwnedFd, kernel: bool) -> ! {
     let fail = |kind: u8, msg: String| -> ! {
         report(err_w, kind, &msg);
         // SAFETY: saída imediata do filho.
@@ -620,10 +685,17 @@ fn command_process(spec: &LaunchSpec, err_w: &OwnedFd, files_w: &OwnedFd) -> ! {
     if let Err(e) = seccomp::install(&spec.seccomp) {
         fail(MSG_SETUP, format!("seccomp: {e}"));
     }
-    // As aberturas de arquivo passam pelo supervisor. O descritor vai logo
-    // depois da instalação: uma abertura antes dele esperaria o supervisor.
-    match seccomp::install_notify(spec.files.as_ref().is_some_and(|f| f.exec_log)) {
-        Ok(listener) => {
+    // As aberturas de arquivo passam pelo supervisor, menos com os arquivos
+    // pelo kernel (aí só as execuções, com o registro delas pelo supervisor).
+    // O descritor vai logo depois da instalação: uma abertura antes dele
+    // esperaria o supervisor.
+    let exec = spec.files.as_ref().is_some_and(|f| f.exec_log);
+    match (!kernel || exec)
+        .then(|| seccomp::install_notify(!kernel, exec))
+        .transpose()
+    {
+        Ok(None) => {}
+        Ok(Some(listener)) => {
             if let Err(e) = net::send_fd(files_w, &listener) {
                 fail(
                     MSG_SETUP,

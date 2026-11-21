@@ -224,6 +224,23 @@ pub fn read_created(state_dir: &Path, workdir: &Path) -> std::collections::HashS
         .collect()
 }
 
+/// Acrescenta `path` aos segredos que o agente criou na pasta de trabalho.
+pub fn add_created(state_dir: &Path, workdir: &Path, path: &Path) -> std::io::Result<()> {
+    let mut v: Vec<PathBuf> = read_created(state_dir, workdir).into_iter().collect();
+    if v.iter().any(|p| p == path) {
+        return Ok(());
+    }
+    v.push(path.to_path_buf());
+    v.sort();
+    let f = created_file(state_dir, workdir);
+    if let Some(d) = f.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    let tmp = f.with_extension("tmp");
+    std::fs::write(&tmp, serde_json::to_vec(&v).map_err(std::io::Error::other)?)?;
+    std::fs::rename(tmp, f)
+}
+
 /// Os padrões da lista padrão e das exceções fixas.
 pub fn default_secrets() -> (Vec<FilePattern>, Vec<FilePattern>) {
     let p = |v: &[&str]| v.iter().map(|s| FilePattern::Name((*s).into())).collect();

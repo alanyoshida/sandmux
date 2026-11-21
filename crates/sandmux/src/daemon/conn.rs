@@ -422,6 +422,43 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     Err(e) => error(&mut stream, e)?,
                 }
             }
+            Msg::ConfineTab {
+                tag,
+                mounts,
+                roots,
+                exclude,
+            } => {
+                let r = match super::peer_pid(&stream) {
+                    Some(pid) => {
+                        super::tabfiles::confine(shared, &tag, pid as u32, mounts, (roots, exclude))
+                    }
+                    None => {
+                        Err(tr!("sem as credenciais do lançador", "no launcher credentials").into())
+                    }
+                };
+                let reply = match r {
+                    Ok((id, t)) => {
+                        if let Some(s) = shared.lock().sessions.get_mut(&id) {
+                            s.tab_files = Some(t);
+                            if let Some(p) = s.policy.as_mut() {
+                                p.files = Some("kernel".into());
+                            }
+                        }
+                        Msg::ConfineTabReply {
+                            kernel: true,
+                            reason: None,
+                        }
+                    }
+                    Err(e) => {
+                        super::tabfiles::fallback(shared, &tag, &e);
+                        Msg::ConfineTabReply {
+                            kernel: false,
+                            reason: Some(e),
+                        }
+                    }
+                };
+                write_control(&mut stream, &reply)?;
+            }
             Msg::ConnProcess {
                 tag,
                 sport,

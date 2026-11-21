@@ -738,7 +738,9 @@ fn marca_de_bloqueio_na_barra() {
     std::fs::create_dir_all(&outra).unwrap();
     sessao(&e, &outra);
 
-    let mut t = tui_cols(&e, 120);
+    // Com 30 linhas, o painel (que ganhou o item dos arquivos pelo kernel)
+    // empurra a linha dos bloqueios da rede para fora da tela.
+    let mut t = tui_size(&e, 120, 50);
     t.wait_text(&tab(2, "shell:outra"));
     t.write(
         format!("(sleep 2; curl -s http://host.sandmux.internal:{port}/ >/dev/null) &\r")

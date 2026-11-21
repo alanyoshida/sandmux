@@ -32,6 +32,14 @@ The decision is by file (the inode), not by path. That is why unmounting a cover
 - **Unmark:** the daemon also asks for `unmark`, when the folder's file policy changes and a path is no longer denied. The helper removes the mark and releases the file's descriptor.
 - **Events:** the programs send an event through a kernel queue when they deny an operation and when a container creates a file on the folder's file system. The helper reads the queue and sends the events to the daemon over the same confinement connection. The event has the type, the hook, the inode and the created file's name, never the content of a file. With the queue full, extra events are dropped and counted, and containers do not wait.
 
+## A tab's files
+
+The daemon also asks for `confine` on a tab's scope, when the tab's launcher asks for the [files by the kernel](files.md#by-the-kernel). Besides the `dev` of the work folder, the request carries the mounts (`mnt_id`) of the agent's folders in the sandbox view. Three things change from Docker:
+
+- **New marks:** `secret` gives `ENOENT` (the secret disappears, as with the supervisor) and `fdeny` gives `EACCES`, on opens and on operations inside a marked folder.
+- **Open event:** the `file_open` program sends, for each file opened in one of the requested mounts, the path (through `bpf_d_path`, in the sandbox view), the inode, the mount and whether the open writes. The other mounts send nothing. This confinement's queue has 1 MiB.
+- **Status:** `status` says `tab`: a helper that confines tabs. With an older helper, without that field, the tab stays with the supervisor.
+
 ## Execution and connection observation
 
 The `observe` request turns on only the observation of executions in a user cgroup (a tab's scope), without file rules or marks. A program on the `sched_process_exec` tracepoint sends the executed path, the process and the arguments over the same connection. Two `fexit` programs, on the exit of `tcp_v4_connect` and `tcp_v6_connect`, send each TCP connection a process in the cgroup opens: the pid, the source port and the destination. The daemon uses these events for the [process of each connection](network.md#process-of-each-connection) in the network log. The Docker confinement (`confine`) includes the same observation. There are up to 64 active observations per user, besides the 16 confinements. The observation only logs: no execution or connection is denied or delayed.
@@ -54,11 +62,11 @@ The scope lasts while the launcher's connection is open, that is, while the sand
 
 The rules and marks apply while the daemon's connection to the helper is open. They go away when:
 
-- the folder's Docker stops;
+- the folder's Docker stops, or the tab ends;
 - the daemon ends, even when killed by `SIGKILL`;
 - the helper stops.
 
-If the helper stops with the Docker running, the daemon stops the folder's Docker, which does not go on without the rules. The next `docker` starts another Docker and turns the confinement on again, if the helper answers. The systemd socket starts the helper again on the next connection.
+If the helper stops with the Docker running, the daemon stops the folder's Docker, which does not go on without the rules. A tab with its files by the kernel stays frozen until the confinement is redone with the helper back, and stops if it is not back within 10 s. On `SIGTERM` (`systemctl restart`, an upgrade), the helper shuts the writing side of each connection before it exits: whoever asked learns about it with the rules still in force, and they go away when it closes the connection (or after 2 s). The next `docker` starts another Docker and turns the confinement on again, if the helper answers. The systemd socket starts the helper again on the next connection.
 
 ## Install
 

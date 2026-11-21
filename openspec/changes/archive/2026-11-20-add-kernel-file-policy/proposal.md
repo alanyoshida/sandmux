@@ -22,7 +22,7 @@ Decisões do usuário (2026-11-20):
   - marca os segredos, o `file-deny` (com o que existe dentro das pastas negadas) e o `.git`;
   - liga a mesma vigia ao vivo do Docker confinado.
 
-  O lançador espera a resposta: com o confinamento, o comando roda sem o supervisor de aberturas; sem ele, roda com o supervisor, como hoje. Quando a conexão com o auxiliar cai, a aba para.
+  O lançador espera a resposta: com o confinamento, o comando roda sem o supervisor de aberturas; sem ele, roda com o supervisor, como hoje. Quando a conexão com o auxiliar cai, a aba fica congelada (`cgroup.freeze`) até o daemon refazer o confinamento com o auxiliar de volta; sem ele em 10 s, a aba para (decisão do usuário, 2026-11-20: uma atualização ou um reinício do auxiliar não mata as sessões dos agentes).
 - **Os programas BPF** ganham:
   - duas marcas novas, segredo (`ENOENT`) e negado pela política (`EACCES`), ao lado das do Docker, que não mudam;
   - o evento de abertura, com o caminho (`bpf_d_path`) e se a abertura grava, só para os arquivos das montagens que o registro acompanha.
