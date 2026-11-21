@@ -36,7 +36,7 @@ Vale sozinho quando tudo isto existe; sem um deles, a aba fica com o supervisor,
 - o escopo próprio da aba no systemd de usuário (o mesmo dos [tetos](limits.md));
 - um `file-deny` só com caminhos dentro da pasta de trabalho. Um nome (`*.sql`) ou um caminho de fora pode valer em qualquer pasta, e as marcas cobrem só a pasta de trabalho.
 
-O lançador pede ao daemon depois de montar a raiz do sandbox e antes de criar o comando, e espera até 10 s pela resposta. No modo kernel, o comando não tem o filtro de aberturas; o de execuções continua quando o registro das execuções é pelo supervisor. O shell de entrada (`Ctrl+b t`) continua com o supervisor.
+O lançador pede ao daemon depois de montar a raiz do sandbox e antes de criar o comando, e espera até 10 s pela resposta. No modo kernel, o comando não tem o filtro de aberturas; o de execuções continua quando o registro das execuções é pelo supervisor. O shell de entrada (`Ctrl+b t`) segue o modo da aba: numa aba pelo kernel, ele também fica sem o filtro de aberturas, e as aberturas dele são decididas e registradas pelo kernel. Ele já roda no escopo da aba, onde estão os programas. Um pedido de entrada que chega antes da resposta do daemon espera até 15 s e, sem ela, fica com o supervisor. Numa aba lançada por uma versão anterior, o shell continua com o supervisor até a aba ser reiniciada.
 
 Diferenças do supervisor:
 

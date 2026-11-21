@@ -1,7 +1,9 @@
 //! Auxiliar de entrada: um processo que fica nos namespaces de usuário e de
 //! pid do sandbox e, a pedido do supervisor, abre um shell lá dentro, com a
 //! mesma visão de arquivos, rede, Landlock e seccomp do comando, e com as
-//! aberturas de arquivo passando pelo supervisor como as do comando.
+//! aberturas de arquivo pelo mesmo caminho do comando: o kernel numa aba
+//! confinada pelo kernel (o shell está no escopo da aba, onde os programas
+//! do daemon estão presos), o supervisor nas outras.
 //!
 //! Cada pedido traz dois descritores: a conexão de quem pediu, que recebe o
 //! código de saída do shell (4 bytes), e o terminal do shell. O auxiliar
@@ -15,6 +17,8 @@ use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::{Duration, Instant};
 
 use nix::sys::signal::{SigHandler, SigSet, SigmaskHow, Signal, signal, sigprocmask};
 use nix::sys::wait::{WaitStatus, waitpid};
@@ -23,16 +27,51 @@ use sandmux_spec::LaunchSpec;
 
 use crate::{landlock_rules, net, seccomp, sys};
 
+/// O modo de arquivos da aba, guardado pela thread dos arquivos do
+/// lançador: ainda não decidido, pelo kernel ou pelo supervisor.
+pub const MODE_UNKNOWN: u8 = 0;
+pub const MODE_KERNEL: u8 = 1;
+pub const MODE_SUPERVISOR: u8 = 2;
+
+/// Quanto um pedido de entrada espera o modo da aba: os 10 s da resposta
+/// do daemon e uma folga.
+pub const MODE_WAIT: Duration = Duration::from_secs(15);
+
+/// Espera o modo da aba até `wait`. `true` com os arquivos pelo kernel; sem
+/// o modo no prazo, o supervisor (as marcas do kernel valem do mesmo jeito,
+/// porque o shell está no escopo da aba).
+pub fn wait_mode(mode: &AtomicU8, wait: Duration) -> bool {
+    let end = Instant::now() + wait;
+    loop {
+        match mode.load(Ordering::SeqCst) {
+            MODE_KERNEL => return true,
+            MODE_UNKNOWN if Instant::now() < end => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// Byte que acompanha o terminal no pedido: o modo dos arquivos do shell.
+const TAG_KERNEL: u8 = b'K';
+const TAG_SUPERVISOR: u8 = b'P';
+
 /// Lado do supervisor.
 pub struct Enterer {
     sock: OwnedFd,
 }
 
 impl Enterer {
-    /// Pede um shell no terminal `pty`; o código de saída vai para `conn`.
-    pub fn call(&self, conn: &OwnedFd, pty: &OwnedFd) -> io::Result<()> {
+    /// Pede um shell no terminal `pty`, com os arquivos pelo kernel ou pelo
+    /// supervisor; o código de saída vai para `conn`.
+    pub fn call(&self, conn: &OwnedFd, pty: &OwnedFd, kernel: bool) -> io::Result<()> {
         net::send_fd_tagged(&self.sock, conn, b'C')?;
-        net::send_fd_tagged(&self.sock, pty, b'P')
+        net::send_fd_tagged(
+            &self.sock,
+            pty,
+            if kernel { TAG_KERNEL } else { TAG_SUPERVISOR },
+        )
     }
 }
 
@@ -115,12 +154,13 @@ fn helper(sock: OwnedFd, files_w: OwnedFd, ns: Namespaces, spec: &LaunchSpec) ->
             // O supervisor terminou.
             _ => unsafe { libc::_exit(0) },
         };
-        let Ok(Some(pty)) = net::recv_fd(&sock) else {
+        let Ok(Some((pty, tag))) = net::recv_fd_tag(&sock) else {
             continue;
         };
+        let kernel = tag == TAG_KERNEL;
         // SAFETY: o auxiliar tem uma única thread.
         match unsafe { fork() } {
-            Ok(ForkResult::Child) => waiter(conn, pty, &files_w, &ns, spec),
+            Ok(ForkResult::Child) => waiter(conn, pty, kernel, &files_w, &ns, spec),
             Ok(ForkResult::Parent { .. }) => {}
             Err(_) => {
                 let _ = (&File::from(conn)).write_all(&1i32.to_ne_bytes());
@@ -130,7 +170,14 @@ fn helper(sock: OwnedFd, files_w: OwnedFd, ns: Namespaces, spec: &LaunchSpec) ->
 }
 
 /// Dentro do pid namespace: cria o shell, espera e manda o código.
-fn waiter(conn: OwnedFd, pty: OwnedFd, files_w: &OwnedFd, ns: &Namespaces, spec: &LaunchSpec) -> ! {
+fn waiter(
+    conn: OwnedFd,
+    pty: OwnedFd,
+    kernel: bool,
+    files_w: &OwnedFd,
+    ns: &Namespaces,
+    spec: &LaunchSpec,
+) -> ! {
     // SAFETY: troca de disposição, sem handler.
     unsafe {
         let _ = signal(Signal::SIGCHLD, SigHandler::SigDfl);
@@ -139,7 +186,7 @@ fn waiter(conn: OwnedFd, pty: OwnedFd, files_w: &OwnedFd, ns: &Namespaces, spec:
     let code = match unsafe { fork() } {
         Ok(ForkResult::Child) => {
             drop(conn);
-            shell(pty, files_w, ns, spec)
+            shell(pty, kernel, files_w, ns, spec)
         }
         Ok(ForkResult::Parent { child }) => {
             drop(pty);
@@ -170,8 +217,9 @@ fn fail(msg: String) -> ! {
 }
 
 /// O shell: entra no resto dos namespaces, aplica o confinamento do comando
-/// e executa.
-fn shell(pty: OwnedFd, files_w: &OwnedFd, ns: &Namespaces, spec: &LaunchSpec) -> ! {
+/// e executa. Com `kernel`, os filtros de notificação são os do comando de
+/// uma aba pelo kernel.
+fn shell(pty: OwnedFd, kernel: bool, files_w: &OwnedFd, ns: &Namespaces, spec: &LaunchSpec) -> ! {
     let _ = sigprocmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None);
     for sig in [
         Signal::SIGINT,
@@ -243,8 +291,9 @@ fn shell(pty: OwnedFd, files_w: &OwnedFd, ns: &Namespaces, spec: &LaunchSpec) ->
     if let Err(e) = seccomp::install(&spec.seccomp) {
         fail(format!("seccomp: {e}"));
     }
-    match seccomp::install_notify(true, spec.files.as_ref().is_some_and(|f| f.exec_log)) {
-        Ok(listener) => {
+    match seccomp::install_files_notify(kernel, spec.files.as_ref().is_some_and(|f| f.exec_log)) {
+        Ok(None) => {}
+        Ok(Some(listener)) => {
             if let Err(e) = net::send_fd(files_w, &listener) {
                 fail(sandmux_spec::trf!(
                     "entregar o filtro das aberturas: {e}",
@@ -342,5 +391,35 @@ pub fn client(socket: &Path) -> i32 {
             );
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn espera_o_modo_da_aba() {
+        // Já decidido: sem espera.
+        let m = AtomicU8::new(MODE_KERNEL);
+        let t = Instant::now();
+        assert!(wait_mode(&m, Duration::from_secs(5)));
+        assert!(t.elapsed() < Duration::from_secs(1));
+        m.store(MODE_SUPERVISOR, Ordering::SeqCst);
+        assert!(!wait_mode(&m, Duration::from_secs(5)));
+        // Decidido durante a espera.
+        let m = std::sync::Arc::new(AtomicU8::new(MODE_UNKNOWN));
+        let m2 = m.clone();
+        let h = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            m2.store(MODE_KERNEL, Ordering::SeqCst);
+        });
+        assert!(wait_mode(&m, Duration::from_secs(5)));
+        h.join().unwrap();
+        // Sem modo no prazo: o supervisor.
+        let m = AtomicU8::new(MODE_UNKNOWN);
+        let t = Instant::now();
+        assert!(!wait_mode(&m, Duration::from_millis(100)));
+        assert!(t.elapsed() >= Duration::from_millis(100));
     }
 }

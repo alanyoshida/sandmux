@@ -229,6 +229,11 @@ pub fn send_fd_tagged(sock: &OwnedFd, fd: &impl AsRawFd, tag: u8) -> io::Result<
 /// Recebe um descritor por SCM_RIGHTS. `None` quando o outro lado fechou sem
 /// mandar nada.
 pub fn recv_fd(sock: &OwnedFd) -> io::Result<Option<OwnedFd>> {
+    Ok(recv_fd_tag(sock)?.map(|(fd, _)| fd))
+}
+
+/// Como [`recv_fd`], com o byte de dados que veio junto.
+pub fn recv_fd_tag(sock: &OwnedFd) -> io::Result<Option<(OwnedFd, u8)>> {
     let mut byte = [0u8];
     let mut iov = libc::iovec {
         iov_base: byte.as_mut_ptr().cast(),
@@ -260,6 +265,6 @@ pub fn recv_fd(sock: &OwnedFd) -> io::Result<Option<OwnedFd>> {
             return Ok(None);
         }
         let fd = std::ptr::read_unaligned(libc::CMSG_DATA(c).cast::<RawFd>());
-        Ok(Some(OwnedFd::from_raw_fd(fd)))
+        Ok(Some((OwnedFd::from_raw_fd(fd), byte[0])))
     }
 }

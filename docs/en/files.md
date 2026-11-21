@@ -38,7 +38,7 @@ It applies on its own when all of this exists; without one of them, the tab stay
 - the tab's own scope in the user systemd (the same as the [caps](limits.md));
 - a `file-deny` with paths inside the work folder only. A name (`*.sql`) or a path outside may apply in any folder, and the marks cover the work folder only.
 
-The launcher asks the daemon after it builds the sandbox root and before it creates the command, and waits up to 10 s for the answer. In kernel mode, the command has no open filter; the execution filter stays when executions are logged by the supervisor. The entry shell (`Ctrl+b t`) stays with the supervisor.
+The launcher asks the daemon after it builds the sandbox root and before it creates the command, and waits up to 10 s for the answer. In kernel mode, the command has no open filter; the execution filter stays when executions are logged by the supervisor. The entry shell (`Ctrl+b t`) follows the tab's mode: in a kernel tab it also has no open filter, and the kernel decides and logs its opens. It already runs in the tab's scope, where the programs are attached. An entry request that arrives before the daemon's answer waits up to 15 s and, without it, stays with the supervisor. In a tab launched by an earlier version, the shell stays with the supervisor until the tab is restarted.
 
 Differences from the supervisor:
 

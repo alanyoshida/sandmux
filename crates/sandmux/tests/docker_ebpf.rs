@@ -703,6 +703,78 @@ fn arquivos_da_aba_pelo_kernel() {
     limpar(&e);
 }
 
+/// O shell de entrada de uma aba pelo kernel (change 81): as mesmas
+/// negações, as aberturas pela fila do kernel e os mesmos filtros seccomp
+/// do comando, sem o supervisor de aberturas.
+#[test]
+fn shell_de_entrada_pela_aba_no_kernel() {
+    if helper().is_none() {
+        return;
+    }
+    let e = Env::new();
+    let privado = e.work.join("privado");
+    std::fs::create_dir_all(&privado).unwrap();
+    std::fs::write(privado.join("dados.sql"), "segredo\n").unwrap();
+    std::fs::write(e.work.join(".env"), "SEGREDO=1\n").unwrap();
+    std::fs::write(e.work.join("comum.txt"), "comum\n").unwrap();
+    std::fs::write(e.work.join("misto.txt"), "misto\n").unwrap();
+    e.write_config(&format!(
+        "[project.\"{}\"]\nfile-deny = [\"{}\"]\n",
+        e.work.display(),
+        privado.display()
+    ));
+    let mut t = term(&e, &e.work);
+    let s = run_in(&mut t, &e.work, "sleep 1; echo PRONTO");
+    assert!(s.contains("PRONTO"), "{s}");
+    let st = stats(&e);
+    assert!(st.contains("aberturas de arquivo: pelo kernel"), "{st}");
+    let filtros = |s: &str| {
+        s.lines()
+            .find(|l| l.starts_with("Seccomp_filters:"))
+            .map(|l| l.to_string())
+    };
+    let da_aba = run_in(&mut t, &e.work, "grep Seccomp_filters /proc/self/status");
+    let da_aba = filtros(&da_aba).unwrap_or_else(|| panic!("{da_aba}"));
+
+    let mut cmd = e.cmd(&e.work, &["enter", "1"]);
+    cmd.env("SHELL", "/bin/bash");
+    let mut d = Term::spawn(cmd, 160, 40);
+    let s = run_in(
+        &mut d,
+        &e.work,
+        "cat .env 2>&1; cat privado/dados.sql 2>&1; cat comum.txt; \
+         exec 3<>misto.txt; exec 3>&-; grep Seccomp_filters /proc/self/status; echo FIM",
+    );
+    assert!(s.contains("FIM"), "{s}");
+    assert!(s.contains(".env: No such file"), "{s}");
+    assert!(s.contains("dados.sql: Permission denied"), "{s}");
+    assert!(s.contains("comum\n"), "{s}");
+    assert_eq!(filtros(&s), Some(da_aba), "{s}");
+    std::thread::sleep(Duration::from_millis(1000));
+    let l = all_file_lines(&e);
+    let de = |nome: &str| {
+        l.iter()
+            .filter(|x| x["path"].as_str().is_some_and(|p| p.ends_with(nome)))
+            .collect::<Vec<_>>()
+    };
+    assert!(de("/comum.txt").iter().any(|x| x["access"] == "r"), "{l:?}");
+    assert!(
+        de("/dados.sql").iter().any(|x| x["blocked"]
+            .as_str()
+            .is_some_and(|b| b.starts_with("file-deny"))),
+        "{l:?}"
+    );
+    // A leitura e escrita vem do kernel (`w`); o supervisor daria `rw`.
+    let misto = de("/misto.txt");
+    assert!(misto.iter().any(|x| x["access"] == "w"), "{misto:?}");
+    assert!(!misto.iter().any(|x| x["access"] == "rw"), "{misto:?}");
+    d.write(b"exit\r");
+    d.wait_exit();
+    t.write(b"exit\r");
+    t.wait_exit();
+    limpar(&e);
+}
+
 /// A leitura em massa numa aba pelo kernel (change 80): trinta mil arquivos
 /// diferentes, cada um lido três vezes, chegam todos ao registro, sem linha
 /// de descarte. As repetições ficam no kernel, e a aba espera a fila esvaziar.
@@ -899,7 +971,8 @@ fn escopo_de_volta_depois_do_reinicio() {
 
 /// Custo das aberturas de uma aba: ler 13 mil arquivos da pasta e o import
 /// do Python, no host, com os arquivos pelo kernel e pelo supervisor (um
-/// `file-deny` por nome deixa a aba com ele). Só mede; roda com
+/// `file-deny` por nome deixa a aba com ele), e no shell de entrada da aba
+/// pelo kernel. Só mede; roda com
 /// `scripts/vm-ubuntu-2404.sh check-root --ignored custo_dos_arquivos --nocapture`.
 #[test]
 #[ignore]
@@ -981,6 +1054,26 @@ fn custo_dos_arquivos_da_aba() {
             mediana(v.0),
             mediana(v.1)
         ));
+        // O shell de entrada da aba segue o modo dela (change 81).
+        if !supervisor {
+            let mut cmd = e.cmd(&e.work, &["enter", "1"]);
+            cmd.env("SHELL", "/bin/bash");
+            let mut d = Term::spawn(cmd, 160, 40);
+            let _ = run_in(&mut d, &e.work, SCRIPT);
+            let mut v = (Vec::new(), Vec::new());
+            for _ in 0..3 {
+                let (a, b) = parse(&run_in(&mut d, &e.work, SCRIPT));
+                v.0.push(a);
+                v.1.push(b);
+            }
+            linhas.push(format!(
+                "shell de entrada: leitura {} ms, import {} ms",
+                mediana(v.0),
+                mediana(v.1)
+            ));
+            d.write(b"exit\r");
+            d.wait_exit();
+        }
         t.write(b"exit\r");
         t.wait_exit();
         limpar(&e);
