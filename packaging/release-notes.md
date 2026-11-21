@@ -1,16 +1,18 @@
-sandmux 0.1.26, antes da v1: o Claude Code e o bubblewrap dentro do sandbox.
+sandmux 0.1.27, antes da v1: os arquivos das abas pelo kernel.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidades
 
-- **bubblewrap dentro do sandbox:** o `bwrap` de uma aba é um substituto do sandmux. Ele executa o comando sem montar nada, já dentro do confinamento da aba, e aplica do pedido as pastas liberadas (um Landlock a mais só naquele comando), a rede e os processos próprios e o filtro seccomp. O sandbox do bash do Claude Code (`/sandbox`) funciona dentro do sandmux. Nenhuma aba perde proteção. Detalhes em [docs/claude.md](https://github.com/alanyoshida/sandmux/blob/main/docs/claude.md#sandbox-do-bash).
+- **Arquivos das abas pelo kernel:** com o [auxiliar root](https://github.com/alanyoshida/sandmux/blob/main/docs/helper.md) e o BPF LSM, o kernel decide e registra as aberturas de arquivo de cada aba, no lugar do supervisor. Os segredos da pasta de trabalho dão `ENOENT` e o `file-deny` dá `EACCES`, como antes, agora por marcas no inode. As aberturas entram no registro pela fila do kernel. Ler muitos arquivos fica bem mais rápido: numa VM do Ubuntu 24.04, ler 13 mil arquivos levou 1,1x (kernel 6.8) a 1,4x (7.0) do tempo fora do sandbox, contra 2,6x a 3,1x com o supervisor. Sem o auxiliar, o BPF LSM ou o escopo próprio da aba, o supervisor continua, e o `sandmux stats` mostra o motivo. Detalhes em [docs/files.md](https://github.com/alanyoshida/sandmux/blob/main/docs/files.md#pelo-kernel).
+- **Reinício do auxiliar sem perder as abas:** se o auxiliar cai ou é reiniciado (uma atualização, por exemplo), a aba fica congelada até o confinamento ser refeito e segue de onde parou. Sem ele de volta em 10 s, a aba para.
+- **`sandmux doctor`:** mostra, como informação, se os arquivos das abas podem ir ao kernel nesta máquina.
 
 ## Correção
 
-- **Claude Code numa aba:** ele não subia (`EINVAL` ao abrir a pasta temporária dele). O supervisor de arquivos recusava a abertura de um diretório que trazia um `mode` sem `O_CREAT`, como o Bun faz em toda abertura.
+- O confinamento de um Docker privado parado podia ficar aberto no auxiliar root (contando no limite de 16 por usuário); agora sai quando o Docker para.
 
-Esta versão muda o lançador. O protocolo entre o cliente e o daemon não muda (42), nem o auxiliar root.
+Esta versão muda o lançador, o daemon e o auxiliar root. O protocolo entre o cliente e o daemon sobe para 43: depois de atualizar, rode `sandmux daemon restart`. Atualize também o auxiliar (`sandmux setup`); um auxiliar antigo deixa as abas com o supervisor.
 
 ## Instalar
 
