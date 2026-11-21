@@ -4,7 +4,10 @@ mod common;
 use common::cli::*;
 use common::pty::Term;
 
+use std::io::Write;
 use std::path::Path;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 fn term_in(e: &Env, cwd: &Path, args: &[&str]) -> Term {
     let mut cmd = e.cmd(cwd, args);
@@ -1119,6 +1122,241 @@ fn aba_encerrada_pergunta_se_reinicia() {
         "{}",
         t.screen()
     );
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+// ---- modal de chaves movidas ao cofre ----
+
+fn vault(e: &Env, args: &[&str], input: &str) -> std::process::Output {
+    let mut a = vec!["vault"];
+    a.extend_from_slice(args);
+    let mut c = e
+        .cmd(&e.work, &a)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    c.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    c.wait_with_output().unwrap()
+}
+
+fn vault_init(e: &Env) {
+    assert!(vault(e, &["init"], "s\n").status.success());
+}
+
+/// opencode falso e uma aba viva dele, desanexada, na pasta `cwd`.
+fn live_opencode(e: &Env, cwd: &Path) {
+    let oc = e.home.join(".opencode/bin/opencode");
+    std::fs::create_dir_all(oc.parent().unwrap()).unwrap();
+    std::fs::write(&oc, "#!/bin/sh\nexec \"$@\"\n").unwrap();
+    std::fs::set_permissions(&oc, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let mut t = term_in(
+        e,
+        cwd,
+        &[
+            "run",
+            "opencode",
+            "--no-import",
+            "--",
+            "sh",
+            "-c",
+            "echo pronta-$((2+2)); sleep 300",
+        ],
+    );
+    t.wait_text("pronta-4");
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+fn vault_auth_path(e: &Env) -> std::path::PathBuf {
+    e.data_dir()
+        .join("homes/opencode/.local/share/opencode/auth.json")
+}
+
+fn write_auth(e: &Env, provider: &str, key: &str) {
+    let p = vault_auth_path(e);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(
+        &p,
+        format!(
+            "{{\n  \"{provider}\": {{\n    \"type\": \"api\",\n    \"key\": \"{key}\"\n  }}\n}}\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// hermes falso: um harness independente do opencode (HOME sintético
+/// separado), para testar uma chave movida numa sessão de outro harness.
+fn fake_hermes_bin(e: &Env) {
+    std::fs::create_dir_all(e.home.join(".hermes/hermes-agent")).unwrap();
+    std::fs::write(e.home.join(".hermes/hermes-agent/main.py"), "codigo").unwrap();
+    let p = e.home.join(".local/bin/hermes");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, "#!/bin/sh\nexec \"$@\"\n").unwrap();
+    std::fs::set_permissions(&p, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+}
+
+/// hermes falso e uma aba viva dele, desanexada, na pasta `cwd`.
+fn live_hermes(e: &Env, cwd: &Path) {
+    let mut t = term_in(
+        e,
+        cwd,
+        &[
+            "run",
+            "hermes",
+            "--no-import",
+            "--",
+            "sh",
+            "-c",
+            "echo pronta-$((2+2)); sleep 300",
+        ],
+    );
+    t.wait_text("pronta-4");
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+fn write_hermes_auth(e: &Env, key: &str) {
+    let p = e.data_dir().join("homes/hermes/.hermes/auth.json");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(
+        &p,
+        format!(
+            "{{\n  \"anthropic\": {{\n    \"type\": \"api\",\n    \"key\": \"{key}\"\n  }}\n}}\n"
+        ),
+    )
+    .unwrap();
+}
+
+fn wait_until(what: &str, f: impl Fn() -> bool) {
+    let end = Instant::now() + Duration::from_secs(10);
+    while !f() {
+        assert!(Instant::now() < end, "não aconteceu: {what}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn chave_movida_numa_aba_fora_de_foco_abre_o_modal() {
+    let e = Env::new();
+    vault_init(&e);
+    // Aba 1: shell, ativa por padrão ao abrir a TUI.
+    sessao(&e, &e.work);
+    // Aba 2: opencode vivo, numa pasta diferente, desanexado.
+    let oc_dir = e.home.join("projetos/oc");
+    std::fs::create_dir_all(&oc_dir).unwrap();
+    live_opencode(&e, &oc_dir);
+    let mut t = tui(&e);
+    t.wait_text(&tab(1, "shell:app"));
+    t.wait_text(&tab(2, "opencode:oc"));
+    // O vigia do daemon move a chave gravada pela sessão 2; o modal aparece
+    // por cima da aba ativa (1), listando a sessão 2.
+    write_auth(&e, "openrouter", "sk-or-v1-REALOPENROUTER99");
+    t.wait_text("Chave(s) movida(s) ao cofre");
+    t.wait_text("opencode:oc");
+    // Esc fecha sem reiniciar; a aba ativa continua a 1 (o comando chega ao
+    // shell, não ao opencode de fundo, que está em sleep).
+    t.write(b"\x1b");
+    t.wait_for("modal fechado", |s| !s.contains("Chave(s) movida"));
+    t.write(b"echo depois-$((3+4))\r");
+    t.wait_text("depois-7");
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+#[test]
+fn chave_nova_em_outra_aba_reabre_so_com_ela() {
+    let e = Env::new();
+    vault_init(&e);
+    sessao(&e, &e.work); // aba 1: shell, ativa
+    let oc_dir = e.home.join("projetos/oc");
+    std::fs::create_dir_all(&oc_dir).unwrap();
+    live_opencode(&e, &oc_dir); // aba 2: opencode, viva
+    let mut t = tui(&e);
+    t.wait_text(&tab(1, "shell:app"));
+    t.wait_text(&tab(2, "opencode:oc"));
+    write_auth(&e, "openrouter", "sk-or-v1-REALOPENROUTER99");
+    t.wait_text("Chave(s) movida(s) ao cofre");
+    t.wait_text("opencode:oc");
+    // Esc fecha sem reiniciar; a aba 2 já foi vista.
+    t.write(b"\x1b");
+    t.wait_for("modal fechado", |s| !s.contains("Chave(s) movida"));
+    // Uma sessão de outro harness (HOME sintético independente), ainda não
+    // vista nessa leva, recebe uma chave nova.
+    let hm_dir = e.home.join("projetos/hm");
+    std::fs::create_dir_all(&hm_dir).unwrap();
+    fake_hermes_bin(&e);
+    live_hermes(&e, &hm_dir); // aba 3: hermes, viva
+    t.wait_text(&tab(3, "hermes:hm"));
+    write_hermes_auth(&e, "REALANTHROPICKEY1234567890");
+    t.wait_text("Chave(s) movida(s) ao cofre");
+    t.wait_text("hermes:hm");
+    // Só a aba 3 nova aparece na lista do modal: a 2, já vista, não volta
+    // (ela continua na barra de abas normalmente, por baixo do modal).
+    t.with_screen(|s| {
+        assert!(
+            !s.contents().contains("opencode:oc  opencode"),
+            "{}",
+            s.contents()
+        )
+    });
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+#[test]
+fn reiniciar_todas_deixa_as_abas_vivas_e_fecha_o_modal() {
+    let e = Env::new();
+    vault_init(&e);
+    // Duas abas vivas do mesmo harness (HOME sintético compartilhado).
+    let oc1 = e.home.join("projetos/oc1");
+    std::fs::create_dir_all(&oc1).unwrap();
+    live_opencode(&e, &oc1);
+    let oc2 = e.home.join("projetos/oc2");
+    std::fs::create_dir_all(&oc2).unwrap();
+    live_opencode(&e, &oc2);
+    let mut t = tui(&e);
+    t.wait_text(&tab(1, "opencode:oc1"));
+    t.wait_text(&tab(2, "opencode:oc2"));
+    write_auth(&e, "openrouter", "sk-or-v1-REALOPENROUTER99");
+    t.wait_text("Chave(s) movida(s) ao cofre");
+    t.wait_text("opencode:oc1");
+    t.wait_text("opencode:oc2");
+    // "a" reinicia as duas listadas; o modal fecha.
+    t.write(b"a");
+    t.wait_for("modal fechado", |s| !s.contains("Chave(s) movida"));
+    wait_until("as duas abas de novo vivas", || {
+        ls(&e).lines().filter(|l| l.contains("viva")).count() == 2
+    });
+    t.write(b"\x02d");
+    t.wait_exit();
+}
+
+#[test]
+fn reiniciar_pelo_modal_nao_troca_de_aba_e_aba_fica_viva() {
+    let e = Env::new();
+    vault_init(&e);
+    sessao(&e, &e.work); // aba 1: shell, ativa
+    let oc_dir = e.home.join("projetos/oc");
+    std::fs::create_dir_all(&oc_dir).unwrap();
+    live_opencode(&e, &oc_dir); // aba 2: opencode, viva
+    let mut t = tui(&e);
+    t.wait_text(&tab(1, "shell:app"));
+    t.wait_text(&tab(2, "opencode:oc"));
+    write_auth(&e, "openrouter", "sk-or-v1-REALOPENROUTER99");
+    t.wait_text("Chave(s) movida(s) ao cofre");
+    t.wait_text("opencode:oc");
+    // r reinicia a selecionada (única na lista); o modal fecha.
+    t.write(b"r");
+    t.wait_for("modal fechado", |s| !s.contains("Chave(s) movida"));
+    // A TUI não trocou de aba sozinha: o comando chega ao shell (aba 1).
+    t.write(b"echo depois-$((4+4))\r");
+    t.wait_text("depois-8");
+    // A aba 2 voltou viva, com conteúdo novo: a sincronização a reanexa.
+    t.write(b"\x02n");
+    t.wait_text("pronta-4");
     t.write(b"\x02d");
     t.wait_exit();
 }
