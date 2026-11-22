@@ -47,15 +47,18 @@ pub enum VaultCmd {
     },
     /// Guarda uma identidade de cloud: o sandbox recebe um falso, e o real fica fora dele.
     AddCloud {
-        /// Provedor: gcp ou kubernetes.
+        /// Provedor: gcp, kubernetes ou aws.
         #[arg(value_name = "PROVEDOR")]
         provedor: String,
-        /// Nome da identidade (no gcp); no kubernetes, o nome vem de cada contexto.
+        /// Nome da identidade (no gcp); no kubernetes e na aws, o nome vem de cada contexto ou perfil.
         nome: Option<String>,
         /// Contexto do kubeconfig do host (repetível; sem ele, todos os contextos).
         #[arg(long, value_name = "CONTEXTO")]
         context: Vec<String>,
-        /// Copia para o cofre o servidor, a CA e a credencial de cada contexto (sem plugin exec).
+        /// Perfil da AWS do host (repetível; sem ele, todos os perfis).
+        #[arg(long, value_name = "PERFIL")]
+        profile: Vec<String>,
+        /// Copia para o cofre a credencial de cada contexto ou perfil (sem plugin exec nem SSO).
         #[arg(long)]
         copy: bool,
         /// Configuração do gcloud do host (referência: o real vem do gcloud do host).
@@ -386,6 +389,12 @@ pub(crate) fn store_agy_login(
 /// A fonte de uma identidade de cloud, para mostrar.
 pub(crate) fn cloud_source(c: &sandmux_proto::msg::CloudInfo) -> String {
     match c.source.as_str() {
+        "host" if c.provider == "aws" => {
+            trf!("host: perfil {}", "host: profile {}", c.configuration)
+        }
+        "copy" if c.provider == "aws" => {
+            trf!("cópia: perfil {}", "copy: profile {}", c.configuration)
+        }
         "host" if c.provider == "kubernetes" => {
             trf!("host: contexto {}", "host: context {}", c.configuration)
         }
@@ -403,6 +412,19 @@ pub(crate) fn cloud_source(c: &sandmux_proto::msg::CloudInfo) -> String {
 
 /// A linha de uma identidade de cloud em `vault list`, sem token nem chave.
 fn cloud_line(name: &str, fake: &str, c: &sandmux_proto::msg::CloudInfo) -> String {
+    if c.provider == "aws" {
+        let default = if c.default {
+            tr!("  (padrão)", "  (default)")
+        } else {
+            ""
+        };
+        let region = if c.region.is_empty() { "-" } else { &c.region };
+        return trf!(
+            "{name}  cloud  aws  {}  região: {region}{default}  falso: {fake}",
+            "{name}  cloud  aws  {}  region: {region}{default}  fake: {fake}",
+            cloud_source(c)
+        );
+    }
     if c.provider == "kubernetes" {
         let default = if c.default {
             tr!("  (padrão)", "  (default)")
@@ -649,6 +671,143 @@ fn add_kube(only: Vec<String>, copy: bool) -> Result<()> {
         tr!(
             "Cada aba recebe um kubeconfig só com falsos, e o real fica fora do sandbox.\nO agente pode fazer o que o RBAC de cada contexto permite: prefira uma ServiceAccount com o mínimo,\ne apague os contextos de produção que o agente não deve ver (`sandmux vault remove kube:<nome>`).",
             "Each tab gets a kubeconfig with fakes only, and the real one stays outside the sandbox.\nThe agent can do what the RBAC of each context allows: prefer a ServiceAccount with the minimum,\nand remove the production contexts the agent must not see (`sandmux vault remove kube:<name>`)."
+        )
+    );
+    Ok(())
+}
+
+/// `sandmux vault add-cloud aws`: uma identidade por perfil do host (ou só
+/// os de `--profile`), por referência ou cópia.
+fn add_aws(only: Vec<String>, copy: bool) -> Result<()> {
+    use sandmux::aws;
+    let (config, credentials) = aws::host_files();
+    let read = |p: &std::path::Path| std::fs::read_to_string(p).unwrap_or_default();
+    let all = aws::profiles(&read(&config), &read(&credentials));
+    if all.is_empty() {
+        bail!(trf!(
+            "o host não tem perfil da AWS ({} e {})",
+            "the host has no AWS profile ({} and {})",
+            config.display(),
+            credentials.display()
+        ));
+    }
+    for p in &only {
+        if !all.iter().any(|x| &x.name == p) {
+            bail!(trf!(
+                "o perfil {p} não existe no host",
+                "profile {p} does not exist on the host"
+            ));
+        }
+    }
+    let chosen: Vec<&aws::Profile> = all
+        .iter()
+        .filter(|p| only.is_empty() || only.contains(&p.name))
+        .collect();
+    // A padrão: o perfil `default`; sem ele no host, o de `AWS_PROFILE`.
+    // Sem nenhum dos dois, o daemon deixa a padrão com a primeira guardada.
+    let default_profile = if all.iter().any(|p| p.name == "default") {
+        "default".to_string()
+    } else {
+        std::env::var("AWS_PROFILE").unwrap_or_default()
+    };
+    // Confere todos antes de guardar algum: com `--profile`, uma recusa não
+    // deixa metade; com todos os perfis, o que não dá é pulado.
+    let mut ready = Vec::new();
+    for p in &chosen {
+        let secret = if copy {
+            match aws::copy_key(p) {
+                Ok((id, secret)) => Zeroizing::new(
+                    serde_json::to_string(&sandmux_proto::msg::AwsCreds {
+                        access_key_id: id,
+                        secret,
+                        ..Default::default()
+                    })
+                    .map_err(|e| anyhow!(e))?,
+                ),
+                Err(e) if only.is_empty() => {
+                    eprintln!(
+                        "{}",
+                        trf!(
+                            "sandmux: perfil {} pulado: {e}",
+                            "sandmux: profile {} skipped: {e}",
+                            p.name
+                        )
+                    );
+                    continue;
+                }
+                Err(e) => bail!(e),
+            }
+        } else {
+            Zeroizing::new(String::new())
+        };
+        let Some(name) = sandmux_spec::net::kube_name(&p.name) else {
+            bail!(trf!(
+                "o perfil {:?} não dá um nome de identidade",
+                "profile {:?} does not give an identity name",
+                p.name
+            ));
+        };
+        ready.push((name, *p, secret));
+    }
+    let Msg::VaultEntries { entries } = call(&Msg::VaultList)? else {
+        bail!(tr!(
+            "resposta inesperada do daemon",
+            "unexpected answer from the daemon"
+        ));
+    };
+    let mut taken: Vec<String> = entries.into_iter().map(|e| e.name).collect();
+    let mut saved = Vec::new();
+    for (name, p, secret) in ready {
+        let full = format!("aws:{name}");
+        if taken.contains(&full) {
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmux: perfil {} pulado: o cofre já tem {full}",
+                    "sandmux: profile {} skipped: the vault already has {full}",
+                    p.name
+                )
+            );
+            continue;
+        }
+        call(&Msg::VaultAddCloud {
+            cloud: Box::new(sandmux_proto::msg::CloudAdd {
+                name: name.clone(),
+                info: sandmux_proto::msg::CloudInfo {
+                    provider: "aws".into(),
+                    source: if copy { "copy" } else { "host" }.into(),
+                    configuration: p.name.clone(),
+                    region: p.region.clone(),
+                    env: if copy { Vec::new() } else { aws::host_env() },
+                    default: p.name == default_profile,
+                    ..Default::default()
+                },
+                secret: secret.to_string(),
+            }),
+        })?;
+        taken.push(full.clone());
+        saved.push(format!("  {full}  ({})", p.name));
+    }
+    if saved.is_empty() {
+        eprintln!(
+            "{}",
+            tr!(
+                "sandmux: nenhuma identidade nova da AWS",
+                "sandmux: no new AWS identity"
+            )
+        );
+        return Ok(());
+    }
+    eprintln!(
+        "{}\n{}\n{}",
+        tr!(
+            "sandmux: identidades da AWS guardadas no cofre:",
+            "sandmux: AWS identities stored in the vault:"
+        ),
+        saved.join("\n"),
+        tr!(
+            "Cada aba recebe pares falsos, e o gateway assina cada pedido com a chave real, fora do sandbox.\nO agente pode fazer o que o IAM de cada perfil permite: prefira um papel com o mínimo, sem iam:CreateAccessKey\nnem leitura do Secrets Manager, e apague os perfis de produção que o agente não deve ver (`sandmux vault remove aws:<nome>`).",
+            "Each tab gets fake pairs, and the gateway signs each request with the real key, outside the sandbox.\nThe agent can do what the IAM of each profile allows: prefer a role with the minimum, without iam:CreateAccessKey\nor Secrets Manager reads, and remove the production profiles the agent must not see (`sandmux vault remove aws:<name>`)."
         )
     );
     Ok(())
@@ -945,13 +1104,34 @@ pub fn run(c: VaultCmd) -> Result<i32> {
             provedor,
             nome,
             context,
+            profile,
             copy,
             configuration,
             copy_adc,
             copy_key,
             default,
         } => {
-            if provedor == "kubernetes" {
+            if provedor == "aws" {
+                if nome.is_some()
+                    || !context.is_empty()
+                    || configuration.is_some()
+                    || copy_adc
+                    || copy_key.is_some()
+                    || default
+                {
+                    bail!(tr!(
+                        "na aws, use só --profile e --copy: o nome vem de cada perfil",
+                        "for aws, use only --profile and --copy: the name comes from each profile"
+                    ));
+                }
+                add_aws(profile, copy)?;
+            } else if provedor == "kubernetes" {
+                if !profile.is_empty() {
+                    bail!(tr!(
+                        "--profile é da aws; no kubernetes, use --context",
+                        "--profile is for aws; for kubernetes, use --context"
+                    ));
+                }
                 if nome.is_some()
                     || configuration.is_some()
                     || copy_adc
@@ -965,10 +1145,10 @@ pub fn run(c: VaultCmd) -> Result<i32> {
                 }
                 add_kube(context, copy)?;
             } else {
-                if !context.is_empty() || copy {
+                if !context.is_empty() || !profile.is_empty() || copy {
                     bail!(tr!(
-                        "--context e --copy são do kubernetes; no gcp, use --configuration, --copy-adc ou --copy-key",
-                        "--context and --copy are for kubernetes; for gcp, use --configuration, --copy-adc or --copy-key"
+                        "--context, --profile e --copy são do kubernetes e da aws; no gcp, use --configuration, --copy-adc ou --copy-key",
+                        "--context, --profile and --copy are for kubernetes and aws; for gcp, use --configuration, --copy-adc or --copy-key"
                     ));
                 }
                 let Some(nome) = nome else {

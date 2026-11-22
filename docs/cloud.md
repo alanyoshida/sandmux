@@ -2,9 +2,9 @@
 
 > English: [en/cloud.md](en/cloud.md)
 
-O agente usa o `gcloud`, as bibliotecas do Google Cloud e o `kubectl` dentro do sandbox, mas nenhuma credencial real de cloud entra nele. Cada identidade de cloud do cofre vira, na aba, um token falso. O real fica fora do sandbox, com o daemon, e o gateway o põe no lugar do falso só nos pedidos à nuvem dela. Um falso copiado para fora não vale nada.
+O agente usa o `gcloud`, as bibliotecas do Google Cloud, o `kubectl`, o `aws` e os SDKs da AWS dentro do sandbox, mas nenhuma credencial real de cloud entra nele. Cada identidade de cloud do cofre vira, na aba, um token falso. O real fica fora do sandbox, com o daemon, e o gateway o põe no lugar do falso só nos pedidos à nuvem dela. Um falso copiado para fora não vale nada.
 
-Hoje o sandmux cobre o GCP e o Kubernetes ([abaixo](#kubernetes)). A AWS vem depois.
+O sandmux cobre o GCP, o Kubernetes ([abaixo](#kubernetes)) e a AWS ([abaixo](#aws)).
 
 ## Guardar uma identidade
 
@@ -119,3 +119,65 @@ O que o RBAC de cada contexto permitir: o gateway não filtra os pedidos ao API 
 - **`proxy-url` do kubeconfig:** o gateway conecta direto ao servidor.
 - **`insecure-skip-tls-verify`:** quando o kubeconfig do host pede, o gateway também não verifica o servidor.
 - **Um certificado de cliente renovado** vale na conexão seguinte; uma conexão longa (`get -w`) segue com o anterior até o servidor fechá-la.
+
+## AWS
+
+### Guardar os perfis
+
+Com o cofre desbloqueado, um comando guarda todos os perfis do host (os de `~/.aws/config` e `~/.aws/credentials`, ou os de `AWS_CONFIG_FILE` e `AWS_SHARED_CREDENTIALS_FILE`), cada um como uma identidade:
+
+```sh
+# Todos os perfis, por referência ao host (o padrão)
+sandmux vault add-cloud aws
+
+# Só alguns perfis
+sandmux vault add-cloud aws --profile dev --profile ci
+
+# Cópia da chave de longo prazo de um usuário IAM
+sandmux vault add-cloud aws --profile ci --copy
+```
+
+O nome no cofre é `aws:<nome>`, com a mesma regra do Kubernetes: `Dev_SSO` vira `aws:dev-sso`. Um nome que já está no cofre é pulado, com o aviso. A identidade do perfil `default` é a padrão; sem ele, a do perfil de `AWS_PROFILE`, ou a primeira guardada.
+
+- **Referência ao host (o padrão):** o cofre guarda só o perfil, a região e as variáveis dos arquivos do host. O daemon tira o real do `aws` do host (`aws configure export-credentials --profile <perfil> --format process`), com o seu ambiente, fora do sandbox. SSO, `assume-role` e `credential_process` funcionam como no seu terminal; quando o SSO vence, rode `aws sso login` no host.
+- **Cópia (`--copy`):** as duas partes da chave de longo prazo do perfil ficam cifradas no cofre, e o gateway assina direto com ela. Um perfil sem chave estática (SSO, `role_arn`, `credential_process`) ou com um token de sessão não pode ser copiado.
+
+Sem `--profile`, um perfil recusado é pulado com o motivo. `sandmux vault list` mostra cada identidade com a fonte, a região e o ID falso, nunca a chave.
+
+### Na aba
+
+Com ao menos uma identidade da AWS, toda aba recebe, só durante a execução, uma pasta `~/.aws` com escrita (`AWS_CONFIG_FILE` e `AWS_SHARED_CREDENTIALS_FILE` apontam para ela):
+
+- um perfil por identidade, com o nome original e a região;
+- um par falso por perfil: o ID da chave (`AKIASANDMUX…`, 20 caracteres) e uma chave secreta falsa;
+- o `[default]` com a identidade padrão.
+
+O `aws` confia na CA do lançamento (`AWS_CA_BUNDLE`), e o cache dele (`~/.aws/cli/cache`) some no fim.
+
+### No gateway
+
+Com uma identidade da AWS no cofre, toda aba decifra `*.amazonaws.com`. Na AWS, o segredo não viaja no pedido: o SDK assina cada pedido (SigV4) com a chave secreta. O gateway acha a identidade pelo ID falso do pedido e refaz a assinatura com a chave real, sobre o mesmo pedido canônico:
+
+- no `Authorization` e na URL pré-assinada (`X-Amz-Signature`);
+- com o token de sessão real (`X-Amz-Security-Token`), quando o real é temporário;
+- nos uploads do S3 com `aws-chunked` assinado (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`, também com o trailer), pedaço a pedaço, em fluxo.
+
+Um pedido sem `x-amz-content-sha256` tem o corpo lido para o hash, até 32 MiB; acima disso, `413`. O registro tem o nome da identidade (`chave: aws:dev`), nunca a chave.
+
+**Credenciais emitidas dentro da aba:** a resposta do STS (`AssumeRole`, `GetSessionToken`, `GetFederationToken` e afins), do `GetRoleCredentials` do SSO ou do `GetCredentialsForIdentity` do Cognito traz uma credencial real. O gateway a troca por falsos novos (`ASIASANDMUX…`), e o daemon guarda o real só na memória, até a validade dele. Os pedidos com esses falsos são reassinados com o real guardado (`chave: aws:dev+sts` no registro). A resposta que não pode ser trocada (comprimida, grande demais, ou com o cofre trancado) é recusada com `502`. Um `sandmux daemon restart` esquece essas credenciais.
+
+O real é obtido de novo antes do fim da validade, com 5 minutos de folga; sem validade (uma chave estática), a cada 10 minutos. Quando o real falta (o `aws` não está no host, o SSO venceu, o perfil sumiu), o gateway responde `403` com um erro no formato da AWS que diz o que fazer no host, e o daemon avisa uma vez. O `sandmux doctor` avisa de cada referência sem o `aws` no host.
+
+### O que o agente pode fazer
+
+O que o IAM do perfil permitir: o gateway não filtra os pedidos. Prefira um papel próprio para o agente, com o mínimo, e tire do cofre os perfis de produção que ele não deve ver. Duas permissões entregam uma credencial real que o gateway não troca, e devem ficar de fora:
+
+- criar chaves de acesso (`iam:CreateAccessKey`): a chave nova volta na resposta;
+- ler segredos do Secrets Manager.
+
+### Limites da AWS
+
+- **SigV4a** (`AWS4-ECDSA-P256-SHA256`, dos multi-region access points): o pedido passa sem mudar e falha na AWS.
+- **Event streams assinados no pedido** (Transcribe streaming, por HTTP/2): o gateway só fala HTTP/1.1. As respostas em stream (Bedrock `InvokeModelWithResponseStream`) funcionam.
+- **A China** (`*.amazonaws.com.cn`) e os endpoints `*.api.aws` não são decifrados.
+- **`aws configure` ou `aws sso login` dentro da aba** gravam na pasta da aba, que some no fim. Faça o login no host.

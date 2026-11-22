@@ -172,6 +172,62 @@ pub fn write_kube_dir(dir: &Path, ids: &[KubeTab], home: &Path) -> std::io::Resu
     write_files(dir, files)
 }
 
+/// Uma identidade da AWS, como a aba a vê.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AwsTab {
+    /// O nome original do perfil no host.
+    pub profile: String,
+    pub region: String,
+    pub fake_id: String,
+    pub fake_secret: String,
+    pub default: bool,
+}
+
+/// Onde a pasta do `aws` fica no HOME da aba.
+pub const AWS_DIR: &str = ".aws";
+
+/// O `config` e o `credentials` da aba: um perfil por identidade, com o
+/// nome original, a região e o par falso; o `[default]` é a identidade
+/// padrão. Vazio sem identidade.
+pub fn aws_files(ids: &[AwsTab]) -> Vec<(PathBuf, String)> {
+    let Some(default) = ids.iter().find(|i| i.default).or(ids.first()) else {
+        return Vec::new();
+    };
+    let mut config = String::new();
+    let mut creds = String::new();
+    let mut section = |name: &str, i: &AwsTab| {
+        let head = if name == "default" {
+            "[default]".to_string()
+        } else {
+            format!("[profile {name}]")
+        };
+        config.push_str(&head);
+        config.push('\n');
+        if !i.region.is_empty() {
+            config.push_str(&format!("region = {}\n", i.region));
+        }
+        config.push('\n');
+        creds.push_str(&format!(
+            "[{name}]\naws_access_key_id = {}\naws_secret_access_key = {}\n\n",
+            i.fake_id, i.fake_secret
+        ));
+    };
+    section("default", default);
+    for i in ids.iter().filter(|i| i.profile != "default") {
+        section(&i.profile, i);
+    }
+    vec![
+        (PathBuf::from("config"), config),
+        (PathBuf::from("credentials"), creds),
+    ]
+}
+
+/// Grava a pasta do `aws` da aba em `dir`. Sem identidade, não cria nada e
+/// devolve `false`.
+pub fn write_aws_dir(dir: &Path, ids: &[AwsTab]) -> std::io::Result<bool> {
+    write_files(dir, aws_files(ids))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,5 +342,47 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let m = std::fs::metadata(dir.join("config")).unwrap();
         assert_eq!(m.permissions().mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn pasta_do_aws_da_aba() {
+        assert!(aws_files(&[]).is_empty());
+        let t = |p: &str, d: bool| AwsTab {
+            profile: p.into(),
+            region: if p == "Dev_SSO" {
+                "sa-east-1".into()
+            } else {
+                String::new()
+            },
+            fake_id: format!("AKIASANDMUX{}", p.len()),
+            fake_secret: format!("segredo-{p}"),
+            default: d,
+        };
+        let f = aws_files(&[t("Dev_SSO", true), t("ci", false)]);
+        let config = &f[0].1;
+        let creds = &f[1].1;
+        assert!(
+            config.starts_with("[default]\nregion = sa-east-1\n"),
+            "{config}"
+        );
+        assert!(
+            config.contains("[profile Dev_SSO]\nregion = sa-east-1"),
+            "{config}"
+        );
+        assert!(config.contains("[profile ci]\n"), "{config}");
+        assert!(
+            creds.contains("[default]\naws_access_key_id = AKIASANDMUX7\n"),
+            "{creds}"
+        );
+        assert!(
+            creds.contains(
+                "[ci]\naws_access_key_id = AKIASANDMUX2\naws_secret_access_key = segredo-ci"
+            ),
+            "{creds}"
+        );
+        // O perfil `default` do host não se repete.
+        let f = aws_files(&[t("default", true), t("ci", false)]);
+        assert_eq!(f[0].1.matches("[default]").count(), 1);
+        assert!(!f[0].1.contains("[profile default]"));
     }
 }

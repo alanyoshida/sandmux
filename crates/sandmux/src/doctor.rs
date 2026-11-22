@@ -1170,16 +1170,37 @@ fn daemon_group() -> Group {
     {
         let gcloud = sandmux::cloud::gcloud_present();
         let kubectl = sandmux::kube::kubectl_present();
+        let aws = sandmux::aws::aws_present();
         for e in entries {
             let Some(info) = e.cloud.as_ref().filter(|c| c.source == "host") else {
                 continue;
             };
             let kube = info.provider == "kubernetes";
-            if (kube && kubectl) || (!kube && gcloud) {
+            let is_aws = info.provider == "aws";
+            let present = if kube {
+                kubectl
+            } else if is_aws {
+                aws
+            } else {
+                gcloud
+            };
+            if present {
                 continue;
             }
             let label = trf!("identidade {}", "identity {}", e.name);
-            let (why, hint) = if kube {
+            let (why, hint) = if is_aws {
+                (
+                    trf!(
+                        "a identidade {} precisa do aws no host, que não foi achado",
+                        "identity {} needs aws on the host, which was not found",
+                        e.name
+                    ),
+                    tr!(
+                        "  Instale o AWS CLI v2 no host; sem ele, o gateway não tem a chave real, e a\n  aba recebe 403. Detalhes em docs/cloud.md.",
+                        "  Install the AWS CLI v2 on the host; without it, the gateway has no real key,\n  and the tab gets 403. Details in docs/en/cloud.md."
+                    ),
+                )
+            } else if kube {
                 (
                     trf!(
                         "a identidade {} precisa do kubectl no host, que não foi achado",

@@ -2373,6 +2373,55 @@ fn grafo_do_cofre_com_identidade_de_kubernetes() {
 }
 
 #[test]
+fn grafo_do_cofre_com_identidade_da_aws() {
+    let e = Env::new();
+    vault_init(&e);
+    let d = e.home.join(".aws");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("config"), "[profile ci]\nregion = eu-west-1\n").unwrap();
+    std::fs::write(
+        d.join("credentials"),
+        "[ci]\naws_access_key_id = AKIAREALTUI\naws_secret_access_key = SEGREDO-REAL-TUI\n",
+    )
+    .unwrap();
+    let out = e
+        .cmd(&e.work, &["vault", "add-cloud", "aws", "--copy"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    sessao(&e, &e.work);
+    let mut t = tui_cols(&e, 120);
+    t.wait_text(&tab(1, "shell:app"));
+    open_vault_section(&mut t);
+    t.wait_for("identidade na lista", |s| {
+        s.lines()
+            .any(|l| l.contains("aws:ci") && l.contains("cloud"))
+    });
+    t.write(b"g");
+    t.wait_text("sandmux · cofre · grafo");
+    t.wait_text("*.amazonaws.com");
+    t.wait_text("▲ aws:ci");
+    t.write(b"\t");
+    t.wait_text("cloud · aws");
+    t.wait_text("cópia: perfil");
+    t.wait_text("perfil      ci");
+    t.wait_text("região      eu-west-1");
+    t.wait_text("falso       AKIASANDMUX");
+    t.with_screen(|s| {
+        let c = s.contents();
+        assert!(!c.contains("SEGREDO") && !c.contains("AKIAREALTUI"), "{c}");
+    });
+    t.write(b"x");
+    t.wait_text("Apagar aws:ci do cofre?");
+    t.write(b"s");
+    t.wait_text("aws:ci apagado do cofre");
+    t.write(b"\x1b\x1b");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
 fn grafo_do_cofre_sem_cofre_so_avisa() {
     let e = Env::new();
     sessao(&e, &e.work);

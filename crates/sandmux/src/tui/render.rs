@@ -2376,7 +2376,18 @@ fn draw_vault_graph(
                                 &crate::vaultcmd::cloud_source(c),
                                 false,
                             ));
-                            if c.provider == "kubernetes" {
+                            if c.provider == "aws" {
+                                l.push(kv(tr!("perfil", "profile"), &c.configuration, false));
+                                l.push(kv(
+                                    tr!("região", "region"),
+                                    if c.region.is_empty() {
+                                        "—"
+                                    } else {
+                                        &c.region
+                                    },
+                                    c.region.is_empty(),
+                                ));
+                            } else if c.provider == "kubernetes" {
                                 l.push(kv(tr!("contexto", "context"), &c.configuration, false));
                                 l.push(kv(tr!("servidor", "server"), &c.server, false));
                                 if !c.namespace.is_empty() {
@@ -2405,7 +2416,12 @@ fn draw_vault_graph(
                                 },
                                 false,
                             ));
-                            l.push(kv(tr!("token real", "real token"), never, true));
+                            let real = if c.provider == "aws" {
+                                tr!("chave real", "real key")
+                            } else {
+                                tr!("token real", "real token")
+                            };
+                            l.push(kv(real, never, true));
                             l.push(kv(
                                 tr!("falso", "fake"),
                                 e.fake.as_deref().unwrap_or("—"),

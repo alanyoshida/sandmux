@@ -231,6 +231,8 @@ pub struct Real {
     pub token: String,
     pub expires: u64,
     pub kube: Option<sandmux_proto::msg::KubeTarget>,
+    /// Na AWS: a chave real, com que o gateway assina.
+    pub aws: Option<sandmux_proto::msg::AwsCreds>,
 }
 
 impl std::fmt::Debug for Real {
@@ -250,23 +252,7 @@ pub fn now() -> u64 {
 
 /// Segundos desde 1970 de um instante `AAAA-MM-DDTHH:MM:SS[.fff]Z`.
 pub fn parse_rfc3339(s: &str) -> Option<u64> {
-    let s = s.trim().strip_suffix('Z')?;
-    let (date, time) = s.split_once('T')?;
-    let mut d = date.split('-').map(|x| x.parse::<i64>().ok());
-    let (y, m, day) = (d.next()??, d.next()??, d.next()??);
-    let time = time.split('.').next()?;
-    let mut t = time.split(':').map(|x| x.parse::<i64>().ok());
-    let (hh, mm, ss) = (t.next()??, t.next()??, t.next()??);
-    // Dias desde 1970 (algoritmo de Howard Hinnant).
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468;
-    let secs = days * 86400 + hh * 3600 + mm * 60 + ss;
-    u64::try_from(secs).ok()
+    sandmux_spec::net::parse_rfc3339(s)
 }
 
 /// O real de uma saída do `gcloud config config-helper --format=json`.
@@ -284,6 +270,7 @@ pub fn parse_config_helper(out: &str) -> Result<Real, String> {
     let expires = parse_rfc3339(field(&c, "token_expiry")).unwrap_or_else(|| now() + 3000);
     Ok(Real {
         kube: None,
+        aws: None,
         token: token.to_string(),
         expires,
     })
@@ -318,6 +305,9 @@ fn gcloud_failure(conf: &str, e: &GcloudErr) -> String {
 pub fn resolve(id: &CloudAdd) -> Result<Real, String> {
     if id.info.provider == "kubernetes" {
         return crate::kube::resolve(id);
+    }
+    if id.info.provider == "aws" {
+        return crate::aws::resolve(id);
     }
     match id.info.source.as_str() {
         "host" => {
@@ -444,6 +434,7 @@ pub fn parse_token_answer(status: u16, body: &str) -> Result<Real, String> {
     let secs = v.get("expires_in").and_then(|x| x.as_u64()).unwrap_or(3599);
     Ok(Real {
         kube: None,
+        aws: None,
         token: field(&v, "access_token").to_string(),
         expires: now() + secs,
     })

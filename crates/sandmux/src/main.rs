@@ -495,6 +495,7 @@ const VALUE_NAMES_EN: &[(&str, &str)] = &[
     ("ARQUIVO", "FILE"),
     ("PROVEDOR", "PROVIDER"),
     ("CONTEXTO", "CONTEXT"),
+    ("PERFIL", "PROFILE"),
 ];
 
 /// Ajuda da linha de comando, português (o doc comment) -> inglês. Cobre
@@ -994,20 +995,24 @@ const HELP_EN: &[(&str, &str)] = &[
         "Saves a cloud identity: the sandbox gets a fake, and the real one stays outside it.",
     ),
     (
-        "Provedor: gcp ou kubernetes.",
-        "Provider: gcp or kubernetes.",
+        "Provedor: gcp, kubernetes ou aws.",
+        "Provider: gcp, kubernetes or aws.",
     ),
     (
-        "Nome da identidade (no gcp); no kubernetes, o nome vem de cada contexto.",
-        "Name of the identity (for gcp); for kubernetes, the name comes from each context.",
+        "Nome da identidade (no gcp); no kubernetes e na aws, o nome vem de cada contexto ou perfil.",
+        "Name of the identity (for gcp); for kubernetes and aws, the name comes from each context or profile.",
     ),
     (
         "Contexto do kubeconfig do host (repetível; sem ele, todos os contextos).",
         "Context of the host kubeconfig (repeatable; without it, every context).",
     ),
     (
-        "Copia para o cofre o servidor, a CA e a credencial de cada contexto (sem plugin exec).",
-        "Copies the server, the CA and the credential of each context into the vault (no exec plugin).",
+        "Perfil da AWS do host (repetível; sem ele, todos os perfis).",
+        "AWS profile of the host (repeatable; without it, every profile).",
+    ),
+    (
+        "Copia para o cofre a credencial de cada contexto ou perfil (sem plugin exec nem SSO).",
+        "Copies the credential of each context or profile into the vault (no exec plugin or SSO).",
     ),
     (
         "Configuração do gcloud do host (referência: o real vem do gcloud do host).",

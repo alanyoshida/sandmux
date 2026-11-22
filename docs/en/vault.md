@@ -183,7 +183,7 @@ Hardware keys (YubiKey) and third-party agents (such as 1Password's) are not sup
 
 ## Cloud identities
 
-The vault also stores cloud identities (`sandmux vault add-cloud gcp <name>` and `sandmux vault add-cloud kubernetes`): the agent uses `gcloud`, the Google libraries and `kubectl` with a fake token, and the real one stays outside the sandbox, with the daemon. In the TUI and in the graph, an identity shows up in its domain (`*.googleapis.com` for GCP, `<name>.kube.sandmux.internal` for Kubernetes), read-only: `x` removes it. Details in [cloud.md](cloud.md).
+The vault also stores cloud identities (`sandmux vault add-cloud gcp <name>`, `sandmux vault add-cloud kubernetes` and `sandmux vault add-cloud aws`): the agent uses `gcloud`, the Google libraries, `kubectl` and `aws` with a fake, and the real one stays outside the sandbox, with the daemon. In the TUI and in the graph, an identity shows up in its domain (`*.googleapis.com` for GCP, `<name>.kube.sandmux.internal` for Kubernetes, `*.amazonaws.com` for AWS), read-only: `x` removes it. Details in [cloud.md](cloud.md).
 
 ## Database connections
 
