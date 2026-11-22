@@ -1,6 +1,7 @@
-//! As identidades de GCP numa aba: a pasta do `gcloud` só desta execução,
-//! com uma configuração por identidade (o token falso em arquivo) e o ADC
-//! com o refresh falso da padrão. Só falsos: o real fica no gateway.
+//! As identidades de cloud numa aba. No GCP, a pasta do `gcloud` só desta
+//! execução, com uma configuração por identidade (o token falso em arquivo)
+//! e o ADC com o refresh falso da padrão. No Kubernetes, a pasta `~/.kube`
+//! com um kubeconfig só com falsos. O real fica no gateway.
 
 use std::path::{Path, PathBuf};
 
@@ -65,12 +66,21 @@ pub fn gcloud_files(ids: &[GcpTab], home: &Path) -> Vec<(PathBuf, String)> {
 /// Grava os arquivos em `dir` (pasta 700, arquivos 600). Sem identidade,
 /// não cria nada e devolve `false`.
 pub fn write_gcloud_dir(dir: &Path, ids: &[GcpTab], home: &Path) -> std::io::Result<bool> {
+    write_files(dir, gcloud_files(ids, home))
+}
+
+/// Recria `dir` com os arquivos (pastas 700, arquivos 600). Sem arquivos,
+/// não cria nada e devolve `false`.
+fn write_files(dir: &Path, files: Vec<(PathBuf, String)>) -> std::io::Result<bool> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-    let files = gcloud_files(ids, home);
     if files.is_empty() {
         return Ok(false);
     }
     let _ = std::fs::remove_dir_all(dir);
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
     for (rel, contents) in files {
         let p = dir.join(rel);
         if let Some(parent) = p.parent() {
@@ -89,6 +99,77 @@ pub fn write_gcloud_dir(dir: &Path, ids: &[GcpTab], home: &Path) -> std::io::Res
             .write_all(contents.as_bytes())?;
     }
     Ok(true)
+}
+
+/// Uma identidade de Kubernetes, como a aba a vê.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KubeTab {
+    /// O nome sem o prefixo (`kind-dev` de `kube:kind-dev`).
+    pub name: String,
+    /// O nome original do contexto no host.
+    pub context: String,
+    pub namespace: String,
+    pub fake: String,
+    pub default: bool,
+}
+
+/// Onde a pasta do `kubectl` fica no HOME da aba.
+pub const KUBE_DIR: &str = ".kube";
+/// A CA do lançamento, dentro da pasta do `kubectl` da aba.
+pub const KUBE_CA_FILE: &str = "sandmux-ca.crt";
+
+/// O kubeconfig da aba (JSON, que o `kubectl` lê como YAML): um contexto
+/// por identidade, com o nome original, o servidor sintético, a CA do
+/// lançamento e o token falso. `home` é o HOME dentro do sandbox.
+pub fn kubeconfig(ids: &[KubeTab], home: &Path) -> Option<String> {
+    let default = ids.iter().find(|i| i.default).or(ids.first())?;
+    let ca = home.join(KUBE_DIR).join(KUBE_CA_FILE).display().to_string();
+    let user = |i: &KubeTab| format!("sandmux-{}", i.name);
+    let clusters: Vec<_> = ids
+        .iter()
+        .map(|i| {
+            serde_json::json!({
+                "name": i.name,
+                "cluster": {
+                    "server": format!("https://{}", sandmux_spec::net::kube_domain(&i.name)),
+                    "certificate-authority": ca,
+                }
+            })
+        })
+        .collect();
+    let users: Vec<_> = ids
+        .iter()
+        .map(|i| serde_json::json!({ "name": user(i), "user": { "token": i.fake } }))
+        .collect();
+    let contexts: Vec<_> = ids
+        .iter()
+        .map(|i| {
+            let mut c = serde_json::json!({ "cluster": i.name, "user": user(i) });
+            if !i.namespace.is_empty() {
+                c["namespace"] = i.namespace.clone().into();
+            }
+            serde_json::json!({ "name": i.context, "context": c })
+        })
+        .collect();
+    let v = serde_json::json!({
+        "apiVersion": "v1",
+        "kind": "Config",
+        "preferences": {},
+        "clusters": clusters,
+        "users": users,
+        "contexts": contexts,
+        "current-context": default.context,
+    });
+    Some(format!("{v:#}\n"))
+}
+
+/// Grava a pasta do `kubectl` da aba em `dir`. Sem identidade, não cria
+/// nada e devolve `false`.
+pub fn write_kube_dir(dir: &Path, ids: &[KubeTab], home: &Path) -> std::io::Result<bool> {
+    let files = kubeconfig(ids, home)
+        .map(|c| vec![(PathBuf::from("config"), c)])
+        .unwrap_or_default();
+    write_files(dir, files)
 }
 
 #[cfg(test)]
@@ -159,5 +240,51 @@ mod tests {
             std::fs::read_to_string(dir.join("active_config")).unwrap(),
             "trabalho"
         );
+    }
+
+    fn kube(name: &str, default: bool) -> KubeTab {
+        KubeTab {
+            name: name.into(),
+            context: format!("ctx:{name}"),
+            namespace: if name == "dev" {
+                "app".into()
+            } else {
+                String::new()
+            },
+            fake: format!("sandmux-fake-kube-{name}"),
+            default,
+        }
+    }
+
+    #[test]
+    fn kubeconfig_da_aba() {
+        assert!(kubeconfig(&[], Path::new("/home/ana")).is_none());
+        let text = kubeconfig(
+            &[kube("dev", false), kube("prod", true)],
+            Path::new("/home/ana"),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["current-context"], "ctx:prod");
+        assert_eq!(
+            v["clusters"][0]["cluster"]["server"],
+            "https://dev.kube.sandmux.internal"
+        );
+        assert_eq!(
+            v["clusters"][0]["cluster"]["certificate-authority"],
+            "/home/ana/.kube/sandmux-ca.crt"
+        );
+        assert_eq!(v["users"][1]["user"]["token"], "sandmux-fake-kube-prod");
+        assert_eq!(v["contexts"][0]["name"], "ctx:dev");
+        assert_eq!(v["contexts"][0]["context"]["namespace"], "app");
+        assert!(v["contexts"][1]["context"].get("namespace").is_none());
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("s1-1");
+        assert!(!write_kube_dir(&dir, &[], Path::new("/h")).unwrap());
+        assert!(!dir.exists());
+        assert!(write_kube_dir(&dir, &[kube("dev", true)], Path::new("/h")).unwrap());
+        use std::os::unix::fs::PermissionsExt;
+        let m = std::fs::metadata(dir.join("config")).unwrap();
+        assert_eq!(m.permissions().mode() & 0o777, 0o600);
     }
 }

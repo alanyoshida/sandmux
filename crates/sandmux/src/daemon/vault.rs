@@ -356,40 +356,66 @@ impl VaultState {
         self.save()
     }
 
-    /// Guarda uma identidade de cloud (`gcp:<nome>`), com os falsos novos.
-    /// A primeira do provedor, ou uma com `default`, vira a padrão.
+    /// Guarda uma identidade de cloud (`gcp:<nome>` ou `kube:<nome>`), com
+    /// os falsos novos. A primeira do provedor, ou uma com `default`, vira a
+    /// padrão.
     pub fn add_cloud(&mut self, mut c: sandmux_proto::msg::CloudAdd) -> Result<String, String> {
-        if c.info.provider != "gcp" {
+        let kube = c.info.provider == "kubernetes";
+        if !kube && c.info.provider != "gcp" {
             return Err(trf!(
-                "provedor de cloud desconhecido: {}; use gcp",
-                "unknown cloud provider: {}; use gcp",
+                "provedor de cloud desconhecido: {}; use gcp ou kubernetes",
+                "unknown cloud provider: {}; use gcp or kubernetes",
                 c.info.provider
             ));
         }
-        if !crate::cloud::valid_name(&c.name) {
+        let name_ok = if kube {
+            sandmux_spec::net::kube_name(&c.name).as_deref() == Some(c.name.as_str())
+        } else {
+            crate::cloud::valid_name(&c.name)
+        };
+        if !name_ok {
             return Err(trf!(
                 "nome de identidade inválido: {:?}; use letras, números, - e _",
                 "invalid identity name: {:?}; use letters, digits, - and _",
                 c.name
             ));
         }
-        match c.info.source.as_str() {
-            "host" if !c.info.configuration.is_empty() => {}
-            "adc" => {
+        match (kube, c.info.source.as_str()) {
+            (_, "host") if !c.info.configuration.is_empty() => {}
+            (false, "adc") => {
                 crate::cloud::check_adc(&c.secret)?;
             }
-            "key" => {
+            (false, "key") => {
                 crate::cloud::check_key(&c.secret)?;
             }
-            _ => {
+            (true, "copy") => {
+                let k: crate::kube::Copied =
+                    serde_json::from_str(&c.secret).map_err(|e| e.to_string())?;
+                if crate::kube::server_host(&k.target.server).is_none() {
+                    return Err(trf!(
+                        "servidor do Kubernetes inválido: {:?}",
+                        "invalid Kubernetes server: {:?}",
+                        k.target.server
+                    ));
+                }
+            }
+            (false, _) => {
                 return Err(tr!(
                     "use exatamente uma fonte: --configuration, --copy-adc ou --copy-key",
                     "use exactly one source: --configuration, --copy-adc or --copy-key"
                 )
                 .into());
             }
+            (true, _) => {
+                return Err(tr!(
+                    "identidade de Kubernetes sem contexto",
+                    "Kubernetes identity without a context"
+                )
+                .into());
+            }
         }
-        let name = format!("{}:{}", c.info.provider, c.name);
+        let prefix = if kube { "kube" } else { "gcp" };
+        let name = format!("{prefix}:{}", c.name);
         let o = self.opened()?;
         if o.contents.secrets.iter().any(|s| s.name == name) {
             return Err(trf!(
@@ -401,7 +427,7 @@ impl VaultState {
             .contents
             .secrets
             .iter_mut()
-            .filter(|s| s.is_cloud() && s.name.starts_with("gcp:"))
+            .filter(|s| s.is_cloud() && s.name.starts_with(&format!("{prefix}:")))
             .collect();
         let first = others.is_empty();
         c.info.default = c.info.default || first;
@@ -415,15 +441,29 @@ impl VaultState {
                 }
             }
         }
-        c.info.refresh_fake = sandmux_vault::new_fake_with(sandmux_spec::net::GCP_REFRESH_PREFIX);
+        let (domains, fake) = if kube {
+            (
+                vec![sandmux_spec::net::kube_domain(&c.name)],
+                sandmux_vault::new_fake_with("").replacen(
+                    sandmux_vault::FAKE_PREFIX,
+                    sandmux_spec::net::KUBE_FAKE_PREFIX,
+                    1,
+                ),
+            )
+        } else {
+            c.info.refresh_fake =
+                sandmux_vault::new_fake_with(sandmux_spec::net::GCP_REFRESH_PREFIX);
+            (
+                vec![sandmux_spec::net::gcp_domain()],
+                sandmux_vault::new_fake_with(sandmux_spec::net::GCP_ACCESS_PREFIX),
+            )
+        };
         let value = serde_json::to_string(&c).map_err(|e| e.to_string())?;
         o.put(Secret {
             name: name.clone(),
             value,
-            domains: vec![sandmux_spec::net::gcp_domain()],
-            fake: Some(sandmux_vault::new_fake_with(
-                sandmux_spec::net::GCP_ACCESS_PREFIX,
-            )),
+            domains,
+            fake: Some(fake),
             tools: Vec::new(),
             kind: sandmux_vault::KIND_CLOUD.into(),
         });
@@ -910,6 +950,71 @@ mod tests {
         assert_eq!(v.cloud_identities().len(), 2);
         v.lock();
         assert!(v.cloud_identities().is_empty());
+    }
+
+    #[test]
+    fn identidades_de_kubernetes_no_cofre() {
+        let d = tempfile::tempdir().unwrap();
+        let mut v = VaultState::new(d.path());
+        v.init("s").unwrap();
+        v.add_cloud(gcp("trabalho", "host", "", false)).unwrap();
+        let kube =
+            |name: &str, source: &str, secret: &str, default: bool| sandmux_proto::msg::CloudAdd {
+                name: name.into(),
+                info: sandmux_proto::msg::CloudInfo {
+                    provider: "kubernetes".into(),
+                    source: source.into(),
+                    configuration: if source == "host" {
+                        name.into()
+                    } else {
+                        String::new()
+                    },
+                    server: "https://127.0.0.1:6443".into(),
+                    default,
+                    ..Default::default()
+                },
+                secret: secret.into(),
+            };
+        assert_eq!(
+            v.add_cloud(kube("kind-dev", "host", "", false)).unwrap(),
+            "kube:kind-dev"
+        );
+        let copy =
+            r#"{"target":{"server":"https://10.0.0.1:6443","key_pem":"CHAVE-REAL"},"token":""}"#;
+        v.add_cloud(kube("prod", "copy", copy, true)).unwrap();
+        // A padrão do Kubernetes não mexe na do GCP.
+        let mut d = default_of(&mut v);
+        d.sort();
+        assert_eq!(d, vec!["gcp:trabalho".to_string(), "kube:prod".to_string()]);
+        // Nome fora do formato, cópia sem servidor, provedor errado.
+        assert!(v.add_cloud(kube("Kind_Dev", "host", "", false)).is_err());
+        assert!(
+            v.add_cloud(kube(
+                "x",
+                "copy",
+                r#"{"target":{"server":"http://a"}}"#,
+                false
+            ))
+            .is_err()
+        );
+        assert!(v.add_cloud(kube("y", "adc", "", false)).is_err());
+        let list = v.list().unwrap();
+        let e = list.iter().find(|e| e.name == "kube:prod").unwrap();
+        assert!(e.fake.as_deref().unwrap().starts_with("sandmux-fake-kube-"));
+        assert_eq!(e.domains, vec!["prod.kube.sandmux.internal".to_string()]);
+        assert!(!format!("{list:?}").contains("CHAVE-REAL"));
+        assert!(
+            v.domains_for("shell")
+                .iter()
+                .any(|d| d == "kind-dev.kube.sandmux.internal")
+        );
+        v.remove("kube:prod").unwrap();
+        let mut d = default_of(&mut v);
+        d.sort();
+        assert_eq!(
+            d,
+            vec!["gcp:trabalho".to_string(), "kube:kind-dev".to_string()]
+        );
     }
 
     #[test]

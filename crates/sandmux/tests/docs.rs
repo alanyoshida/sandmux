@@ -499,6 +499,34 @@ fn documentacao_das_credenciais_de_cloud_acompanha_o_codigo() {
     assert_eq!(sandmux_spec::net::GCP_ACCESS_PREFIX, "ya29.");
     let readme = std::fs::read_to_string(format!("{root}/README.md")).unwrap();
     assert!(readme.contains("(docs/cloud.md)"));
+    // O Kubernetes.
+    for c in [
+        "sandmux vault add-cloud kubernetes",
+        "--context",
+        "--copy",
+        "kubectl config view --raw --flatten --minify",
+        "plugin `exec`",
+        "auth-provider",
+        "kubectl config use-context",
+        "sandmux-fake-kube-",
+        "SPDY",
+        "RBAC",
+        "401",
+        "10 minutos",
+    ] {
+        assert!(doc.contains(c), "docs/cloud.md não cita {c}");
+    }
+    assert!(doc.contains(&sandmux_net::KUBE.to_string()));
+    assert!(doc.contains(sandmux_spec::net::KUBE_SUFFIX));
+    assert!(doc.contains(sandmux_spec::net::KUBE_FAKE_PREFIX));
+    assert!(doc.contains(&format!(
+        "~/{}/{}",
+        sandmux_policy::cloudtab::KUBE_DIR,
+        sandmux_policy::cloudtab::KUBE_CA_FILE
+    )));
+    assert!(doc.contains(&format!("{} minutos", sandmux::kube::NO_EXPIRY / 60 - 5)));
+    let en = std::fs::read_to_string(format!("{root}/docs/en/cloud.md")).unwrap();
+    assert!(en.contains("sandmux vault add-cloud kubernetes") && en.contains("10 minutes"));
 }
 
 #[test]

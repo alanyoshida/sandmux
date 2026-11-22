@@ -228,6 +228,8 @@ pub struct VaultLaunch {
     pub tool_secrets: Vec<sandmux_policy::toolsecrets::ToolSecret>,
     /// A pasta do `gcloud` da execução, com as identidades de GCP.
     pub gcloud_dir: Option<PathBuf>,
+    /// A pasta do `kubectl` da execução, com as identidades de Kubernetes.
+    pub kube_dir: Option<PathBuf>,
     /// Socket do agente SSH do lançamento e os servidores das chaves.
     pub ssh_agent_socket: Option<PathBuf>,
     pub ssh_servers: Vec<String>,
@@ -391,6 +393,7 @@ pub fn prepare_with(
     run.opencode_models = vault.opencode_models;
     run.tool_secrets = vault.tool_secrets;
     run.gcloud_dir = vault.gcloud_dir;
+    run.kube_dir = vault.kube_dir;
     run.ssh_agent_socket = vault.ssh_agent_socket;
     run.ssh_servers = vault.ssh_servers;
     let window = crate::window::open(eff.window.value, &host.env, net_tag)?;
@@ -603,6 +606,11 @@ pub fn launch_ca() -> Option<sandmux_spec::TlsSpec> {
 /// A pasta do `gcloud` de um lançamento (só falsos), apagada no fim dele.
 pub fn gcloud_dir_path(tag: &str) -> PathBuf {
     crate::paths::runtime_dir().join("cloud").join(tag)
+}
+
+/// A pasta do `kubectl` de um lançamento (só falsos), apagada no fim dele.
+pub fn kube_dir_path(tag: &str) -> PathBuf {
+    crate::paths::runtime_dir().join("kube").join(tag)
 }
 
 /// Arquivo da política de arquivos de um lançamento, numa pasta 700 do

@@ -2,9 +2,9 @@
 
 > Português: [cloud.md](../cloud.md)
 
-The agent uses `gcloud` and the Google Cloud libraries inside the sandbox, but no real cloud credential enters it. Each cloud identity in the vault becomes a fake token in the tab. The real one stays outside the sandbox, with the daemon, and the gateway puts it in place of the fake only in requests to the Google APIs. A fake copied out is worth nothing.
+The agent uses `gcloud`, the Google Cloud libraries and `kubectl` inside the sandbox, but no real cloud credential enters it. Each cloud identity in the vault becomes a fake token in the tab. The real one stays outside the sandbox, with the daemon, and the gateway puts it in place of the fake only in requests to that identity's cloud. A fake copied out is worth nothing.
 
-Today sandmux covers GCP. Kubernetes and AWS come later.
+Today sandmux covers GCP and Kubernetes ([below](#kubernetes)). AWS comes later.
 
 ## Storing an identity
 
@@ -65,3 +65,57 @@ Like the API keys, the identity applies to every tab, in any folder.
 - **Old `gsutil` and `bq`:** they have their own authentication. Use `gcloud storage` and `bq` through `gcloud`.
 - **Identity tokens:** `gcloud auth print-identity-token` and authenticated Cloud Run do not work: the fake is an access token.
 - **`gcloud auth login` inside the tab:** it writes a real token into the synthetic HOME, as today. Log in on the host.
+
+## Kubernetes
+
+### Storing the contexts
+
+With the vault unlocked, one command stores every context of the host kubeconfig (the one in `KUBECONFIG`, or `~/.kube/config`), each as an identity:
+
+```sh
+# Every context, by reference to the host (the default)
+sandmux vault add-cloud kubernetes
+
+# Only some contexts
+sandmux vault add-cloud kubernetes --context kind-dev --context gke_app_europe-west1_main
+
+# Copy of the server, the CA and the credential of a context
+sandmux vault add-cloud kubernetes --context kind-dev --copy
+```
+
+The name in the vault is `kube:<name>`, with the context name in lowercase and each character other than letters, digits and `-` replaced by `-`: `arn:aws:eks:us-east-1:123:cluster/prod` becomes `kube:arn-aws-eks-us-east-1-123-cluster-prod`. A name already in the vault is skipped, with a warning. The identity of the host's current context is the default.
+
+- **Reference to the host (the default):** the vault keeps only the context, the kubeconfig path, the server and the namespace. The daemon reads the context with the host `kubectl` (`kubectl config view --raw --flatten --minify`) and, when its user has an `exec` plugin (`aws eks get-token`, `gke-gcloud-auth-plugin`, `kubelogin`), runs the plugin on the host, without a terminal, with your environment. When the plugin asks for a new login, log in on the host (`aws sso login`, `gcloud auth login`).
+- **Copy (`--copy`):** the server, the cluster CA and the credential (the token, or the client certificate with its key) are encrypted in the vault. A context with an `exec` plugin cannot be copied: the plugin only runs on the host.
+
+sandmux refuses the old `auth-provider` and users with a password. Without `--context`, a refused context is skipped with the reason, and the others are stored. `sandmux vault list` shows each identity with the source, the server and the fake, never the token, the certificate or the key. To take a context away from the agent, `sandmux vault remove kube:<name>`.
+
+### In the tab
+
+With at least one Kubernetes identity, every tab gets, only during the run, a writable `~/.kube` folder and a kubeconfig with fakes only (`KUBECONFIG` points to it):
+
+- one context per identity, with the original name and the host namespace;
+- the server `https://<name>.kube.sandmux.internal`, with the launch CA (`~/.kube/sandmux-ca.crt`);
+- one fake token per identity (`sandmux-fake-kube-…`);
+- the current context on the default identity.
+
+`kubectl config use-context`, the discovery cache and everything else `kubectl` writes stay in the tab's folder, which goes away at the end.
+
+### In the gateway
+
+The tab's DNS answers every `*.kube.sandmux.internal` with `10.0.2.253`, and that name passes the network policy without a rule, in any mode: storing the identity is the consent. The gateway decrypts the connection and connects by itself to the stored server, never to the destination the sandbox asked for, including a cluster on the host's `127.0.0.1` (kind and minikube). The server certificate is verified against the cluster CA, and the gateway presents the client certificate when there is one.
+
+On each request, the gateway swaps the fake token for the real one (from the kubeconfig, the `tokenFile` or the plugin). When the credential is only the client certificate, the gateway removes the `Authorization`. The `Host` and the path prefix (Rancher's, for example) come from the real server. The log has the identity name and the real server, never the credential. `kubectl exec`, `attach`, `cp`, `logs -f`, `port-forward` and `get -w` work, over WebSocket or SPDY.
+
+The real one is fetched again before the plugin's expiry. Without an expiry (a token or a certificate from the kubeconfig), it is reread every 10 minutes, and a change in the host kubeconfig takes effect within that time. When the real one is missing (`kubectl` is not on the host, the context is gone, the plugin fails), the gateway answers `401` with a Kubernetes `Status` that gives the reason, and the daemon warns once, as with GCP. A name without an identity gets `404`. `sandmux doctor` warns about each reference without `kubectl` on the host.
+
+### What the agent can do
+
+Whatever the RBAC of each context allows: the gateway does not filter requests to the API server. An administrator context makes the agent an administrator. Prefer a context with its own ServiceAccount and the minimum permissions, and remove from the vault the production contexts the agent must not see. Reading `secrets` gives the agent the real credentials the cluster stores.
+
+### Kubernetes limits
+
+- **HTTP/2:** the gateway offers only HTTP/1.1, and `client-go` switches to it by itself.
+- **kubeconfig `proxy-url`:** the gateway connects straight to the server.
+- **`insecure-skip-tls-verify`:** when the host kubeconfig asks for it, the gateway does not verify the server either.
+- **A renewed client certificate** takes effect on the next connection; a long connection (`get -w`) keeps the previous one until the server closes it.

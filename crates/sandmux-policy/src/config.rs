@@ -2057,6 +2057,7 @@ impl Effective {
             fake_env: Vec::new(),
             tool_secrets: Vec::new(),
             gcloud_dir: None,
+            kube_dir: None,
             ssh_agent_socket: None,
             ssh_servers: Vec::new(),
             window: None,

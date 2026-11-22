@@ -1163,30 +1163,53 @@ fn daemon_group() -> Group {
         )),
         Err(e) => Check::item(State::Fail, status, format!("{e:#}")),
     });
-    // Identidades de cloud por referência: o real vem do `gcloud` do host.
+    // Identidades de cloud por referência: o real vem do `gcloud` ou do
+    // `kubectl` do host.
     if let Ok(Some(mut c)) = Conn::connect()
         && let Ok(Msg::VaultEntries { entries }) = c.call(&Msg::VaultList)
-        && !sandmux::cloud::gcloud_present()
     {
+        let gcloud = sandmux::cloud::gcloud_present();
+        let kubectl = sandmux::kube::kubectl_present();
         for e in entries {
-            if e.cloud.as_ref().is_some_and(|c| c.source == "host") {
-                let label = trf!("identidade {}", "identity {}", e.name);
-                let why = trf!(
-                    "a identidade {} precisa do gcloud no host, que não foi achado",
-                    "identity {} needs gcloud on the host, which was not found",
-                    e.name
-                );
-                let hint = tr!(
-                    "  Instale o gcloud e rode `gcloud auth login` no host; sem ele, o gateway\n  não tem o token real, e a aba recebe invalid_grant. Detalhes em docs/cloud.md.",
-                    "  Install gcloud and run `gcloud auth login` on the host; without it, the\n  gateway has no real token, and the tab gets invalid_grant. Details in\n  docs/en/cloud.md."
-                );
-                let mark = tr!("aviso", "warn");
-                checks.push(
-                    Check::new(State::Warn, label, why.clone())
-                        .help(flat(hint))
-                        .cli(format!("[{mark}] {why}\n{hint}")),
-                );
+            let Some(info) = e.cloud.as_ref().filter(|c| c.source == "host") else {
+                continue;
+            };
+            let kube = info.provider == "kubernetes";
+            if (kube && kubectl) || (!kube && gcloud) {
+                continue;
             }
+            let label = trf!("identidade {}", "identity {}", e.name);
+            let (why, hint) = if kube {
+                (
+                    trf!(
+                        "a identidade {} precisa do kubectl no host, que não foi achado",
+                        "identity {} needs kubectl on the host, which was not found",
+                        e.name
+                    ),
+                    tr!(
+                        "  Instale o kubectl no host; sem ele, o gateway não lê o contexto, e a aba\n  recebe 401. Detalhes em docs/cloud.md.",
+                        "  Install kubectl on the host; without it, the gateway cannot read the\n  context, and the tab gets 401. Details in docs/en/cloud.md."
+                    ),
+                )
+            } else {
+                (
+                    trf!(
+                        "a identidade {} precisa do gcloud no host, que não foi achado",
+                        "identity {} needs gcloud on the host, which was not found",
+                        e.name
+                    ),
+                    tr!(
+                        "  Instale o gcloud e rode `gcloud auth login` no host; sem ele, o gateway\n  não tem o token real, e a aba recebe invalid_grant. Detalhes em docs/cloud.md.",
+                        "  Install gcloud and run `gcloud auth login` on the host; without it, the\n  gateway has no real token, and the tab gets invalid_grant. Details in\n  docs/en/cloud.md."
+                    ),
+                )
+            };
+            let mark = tr!("aviso", "warn");
+            checks.push(
+                Check::new(State::Warn, label, why.clone())
+                    .help(flat(hint))
+                    .cli(format!("[{mark}] {why}\n{hint}")),
+            );
         }
     }
     let unit = systemd::unit_path();
