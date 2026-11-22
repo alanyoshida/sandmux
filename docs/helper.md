@@ -86,6 +86,8 @@ O auxiliar precisa de duas coisas:
 
 **`sandmux setup`** grava as unidades `sandmux-helper.socket` e `sandmux-helper.service` em `/etc/systemd/system` e liga o socket. Ele usa `sudo` depois de perguntar, como faz com o perfil do AppArmor ([install.md](install.md#sandmux-setup)).
 
+**Depois de atualizar o sandmux**, rode `sandmux setup` de novo. O auxiliar em execução só troca ao ser reiniciado, e o setup o reinicia; atualizar os binários não basta. Enquanto o auxiliar antigo está de pé, o que depende do novo pode faltar ou sair incompleto: a [árvore de processos](tui.md#processos), por exemplo, sai sem os pais. O `sandmux doctor` avisa disso com `[aviso] versão do auxiliar root`, mostrando a versão do auxiliar e a do sandmux, e a seção Processos da TUI mostra o mesmo aviso. É um aviso, não uma falha: o código de saída do `doctor` não muda.
+
 Ele recusa instalar quando o binário, ou uma pasta acima dele, pode ser alterado por um usuário que não seja o root. É o caso de `~/.local/bin`, onde o `install.sh` põe os binários sem `sudo`. O motivo: o serviço roda como root, e quem altera o binário ganharia root.
 
 Com `--no-sudo`, o setup mostra os comandos para rodar como root:

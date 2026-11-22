@@ -55,6 +55,45 @@ fn doctor_com_suporte_completo() {
 }
 
 #[test]
+fn doctor_avisa_do_auxiliar_root_antigo() {
+    let e = Env::new();
+    let own = env!("CARGO_PKG_VERSION");
+    let h = common::fakehelper::FakeHelper::start(&e.runtime, "0.0.1");
+    let run = || {
+        e.cmd(&e.work, &["doctor"])
+            .env("SANDMUX_HELPER_SOCKET", &h.socket)
+            .output()
+            .unwrap()
+    };
+    // Um auxiliar de antes da atualização: o aviso, com as duas versões e a
+    // correção.
+    let old = run();
+    let s = stdout(&old);
+    assert!(
+        s.contains(&format!(
+            "[aviso] versão do auxiliar root: auxiliar root 0.0.1, mais antigo que o sandmux {own}"
+        )),
+        "{s}"
+    );
+    assert!(
+        s.contains("Rode `sandmux setup`, que o\n  reinicia com sudo."),
+        "{s}"
+    );
+    // Na mesma versão, ou numa mais nova, nada; e o aviso não muda o código
+    // de saída.
+    for v in [own, "999.0.0"] {
+        h.set_version(v);
+        let now = run();
+        let s = stdout(&now);
+        assert!(!s.contains("versão do auxiliar root"), "{v}:\n{s}");
+        assert_eq!(now.status.code(), old.status.code(), "{v}:\n{s}");
+    }
+    // Sem auxiliar, também nada.
+    let s = stdout(&e.run(&e.work, &["doctor"]));
+    assert!(!s.contains("versão do auxiliar root"), "{s}");
+}
+
+#[test]
 fn doctor_sem_camada_de_escrita_avisa_e_termina_com_zero() {
     let e = Env::new();
     let out = e

@@ -200,6 +200,7 @@ pub fn home() -> PathBuf {
 }
 
 pub mod cli;
+pub mod fakehelper;
 pub mod pty;
 pub mod wayland;
 

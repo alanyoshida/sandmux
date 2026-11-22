@@ -806,6 +806,7 @@ fn auxiliar_root_documentado() {
         "scripts/check-root.sh",
         "lsm=",
         "sudo systemctl disable --now sandmux-helper.socket",
+        "[aviso] versão do auxiliar root",
     ] {
         assert!(doc.contains(c), "docs/helper.md não cita {c}");
     }

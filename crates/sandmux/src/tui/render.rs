@@ -1042,6 +1042,38 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
             );
         }
         y += 2;
+        if let Some(old) = &v.old_helper {
+            put(
+                f,
+                x0,
+                y,
+                w,
+                Line::styled(
+                    trf!(
+                        "auxiliar root {old} mais antigo que o sandmux {}",
+                        "root helper {old} is older than sandmux {}",
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                    base.fg(c("status-fg")).add_modifier(Modifier::BOLD),
+                ),
+                base,
+            );
+            put(
+                f,
+                x0,
+                y + 1,
+                w,
+                Line::styled(
+                    tr!(
+                        "a árvore pode sair sem os pais; rode `sandmux setup` para reiniciar o auxiliar",
+                        "the tree may come without parents; run `sandmux setup` to restart the helper"
+                    ),
+                    base.fg(muted),
+                ),
+                base,
+            );
+            y += 3;
+        }
         if let Some(why) = &v.unavailable {
             put(
                 f,

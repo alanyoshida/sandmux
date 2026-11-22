@@ -86,6 +86,8 @@ The helper needs two things:
 
 **`sandmux setup`** writes the `sandmux-helper.socket` and `sandmux-helper.service` units to `/etc/systemd/system` and enables the socket. It uses `sudo` after asking, as it does with the AppArmor profile ([install.md](install.md#sandmux-setup)).
 
+**After updating sandmux**, run `sandmux setup` again. The running helper only changes when it is restarted, and setup restarts it; updating the binaries is not enough. While the old helper is up, what depends on the new one may be missing or incomplete: the [process tree](tui.md#processes), for example, comes without parents. `sandmux doctor` warns about it with `[warn] root helper version`, showing the helper's version and sandmux's, and the Processes section of the TUI shows the same warning. It is a warning, not a failure: the `doctor` exit code does not change.
+
 It refuses to install when the binary, or a folder above it, can be changed by a user other than root. That is the case of `~/.local/bin`, where `install.sh` puts the binaries without `sudo`. The reason: the service runs as root, and whoever changes the binary would gain root.
 
 With `--no-sudo`, setup shows the commands to run as root:
