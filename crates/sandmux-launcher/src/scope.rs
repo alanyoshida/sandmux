@@ -267,7 +267,9 @@ fn register_ns(ns: &OwnedFd, params: &TabScope) -> Result<OwnedFd, String> {
 }
 
 /// Tenta `f` enquanto ele não tem resposta, até `total`; sem o socket do
-/// auxiliar, só até `missing`.
+/// auxiliar seguidamente por `missing`, desiste antes. O prazo curto conta
+/// da primeira falta do socket, e não do começo: na troca, o auxiliar velho
+/// demora a sair (sem resposta) e o socket some só por um instante depois.
 fn retry<T>(
     total: Duration,
     missing: Duration,
@@ -275,15 +277,24 @@ fn retry<T>(
     mut f: impl FnMut() -> Result<T, Fail>,
 ) -> Result<T, String> {
     let start = Instant::now();
+    let mut missing_since: Option<Instant> = None;
     loop {
-        match f() {
+        let r = f();
+        if !matches!(r, Err(Fail::Missing(_))) {
+            missing_since = None;
+        }
+        match r {
             Ok(v) => return Ok(v),
             Err(Fail::Refused(m)) => return Err(m),
-            Err(Fail::Missing(m)) if start.elapsed() >= missing.min(total) => return Err(m),
-            Err(Fail::NoAnswer(m)) if start.elapsed() >= total => return Err(m),
-            Err(Fail::Missing(_) | Fail::NoAnswer(_)) => {
-                std::thread::sleep(every.min(missing.min(total)))
+            Err(Fail::Missing(m)) => {
+                let since = *missing_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= missing || start.elapsed() >= total {
+                    return Err(m);
+                }
+                std::thread::sleep(every.min(missing));
             }
+            Err(Fail::NoAnswer(m)) if start.elapsed() >= total => return Err(m),
+            Err(Fail::NoAnswer(_)) => std::thread::sleep(every),
         }
     }
 }
@@ -458,6 +469,21 @@ mod tests {
             "{:?}",
             t.elapsed()
         );
+        // A troca: o auxiliar velho sem responder por mais que o prazo
+        // curto, o socket faltando um instante, e o novo respondendo.
+        let t = Instant::now();
+        let mut n = 0;
+        let r = retry(s5, Duration::from_millis(100), ms, || {
+            n += 1;
+            if t.elapsed() < Duration::from_millis(200) {
+                Err(Fail::NoAnswer("saindo".into()))
+            } else if n % 3 != 0 {
+                Err(Fail::Missing("trocando".into()))
+            } else {
+                Ok(n)
+            }
+        });
+        assert!(r.is_ok(), "{r:?}");
     }
 
     #[test]
