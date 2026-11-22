@@ -1,6 +1,6 @@
 //! Conexões decifradas: o gateway termina o TLS do sandbox com um certificado
 //! assinado pela CA do lançamento, abre TLS até o destino real e repassa cada
-//! pedido HTTP/1.1, registrando método, caminho e status. É aqui que a chave
+//! pedido (HTTP/1.1 ou HTTP/2), registrando método, caminho e status. É aqui que a chave
 //! falsa vira a real (changes 13 e 25), em [`rewrite`].
 
 use std::io;
@@ -135,6 +135,95 @@ impl Body for Counted {
 }
 
 type Boxed = BoxBody<Bytes, hyper::Error>;
+
+/// O destino de uma conexão decifrada: HTTP/1.1, um pedido de cada vez, ou
+/// HTTP/2, com os pedidos em paralelo.
+#[derive(Clone)]
+pub enum Upstream {
+    H1(Arc<tokio::sync::Mutex<hyper::client::conn::http1::SendRequest<Boxed>>>),
+    H2(hyper::client::conn::http2::SendRequest<Boxed>),
+}
+
+impl Upstream {
+    /// Abre o protocolo sobre a conexão já aberta até o destino.
+    pub async fn handshake<U>(io: U, h2: bool) -> Option<Upstream>
+    where
+        U: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        if h2 {
+            let (s, conn) = hyper::client::conn::http2::handshake::<_, _, Boxed>(
+                hyper_util::rt::TokioExecutor::new(),
+                TokioIo::new(io),
+            )
+            .await
+            .ok()?;
+            tokio::spawn(conn);
+            Some(Upstream::H2(s))
+        } else {
+            let (s, conn) = hyper::client::conn::http1::handshake::<_, Boxed>(TokioIo::new(io))
+                .await
+                .ok()?;
+            tokio::spawn(conn.with_upgrades());
+            Some(Upstream::H1(Arc::new(tokio::sync::Mutex::new(s))))
+        }
+    }
+
+    /// Manda um pedido ao destino.
+    pub async fn send(
+        &self,
+        req: hyper::Request<Boxed>,
+    ) -> Result<hyper::Response<Incoming>, hyper::Error> {
+        match self {
+            Upstream::H1(s) => {
+                let mut s = s.lock().await;
+                s.ready().await?;
+                s.send_request(req).await
+            }
+            Upstream::H2(s) => {
+                let mut s = s.clone();
+                s.ready().await?;
+                s.send_request(to_h2(req)).await
+            }
+        }
+    }
+}
+
+/// Um pedido para um destino HTTP/2: a URI absoluta, com a autoridade do
+/// `Host` (que o caminho do Kubernetes troca) ou do `:authority`, e sem os
+/// cabeçalhos de conexão do HTTP/1.1.
+pub fn to_h2<B>(mut req: hyper::Request<B>) -> hyper::Request<B> {
+    use hyper::header::{CONNECTION, HOST, TE, TRANSFER_ENCODING, UPGRADE};
+    let authority = req
+        .headers()
+        .get(HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .or_else(|| req.uri().authority().map(|a| a.to_string()));
+    if let Some(a) = authority {
+        let pq = req
+            .uri()
+            .path_and_query()
+            .map(|p| p.as_str().to_string())
+            .unwrap_or_else(|| "/".into());
+        if let Ok(u) = format!("https://{a}{pq}").parse() {
+            *req.uri_mut() = u;
+        }
+    }
+    let h = req.headers_mut();
+    for k in [HOST, CONNECTION, TRANSFER_ENCODING, UPGRADE] {
+        h.remove(k);
+    }
+    for k in ["keep-alive", "proxy-connection"] {
+        h.remove(k);
+    }
+    if h.get(TE)
+        .is_some_and(|v| !v.as_bytes().eq_ignore_ascii_case(b"trailers"))
+    {
+        h.remove(TE);
+    }
+    *req.version_mut() = hyper::Version::HTTP_2;
+    req
+}
 
 /// Ponto de troca: o falso de um segredo deste domínio vira o real, nos
 /// cabeçalhos e no caminho da URL. Devolve o nome do segredo usado.
@@ -508,7 +597,7 @@ fn refuse(status: u16, msg: &str) -> hyper::Response<Boxed> {
 async fn capture_exchange(
     parts: hyper::http::request::Parts,
     raw: Bytes,
-    sender: Arc<tokio::sync::Mutex<hyper::client::conn::http1::SendRequest<Boxed>>>,
+    sender: Upstream,
     ctx: Arc<Ctx>,
     list: Vec<sandmux_proto::msg::Injection>,
     capture: bool,
@@ -542,13 +631,7 @@ async fn capture_exchange(
     let up = sent.len() as u64;
     let mut out = hyper::Request::from_parts(parts, full(sent));
     let secret = rewrite(&mut out, &list).or(body_secret);
-    let resp = {
-        let mut s = sender.lock().await;
-        match s.ready().await {
-            Ok(()) => s.send_request(out).await,
-            Err(e) => Err(e),
-        }
-    };
+    let resp = sender.send(out).await;
     let Ok(resp) = resp else {
         log(502, up, 0, secret.as_deref());
         return Ok(refuse(502, "sandmux: o destino falhou"));
@@ -650,7 +733,8 @@ pub async fn connect_upstream(
 }
 
 /// Serve a conexão decifrada do sandbox: TLS com o certificado do domínio,
-/// HTTP/1.1, cada pedido repassado pelo TLS já aberto até o destino.
+/// cada pedido repassado pelo TLS já aberto até o destino, no protocolo que
+/// cada ponta negociou (o ALPN).
 pub async fn serve<S>(
     guest: S,
     server: Arc<rustls::ServerConfig>,
@@ -662,23 +746,22 @@ pub async fn serve<S>(
     let Ok(tls) = tokio_rustls::TlsAcceptor::from(server).accept(guest).await else {
         return;
     };
-    serve_http(tls, upstream, ctx).await;
+    let guest_h2 = crate::tls::negotiated_h2(tls.get_ref().1.alpn_protocol());
+    let up_h2 = crate::tls::negotiated_h2(upstream.get_ref().1.alpn_protocol());
+    serve_http(tls, upstream, ctx, guest_h2, up_h2).await;
 }
 
-/// Serve HTTP/1.1 do sandbox ao destino, pedido a pedido, trocando os
-/// falsos dos segredos de `ctx` e registrando cada pedido.
-pub async fn serve_http<G, U>(guest: G, upstream: U, ctx: Arc<Ctx>)
+/// Serve o sandbox ao destino, pedido a pedido, trocando os falsos dos
+/// segredos de `ctx` e registrando cada pedido. `guest_h2` e `up_h2` dizem
+/// o protocolo de cada ponta: HTTP/2 ou HTTP/1.1.
+pub async fn serve_http<G, U>(guest: G, upstream: U, ctx: Arc<Ctx>, guest_h2: bool, up_h2: bool)
 where
     G: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     U: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let Ok((sender, conn)) =
-        hyper::client::conn::http1::handshake::<_, Boxed>(TokioIo::new(upstream)).await
-    else {
+    let Some(sender) = Upstream::handshake(upstream, up_h2).await else {
         return;
     };
-    tokio::spawn(conn.with_upgrades());
-    let sender = Arc::new(tokio::sync::Mutex::new(sender));
     let service = hyper::service::service_fn(move |mut req: hyper::Request<Incoming>| {
         let sender = sender.clone();
         let ctx = ctx.clone();
@@ -822,13 +905,7 @@ where
                 out.headers_mut().remove("sec-websocket-extensions");
             }
             let secret = rewrite(&mut out, &list).or(kube).or(aws_name);
-            let resp = {
-                let mut s = sender.lock().await;
-                match s.ready().await {
-                    Ok(()) => s.send_request(out).await,
-                    Err(e) => Err(e),
-                }
-            };
+            let resp = sender.send(out).await;
             let resp = match resp {
                 Ok(r) => r,
                 Err(_) => {
@@ -927,10 +1004,16 @@ where
             Ok(hyper::Response::from_parts(parts, body.boxed()))
         }
     });
-    let _ = hyper::server::conn::http1::Builder::new()
-        .serve_connection(TokioIo::new(guest), service)
-        .with_upgrades()
-        .await;
+    if guest_h2 {
+        let _ = hyper::server::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
+            .serve_connection(TokioIo::new(guest), service)
+            .await;
+    } else {
+        let _ = hyper::server::conn::http1::Builder::new()
+            .serve_connection(TokioIo::new(guest), service)
+            .with_upgrades()
+            .await;
+    }
 }
 
 /// A conexão depois do `101`. No WebSocket, o sandbox ao destino pelo
@@ -1116,7 +1199,7 @@ mod tests {
             harness: l.harness.into(),
             refreshed: Default::default(),
         });
-        tokio::spawn(serve_http(guest_side, up_side, ctx));
+        tokio::spawn(serve_http(guest_side, up_side, ctx, false, false));
         // O "destino": lê o pedido e responde com tokens novos.
         let server = tokio::spawn(async move {
             let mut buf = vec![0u8; 8192];
@@ -1236,7 +1319,7 @@ mod tests {
             harness: "shell".into(),
             refreshed: Default::default(),
         });
-        tokio::spawn(serve_http(guest_side, up_side, ctx));
+        tokio::spawn(serve_http(guest_side, up_side, ctx, false, false));
         guest.write_all(req.as_bytes()).await.unwrap();
         let mut seen = Vec::new();
         let mut buf = vec![0u8; 4096];
@@ -1348,7 +1431,7 @@ mod tests {
             harness: "shell".into(),
             refreshed: Default::default(),
         });
-        tokio::spawn(serve_http(guest_side, up_side, ctx));
+        tokio::spawn(serve_http(guest_side, up_side, ctx, false, false));
         guest
             .write_all(b"POST /exec HTTP/1.1\r\nhost: a.test\r\nconnection: Upgrade\r\nupgrade: SPDY/3.1\r\n\r\n")
             .await
@@ -1453,7 +1536,7 @@ mod tests {
             harness: "shell".into(),
             refreshed: Default::default(),
         });
-        tokio::spawn(serve_http(guest_side, up_side, ctx));
+        tokio::spawn(serve_http(guest_side, up_side, ctx, false, false));
         let body = "grant_type=refresh_token&client_id=c&refresh_token=1%2F%2Fsandmux-fake-R";
         let req = format!(
             "POST /token HTTP/1.1\r\nhost: oauth2.googleapis.com\r\ncontent-type: application/x-www-form-urlencoded\r\ncontent-length: {}\r\n\r\n{body}",
@@ -1702,5 +1785,183 @@ mod tests {
         assert!(seen.contains("refresh_token=1%2F%2FsandmuxFR"), "{seen}");
         assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
         assert!(resp.contains("ya29.NEW-A_1"), "{resp}");
+    }
+
+    fn h2_ctx(dir: &std::path::Path) -> Arc<Ctx> {
+        Arc::new(Ctx {
+            log: Arc::new(crate::log::Log::new(dir, "t", dir)),
+            proto: "https",
+            domain: "api.exemplo.test".into(),
+            ip: "1.2.3.4".into(),
+            port: 443,
+            injections: vec![inj("chave", "sandmux-fake-x", "sk-real")],
+            vault: None,
+            tag: "t".into(),
+            harness: "shell".into(),
+            refreshed: Default::default(),
+        })
+    }
+
+    /// Um destino HTTP/2: ecoa a autoridade, o caminho e o `Authorization`,
+    /// e manda um trailer `grpc-status`. `/lento` só responde depois de um
+    /// `/rapido` chegar: com os pedidos em fila, travaria.
+    fn h2_upstream(io: tokio::io::DuplexStream) {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let svc = hyper::service::service_fn(move |req: hyper::Request<Incoming>| {
+            let gate = gate.clone();
+            async move {
+                if req.uri().path() == "/lento" {
+                    gate.notified().await;
+                } else {
+                    gate.notify_one();
+                }
+                let auth = req
+                    .headers()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("-")
+                    .to_string();
+                let text = format!(
+                    "versao={:?} autoridade={} caminho={} recebido={auth}",
+                    req.version(),
+                    req.uri()
+                        .authority()
+                        .map(|a| a.to_string())
+                        .unwrap_or_default(),
+                    req.uri().path()
+                );
+                let mut t = hyper::HeaderMap::new();
+                t.insert("grpc-status", "0".parse().unwrap());
+                let body = http_body_util::Full::new(Bytes::from(text))
+                    .with_trailers(async move { Some(Ok::<_, std::convert::Infallible>(t)) });
+                Ok::<_, std::convert::Infallible>(hyper::Response::new(body))
+            }
+        });
+        tokio::spawn(async move {
+            let _ = hyper::server::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
+                .serve_connection(TokioIo::new(io), svc)
+                .await;
+        });
+    }
+
+    #[tokio::test]
+    async fn http2_nas_duas_pontas() {
+        let (guest, guest_side) = tokio::io::duplex(1 << 16);
+        let (up_side, upstream) = tokio::io::duplex(1 << 16);
+        let dir = tempfile::tempdir().unwrap();
+        h2_upstream(upstream);
+        tokio::spawn(serve_http(
+            guest_side,
+            up_side,
+            h2_ctx(dir.path()),
+            true,
+            true,
+        ));
+        let (client, conn) = hyper::client::conn::http2::handshake::<_, _, Boxed>(
+            hyper_util::rt::TokioExecutor::new(),
+            TokioIo::new(guest),
+        )
+        .await
+        .unwrap();
+        tokio::spawn(conn);
+        let get = |path: &'static str| {
+            let mut c = client.clone();
+            async move {
+                let req = hyper::Request::builder()
+                    .uri(format!("https://api.exemplo.test{path}"))
+                    .header("authorization", "Bearer sandmux-fake-x")
+                    .header("te", "trailers")
+                    .body(full(Bytes::new()))
+                    .unwrap();
+                let resp = c.send_request(req).await.unwrap();
+                let collected = resp.into_body().collect().await.unwrap();
+                let trailers = collected.trailers().cloned();
+                (
+                    String::from_utf8_lossy(&collected.to_bytes()).into_owned(),
+                    trailers,
+                )
+            }
+        };
+        let both = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(get("/lento"), get("/rapido"))
+        })
+        .await
+        .expect("os pedidos andaram em fila");
+        let ((lento, t1), (rapido, _)) = both;
+        assert!(rapido.contains("versao=HTTP/2.0"), "{rapido}");
+        assert!(
+            rapido.contains("autoridade=api.exemplo.test caminho=/rapido"),
+            "{rapido}"
+        );
+        assert!(rapido.contains("recebido=Bearer sk-real"), "{rapido}");
+        assert!(lento.contains("caminho=/lento"), "{lento}");
+        assert_eq!(t1.unwrap()["grpc-status"], "0");
+        // As duas linhas no registro, com o nome do segredo.
+        let log: String = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter_map(|f| std::fs::read_to_string(f.path()).ok())
+            .collect();
+        assert_eq!(log.matches("\"secret\":\"chave\"").count(), 2, "{log}");
+    }
+
+    #[tokio::test]
+    async fn http1_no_sandbox_e_http2_no_destino() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut guest, guest_side) = tokio::io::duplex(1 << 16);
+        let (up_side, upstream) = tokio::io::duplex(1 << 16);
+        let dir = tempfile::tempdir().unwrap();
+        h2_upstream(upstream);
+        tokio::spawn(serve_http(
+            guest_side,
+            up_side,
+            h2_ctx(dir.path()),
+            false,
+            true,
+        ));
+        guest
+            .write_all(b"GET /rapido?a=1 HTTP/1.1\r\nHost: api.exemplo.test\r\nAuthorization: Bearer sandmux-fake-x\r\nConnection: keep-alive\r\n\r\n")
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        let mut buf = vec![0u8; 4096];
+        while !String::from_utf8_lossy(&out).contains("recebido=") {
+            let n = tokio::time::timeout(std::time::Duration::from_secs(5), guest.read(&mut buf))
+                .await
+                .unwrap()
+                .unwrap();
+            out.extend_from_slice(&buf[..n]);
+        }
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+        assert!(
+            text.contains("versao=HTTP/2.0 autoridade=api.exemplo.test caminho=/rapido"),
+            "{text}"
+        );
+        assert!(text.contains("recebido=Bearer sk-real"), "{text}");
+    }
+
+    #[test]
+    fn pedido_para_um_destino_h2() {
+        let req = hyper::Request::builder()
+            .uri("/api/v1?x=1")
+            .header("host", "real.example:6443")
+            .header("connection", "keep-alive")
+            .header("te", "gzip")
+            .body(())
+            .unwrap();
+        let r = to_h2(req);
+        assert_eq!(r.uri().to_string(), "https://real.example:6443/api/v1?x=1");
+        assert!(r.headers().get("host").is_none() && r.headers().get("connection").is_none());
+        assert!(r.headers().get("te").is_none());
+        // Sem `Host`, a autoridade da URI fica.
+        let req = hyper::Request::builder()
+            .uri("https://a.test/p")
+            .header("te", "trailers")
+            .body(())
+            .unwrap();
+        let r = to_h2(req);
+        assert_eq!(r.uri().to_string(), "https://a.test/p");
+        assert_eq!(r.headers()["te"], "trailers");
     }
 }

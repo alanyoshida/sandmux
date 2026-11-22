@@ -172,8 +172,8 @@ pub fn declared_hash(headers: &hyper::HeaderMap) -> Option<String> {
 }
 
 /// Os cabeçalhos do pedido, com o nome em minúsculas.
-fn header_list(headers: &hyper::HeaderMap) -> Vec<(String, String)> {
-    headers
+fn header_list(headers: &hyper::HeaderMap, uri: &hyper::Uri) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = headers
         .iter()
         .map(|(k, v)| {
             (
@@ -181,7 +181,15 @@ fn header_list(headers: &hyper::HeaderMap) -> Vec<(String, String)> {
                 String::from_utf8_lossy(v.as_bytes()).into_owned(),
             )
         })
-        .collect()
+        .collect();
+    // Um pedido HTTP/2 traz a autoridade no `:authority`, sem o `Host`: o
+    // SDK assinou `host` com ela.
+    if !out.iter().any(|(k, _)| k == "host")
+        && let Some(a) = uri.authority()
+    {
+        out.push(("host".into(), a.to_string()));
+    }
+    out
 }
 
 /// Reassina o pedido com a chave real `c`. `body_hash` é o hash do corpo
@@ -217,7 +225,7 @@ pub fn resign(
             let payload = declared_hash(&parts.headers)
                 .or(body_hash.map(str::to_string))
                 .unwrap_or_else(|| sigv4::EMPTY_HASH.into());
-            let headers = header_list(&parts.headers);
+            let headers = header_list(&parts.headers, &parts.uri);
             let r = sigv4::Request {
                 method: parts.method.as_str(),
                 path: parts.uri.path(),
@@ -277,7 +285,7 @@ pub fn resign(
             } else {
                 body_hash.unwrap_or(sigv4::EMPTY_HASH).to_string()
             };
-            let headers = header_list(&parts.headers);
+            let headers = header_list(&parts.headers, &parts.uri);
             let r = sigv4::Request {
                 method: parts.method.as_str(),
                 path: parts.uri.path(),
@@ -690,7 +698,7 @@ mod tests {
         );
         assert_eq!(parts.headers["x-amz-security-token"], "TOKEN-REAL");
         // Quem tem a chave real confere a assinatura.
-        let headers = header_list(&parts.headers);
+        let headers = header_list(&parts.headers, &parts.uri);
         let r = sigv4::Request {
             method: "GET",
             path: "/",
@@ -942,6 +950,22 @@ mod tests {
                 .to_str()
                 .unwrap()
                 .contains("Credential=AKIAREAL/")
+        );
+    }
+
+    #[test]
+    fn host_do_authority_num_pedido_http2() {
+        let req = hyper::Request::builder()
+            .uri("https://bucket.s3.amazonaws.com/?list-type=2")
+            .header("x-amz-date", "20260101T000000Z")
+            .header("x-amz-content-sha256", sigv4::EMPTY_HASH)
+            .body(())
+            .unwrap();
+        let (parts, _) = req.into_parts();
+        let h = header_list(&parts.headers, &parts.uri);
+        assert!(
+            h.contains(&("host".to_string(), "bucket.s3.amazonaws.com".to_string())),
+            "{h:?}"
         );
     }
 }

@@ -46,6 +46,8 @@ With a GCP identity in the vault, every tab decrypts `*.googleapis.com`, and the
 - answers by itself the `POST /token` to `oauth2.googleapis.com` that carries the fake refresh token, with the fake access token, without going to Google;
 - logs each request with the identity's name (`key: gcp:work` in `sandmux net`), never the token.
 
+The Google libraries over gRPC (Pub/Sub, Firestore, Spanner) work too: the gateway speaks HTTP/2 with them and with Google, and swaps the token on each request (see [network.md](network.md#tls-decryption)).
+
 The real one stays only in the daemon's memory, with its validity, and is renewed before it expires: the gateway always gets a real one with at least 5 minutes left, also on a reused connection. With the vault locked, nothing is swapped.
 
 When the real one is missing (`gcloud` is not on the host, asks for a new login, or Google refuses the copy), the gateway lets the fake go on, and the tab's token request gets `invalid_grant` with what to do on the host. The daemon warns once per identity, through the desktop notification and in its log, until the real one comes back. `sandmux doctor` warns about each reference without `gcloud` on the host.
@@ -61,7 +63,6 @@ Like the API keys, the identity applies to every tab, in any folder.
 
 ## Limits
 
-- **gRPC:** the gateway decrypts only HTTP/1.1. The Google libraries that use gRPC (Pub/Sub, Firestore, Spanner) fail with `*.googleapis.com` decrypted. `gcloud` and the REST APIs (Storage, BigQuery, Compute) work.
 - **Old `gsutil` and `bq`:** they have their own authentication. Use `gcloud storage` and `bq` through `gcloud`.
 - **Identity tokens:** `gcloud auth print-identity-token` and authenticated Cloud Run do not work: the fake is an access token.
 - **`gcloud auth login` inside the tab:** it writes a real token into the synthetic HOME, as today. Log in on the host.
@@ -115,7 +116,6 @@ Whatever the RBAC of each context allows: the gateway does not filter requests t
 
 ### Kubernetes limits
 
-- **HTTP/2:** the gateway offers only HTTP/1.1, and `client-go` switches to it by itself.
 - **kubeconfig `proxy-url`:** the gateway connects straight to the server.
 - **`insecure-skip-tls-verify`:** when the host kubeconfig asks for it, the gateway does not verify the server either.
 - **A renewed client certificate** takes effect on the next connection; a long connection (`get -w`) keeps the previous one until the server closes it.
@@ -178,6 +178,6 @@ Whatever the IAM of the profile allows: the gateway does not filter requests. Pr
 ### AWS limits
 
 - **SigV4a** (`AWS4-ECDSA-P256-SHA256`, from multi-region access points): the request passes unchanged and fails at AWS.
-- **Event streams signed in the request** (Transcribe streaming, over HTTP/2): the gateway only speaks HTTP/1.1. Streamed answers (Bedrock `InvokeModelWithResponseStream`) work.
+- **Event streams signed in the request** (Transcribe streaming): the gateway redoes the request signature, but not the signature of each event in the stream. Streamed answers (Bedrock `InvokeModelWithResponseStream`) work.
 - **China** (`*.amazonaws.com.cn`) and the `*.api.aws` endpoints are not decrypted.
 - **`aws configure` or `aws sso login` inside the tab** write to the tab's folder, which goes away at the end. Log in on the host.

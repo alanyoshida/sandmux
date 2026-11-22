@@ -88,6 +88,7 @@ O foco principal é o sandbox, não a interface:
 | Serviços da máquina | Alcançados por um nome especial, informado ao agente |
 | Portas abertas pelo agente | Publicadas automaticamente no `localhost` do host e listadas no painel |
 | Decifração de TLS | Só nos domínios com segredo a injetar; ampliável por perfil |
+| Protocolo decifrado | HTTP/2 e gRPC em todo domínio decifrado, seguindo o cliente: o gateway oferece ao destino o ALPN do ClientHello do sandbox, e só fala h2 com o sandbox quando o destino também negociou h2; `http2 = false` na configuração volta ao HTTP/1.1. Decidido pelo usuário em 2026-11-22 (change 96), com os crates novos `h2` e `fnv` |
 | Log de rede | Domínio, método e caminho, sem corpo. Onde não há decifração, domínio e volume |
 | Retenção do log | 30 dias com teto de tamanho, ajustáveis |
 | QUIC (HTTP/3) | Bloqueado. Os programas caem para TLS comum, onde o domínio aparece e a troca de chave funciona |
@@ -589,6 +590,14 @@ Verificação à mão do 94, feita em 2026-11-22 com o OK do usuário: num ambie
 
 Verificação à mão pendente (93): numa máquina com o `gcloud` logado, `gcloud storage ls` e um script Python com `google.auth.default()` dentro de uma aba, com a identidade por referência e por cópia de chave. O host de desenvolvimento não tem o `gcloud`.
 
+### Etapa 20 - HTTP/2 no gateway
+
+Objetivo: o gateway decifra HTTP/2, e as bibliotecas gRPC funcionam num domínio decifrado. Pedido do usuário (2026-11-22, "HTTP/2 e gRPC"), depois da etapa 19: com uma identidade de GCP, toda aba decifra `*.googleapis.com`, e o gRPC quebrava nela.
+
+| # | Change | Situação | Conteúdo |
+|---|---|---|---|
+| 96 | `add-gateway-http2` | Arquivado em 2026-11-22 em `openspec/changes/archive/2026-11-22-add-gateway-http2/`, com a spec sincronizada (`tls-interception`: um requisito modificado e quatro novos). Implementado em 2026-11-22 (11 de 11 tarefas), com o `check.sh` verde (893 testes, sem processo de teste vivo), na ordem do usuário. Proposta, spec, design e tarefas validados (`openspec validate --strict`). Testes novos: `tests/http2.rs` (o `curl --http2` e o `--http1.1` numa aba contra um servidor h2 local, com a chave trocada, e o `http2 = false` do projeto), os de unidade (o ALPN do ClientHello do `rustls`, h2 nas duas pontas com a troca, os trailers e dois pedidos em paralelo, HTTP/1.1 no sandbox com h2 no destino, a URI do h2, o `host` da AWS pelo `:authority`, a chave nas camadas) e o de docs. Mudança do agente na implementação: o item `http2` da TUI fica no fim da seção de rede, para não mudar a posição dos outros. Não verificado: uma biblioteca gRPC de verdade contra o Google | O ALPN segue o cliente: o gateway lê a oferta do ClientHello, oferece o mesmo ao destino e só oferece h2 ao sandbox quando o destino negociou h2; o `serve_http` com HTTP/1.1 ou h2 em cada ponta, pedidos em paralelo no h2, trailers do gRPC; a URI absoluta para um destino h2 e o `host` da reassinatura pelo `:authority`; a chave `http2` (padrão `true`); os crates `h2` e `fnv` |
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
@@ -707,7 +716,7 @@ O que parece caso de eBPF e não é:
 - Num worktree, o agente alcança o histórico e as branches dos outros worktrees do mesmo repositório.
 - Uma credencial de cloud montada de propósito é real e fica ao alcance do agente até a credencial temporária existir.
 - Com as identidades de cloud (etapa 19), o limite é só o IAM: uma identidade que pode criar chaves de conta de serviço, ou ler o Secret Manager, deixa o agente obter uma credencial real pela própria API. O `docs/cloud.md` pede uma identidade sem essas permissões. Decisão do usuário (2026-11-22): o gateway não filtra os pedidos de cloud.
-- O gateway decifra só HTTP/1.1: as bibliotecas do Google por gRPC (Pub/Sub, Firestore, Spanner) falham com `*.googleapis.com` decifrado, que toda aba decifra quando há uma identidade de GCP (change 93). O HTTP/2 no gateway fica sem change.
+- ~~O gateway decifra só HTTP/1.1: as bibliotecas do Google por gRPC (Pub/Sub, Firestore, Spanner) falham com `*.googleapis.com` decifrado, que toda aba decifra quando há uma identidade de GCP (change 93). O HTTP/2 no gateway fica sem change.~~ Resolvido pelo change 96 (HTTP/2 e gRPC no gateway, 2026-11-22).
 - Kubernetes (change 94): o limite é o RBAC do contexto, e um comando guarda todos os contextos do host, inclusive os de produção (o aviso do comando lista o que foi guardado, e `vault remove kube:<nome>` tira um); o `insecure-skip-tls-verify` do host vale também no gateway; o plugin `exec` roda com o ambiente do daemon (o `PATH` e o `AWS_PROFILE` de quem o subiu); um certificado de cliente renovado só vale na conexão seguinte. Verificado à mão com o `kubectl` 1.34 contra um cluster kind do host (`get`, `exec`); não verificados: o EKS e o GKE de verdade (os plugins `exec` só nos testes, com um script)
 - AWS (change 95): o limite é o IAM do perfil, e um comando guarda todos os perfis do host; `iam:CreateAccessKey` e o Secrets Manager entregam uma credencial real que o gateway não troca (o aviso do comando e o `docs/cloud.md`); o pedido canônico é refeito pelo gateway, e uma diferença de canonização de um serviço com regra própria aparece como `SignatureDoesNotMatch` (`403` no registro); SigV4a, os event streams assinados no pedido e a China ficam de fora; as credenciais capturadas dentro da aba só vivem na memória do daemon (um `daemon restart` as perde). Verificação à mão pendente com uma conta da AWS: o host de desenvolvimento não tem o `aws` nem uma conta; os testes usam um `aws` falso, um cliente SigV4 em Python e um servidor local que confere a assinatura
 - Pacotes do sistema (`apt install`) não podem ser instalados dentro do sandbox, que não tem root. O caminho é um contêiner no Docker privado.
@@ -842,3 +851,4 @@ Novas decisões em aberto que surgirem ao propor um change devem ser anotadas aq
 | Rodar na VM os testes com root que faltavam depois do change 90 (pedido do usuário, 2026-11-21) | Change 91 |
 | Investigar o lançamento recusado no 6.8 logo depois da troca do auxiliar root ("Sim, investigar", 2026-11-22) | Change 92 |
 | Credencial temporária de cloud ("Credencial de cloud", 2026-11-22) | Etapa 19: change 93 (GCP), change 94 (Kubernetes) e change 95 (AWS) |
+| HTTP/2 e gRPC no gateway ("HTTP/2 e gRPC", 2026-11-22) | Etapa 20: change 96 |

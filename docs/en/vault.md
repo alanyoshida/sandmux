@@ -238,7 +238,7 @@ With the vault missing or locked at `run`, nothing is stored: `run` warns, and o
 
 ## Limits
 
-- The swap happens only in the headers of decrypted HTTP/1.1 requests, including inside `Authorization: Basic`. Providers that ask for the key in the body, or programs that pin the server's certificate, are not supported.
+- The swap happens only in the headers of decrypted requests (HTTP/1.1 or HTTP/2), including inside `Authorization: Basic`. Providers that ask for the key in the body, or programs that pin the server's certificate, are not supported.
 - The `--pass-env` of a variable without a secret in the vault still puts the real value inside the sandbox.
 - A process of the same user, outside the sandbox, with the privilege to read other processes' memory (such as a debugger with `CAP_SYS_PTRACE`), can reach the open vault. The threat sandmux targets is the agent inside the sandbox.
 - The system keyring is left for after v1.

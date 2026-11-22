@@ -177,6 +177,13 @@ pub struct NetPolicy {
     /// Portas do host: o `127.0.0.1:porta` do sandbox leva ao do host.
     #[serde(default)]
     pub host_ports: Vec<u16>,
+    /// HTTP/2 nas conexões decifradas, quando o cliente e o destino falam.
+    #[serde(default = "yes")]
+    pub http2: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Uma porta de entrada: `8642` ou `8443@0.0.0.0`.
@@ -243,6 +250,7 @@ impl Default for NetPolicy {
             ssh: Vec::new(),
             ports: Vec::new(),
             host_ports: Vec::new(),
+            http2: true,
         }
     }
 }
@@ -479,6 +487,7 @@ pub fn strictest(list: &[Option<NetPolicy>]) -> NetPolicy {
             ssh: Vec::new(),
             ports: Vec::new(),
             host_ports: Vec::new(),
+            http2: true,
         };
     }
     let first = same[0];
@@ -507,6 +516,7 @@ pub fn strictest(list: &[Option<NetPolicy>]) -> NetPolicy {
         ssh: Vec::new(),
         ports: Vec::new(),
         host_ports: Vec::new(),
+        http2: true,
     }
 }
 
@@ -852,6 +862,7 @@ mod tests {
             ssh: Vec::new(),
             ports: Vec::new(),
             host_ports: Vec::new(),
+            http2: true,
         };
         // Sem segredo de provedor: o catálogo inteiro.
         let mut sem = p.clone();
@@ -868,6 +879,7 @@ mod tests {
             ssh: Vec::new(),
             ports: Vec::new(),
             host_ports: Vec::new(),
+            http2: true,
         };
         c.restrict_inference(&["openrouter.ai".into()]);
         assert_eq!(c.decide_name("a.test"), Verdict::Pass);
@@ -886,6 +898,7 @@ mod tests {
             ssh: Vec::new(),
             ports: Vec::new(),
             host_ports: Vec::new(),
+            http2: true,
         };
         // O domínio dono é um padrão: casa com os provedores do Google.
         p.restrict_inference(&["*.googleapis.com".into(), "oauth2.googleapis.com".into()]);
@@ -904,6 +917,7 @@ mod tests {
                 ssh: Vec::new(),
                 ports: Vec::new(),
                 host_ports: Vec::new(),
+                http2: true,
             })
         };
         let open = pol(PolicyMode::Open, vec![rule("a.test", RuleKind::Deny)]);
@@ -956,6 +970,7 @@ mod tests {
             ssh: Vec::new(),
             ports: Vec::new(),
             host_ports: Vec::new(),
+            http2: true,
         };
         assert_eq!(open.decide_name("ok.test"), Verdict::Pass);
         assert!(
@@ -988,6 +1003,7 @@ mod tests {
             ssh: Vec::new(),
             ports: Vec::new(),
             host_ports: Vec::new(),
+            http2: true,
         };
         // Negar sempre vence.
         assert_eq!(custom.decide_name("www.exemplo.com"), Verdict::Pass);
@@ -1035,6 +1051,7 @@ mod tests {
             ssh: Vec::new(),
             ports: Vec::new(),
             host_ports: Vec::new(),
+            http2: true,
         };
         assert_eq!(
             inf.decide_name("exemplo.com"),

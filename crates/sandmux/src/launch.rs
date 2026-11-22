@@ -764,6 +764,7 @@ pub fn run_layer(opts: &LaunchOptions) -> Result<config::Layer> {
         gpu: opts.gpu,
         clipboard: opts.allow_clipboard,
         portal: opts.portal,
+        http2: None,
         memory,
         processes,
     })

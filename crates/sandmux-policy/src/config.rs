@@ -27,7 +27,15 @@ pub const FILE: &str = "config.toml";
 /// Chaves de lista, na ordem em que aparecem nas mensagens.
 pub const LIST_KEYS: &[&str] = &["ro", "rw", "pass-env"];
 /// Chaves de liga e desliga.
-pub const BOOL_KEYS: &[&str] = &["repo", "kvm", "gpu", "clipboard", "harness-asks", "portal"];
+pub const BOOL_KEYS: &[&str] = &[
+    "repo",
+    "kvm",
+    "gpu",
+    "clipboard",
+    "harness-asks",
+    "portal",
+    "http2",
+];
 /// Chaves de teto.
 pub const LIMIT_KEYS: &[&str] = &["memory", "processes"];
 /// Chaves da rede: o modo, em qualquer seção; a retenção do registro, só em
@@ -196,6 +204,8 @@ pub struct Layer {
     pub harness_asks: Option<bool>,
     /// O portal do desktop (`portal`).
     pub portal: Option<bool>,
+    /// O HTTP/2 nas conexões decifradas do gateway (`http2`).
+    pub http2: Option<bool>,
     pub memory: Option<MemoryLimit>,
     pub processes: Option<ProcessLimit>,
     pub network: Option<NetworkMode>,
@@ -263,6 +273,7 @@ impl Layer {
             "clipboard" => self.clipboard,
             "harness-asks" => self.harness_asks,
             "portal" => self.portal,
+            "http2" => self.http2,
             _ => None,
         }
     }
@@ -275,6 +286,7 @@ impl Layer {
             "clipboard" => Some(&mut self.clipboard),
             "harness-asks" => Some(&mut self.harness_asks),
             "portal" => Some(&mut self.portal),
+            "http2" => Some(&mut self.http2),
             _ => None,
         }
     }
@@ -1118,7 +1130,7 @@ fn layer_in(
                     l.pass_env.push(s);
                 }
             }
-            "repo" | "kvm" | "gpu" | "clipboard" | "harness-asks" | "portal" => {
+            "repo" | "kvm" | "gpu" | "clipboard" | "harness-asks" | "portal" | "http2" => {
                 let v = item.as_bool().ok_or_else(|| {
                     err(
                         vspan.clone(),
@@ -1904,6 +1916,7 @@ pub struct Effective {
     pub clipboard: Setting,
     pub harness_asks: Setting,
     pub portal: Setting,
+    pub http2: Setting,
     pub memory: LimitSetting<MemoryLimit>,
     pub processes: LimitSetting<ProcessLimit>,
     pub network: LimitSetting<NetworkMode>,
@@ -2106,6 +2119,7 @@ impl Effective {
             ssh: Vec::new(),
             ports: self.ports.clone(),
             host_ports: self.host_ports.clone(),
+            http2: self.http2.value,
         })
     }
 
@@ -2117,6 +2131,7 @@ impl Effective {
             "clipboard" => Some(&self.clipboard),
             "harness-asks" => Some(&self.harness_asks),
             "portal" => Some(&self.portal),
+            "http2" => Some(&self.http2),
             _ => None,
         }
     }
@@ -2365,6 +2380,7 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
         clipboard: default(false),
         harness_asks: default(false),
         portal: default(true),
+        http2: default(true),
         memory: LimitSetting {
             value: limits::DEFAULT_MEMORY,
             origin: Origin::Default,
@@ -2457,6 +2473,7 @@ pub fn resolve(cfg: &Config, host: &Host, req: &Request<'_>) -> Result<Effective
                     "gpu" => &mut eff.gpu,
                     "harness-asks" => &mut eff.harness_asks,
                     "portal" => &mut eff.portal,
+                    "http2" => &mut eff.http2,
                     _ => &mut eff.clipboard,
                 };
                 *s = Setting {
@@ -2732,6 +2749,24 @@ repo = true
         assert!(!e.gpu.value);
         assert_eq!(e.gpu.origin, Origin::Global);
         assert!(e.kvm.value);
+    }
+
+    #[test]
+    fn http2_do_gateway_nas_camadas() {
+        let h = host(Path::new("/home/ana"));
+        let none = Layer::default();
+        let e = resolve(&Config::default(), &h, &req(Path::new("/w"), None, &none)).unwrap();
+        assert!(e.http2.value);
+        assert!(e.net_policy().unwrap().http2);
+        let c = parse("[global]\nhttp2 = true\n[project.\"/w\"]\nhttp2 = false\n").unwrap();
+        let e = resolve(&c, &h, &req(Path::new("/w"), None, &none)).unwrap();
+        assert!(!e.http2.value);
+        assert_eq!(e.http2.origin, Origin::Project("/w".into()));
+        assert!(!e.net_policy().unwrap().http2);
+        // Uma política de antes do campo liga o HTTP/2.
+        let p: sandmux_spec::net::NetPolicy =
+            serde_json::from_str(r#"{"mode":"open","rules":[]}"#).unwrap();
+        assert!(p.http2);
     }
 
     #[test]

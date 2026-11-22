@@ -112,7 +112,7 @@ fn serve(
                             harness: String::new(),
                             refreshed: Default::default(),
                         });
-                        crate::mitm::serve_http(c, up, ctx).await;
+                        crate::mitm::serve_http(c, up, ctx, false, false).await;
                         let ms = t0.elapsed().as_millis() as u64;
                         log.write("tcp", NAME, &ip, port, 0, 0, ms, None);
                         return;
