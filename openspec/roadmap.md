@@ -499,6 +499,8 @@ Release `v0.1.34` (2026-11-21), com os changes 85 (grafo do cofre) e 88 (reiníc
 
 Release `v0.1.35` (2026-11-21), com o change 90 (recusa rápida do lançamento sem o auxiliar root) e o 89 (testes em paralelo pelo nextest, só para quem desenvolve), pela ordem do usuário para cada change (propor, implementar, PR, merge e release). O `check.sh` rodou verde pelo nextest no código do change 90 (814 testes); sem `check-root`, porque o auxiliar root e o protocolo não mudam.
 
+Release `v0.1.36` (2026-11-21), com o change 91 (o prazo do socket que falta contado da falta), pela ordem do usuário para cada change. O `check.sh` rodou verde no host (814 testes) e os testes com root na VM com a correção: 7.0, 21 de 21; 6.8, uma rodada com 21 de 21 e outra com 19 de 21, as duas falhas do caso aberto do change 79 (seção 6).
+
 ### Etapa 14 - Confinamento do Docker privado
 
 Objetivo: o Docker privado sob as mesmas regras do sandbox do agente. Hoje o que limita o `dockerd` e os contêineres é só a visão de arquivos (achados de 2026-11-16, na seção 6). Decisões do usuário (2026-11-16), na exploração do backend eBPF: o eBPF entra para dar uma capacidade nova, o confinamento do Docker privado e de outros processos que rodam fora do Landlock; o confinamento cobre os arquivos e as chamadas de sistema; o trabalho se divide em dois changes, com o endurecimento sem privilégio primeiro.
