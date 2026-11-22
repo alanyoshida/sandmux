@@ -506,6 +506,8 @@ Release `v0.1.37` (2026-11-22), com o change 92 (a verificação do auxiliar roo
 
 Release `v0.1.38` (2026-11-22), com o change 93 (identidades de GCP sem o real no sandbox, etapa 19), pela ordem do usuário para cada change. O `check.sh` rodou verde no host (838 testes); sem `check-root`, porque o auxiliar root não muda. Protocolo 46.
 
+Release `v0.1.39` (2026-11-22), com o change 94 (identidades de Kubernetes sem o real no sandbox, etapa 19), pela ordem do usuário para cada change. O `check.sh` rodou verde no host (859 testes) e o `kubectl` 1.34 de verdade, numa aba, contra um cluster kind do host; sem `check-root`, porque o auxiliar root não muda. Protocolo 47.
+
 ### Etapa 14 - Confinamento do Docker privado
 
 Objetivo: o Docker privado sob as mesmas regras do sandbox do agente. Hoje o que limita o `dockerd` e os contêineres é só a visão de arquivos (achados de 2026-11-16, na seção 6). Decisões do usuário (2026-11-16), na exploração do backend eBPF: o eBPF entra para dar uma capacidade nova, o confinamento do Docker privado e de outros processos que rodam fora do Landlock; o confinamento cobre os arquivos e as chamadas de sistema; o trabalho se divide em dois changes, com o endurecimento sem privilégio primeiro.
