@@ -23,6 +23,9 @@ pub struct ProcsView {
     pub sel: Option<u32>,
     /// De 0 a `ZOOMS - 1`.
     pub zoom: u8,
+    /// A versão do auxiliar root em execução, quando é anterior à deste
+    /// sandmux: a árvore pode sair sem os pais.
+    pub old_helper: Option<String>,
     folded: HashSet<u32>,
     unfolded: HashSet<u32>,
 }

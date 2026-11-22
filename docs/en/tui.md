@@ -258,6 +258,8 @@ The Processes section, at the end of the page, shows the tree of the live proces
 
 The tree comes from the kernel observation of executions ([helper.md](helper.md)): each execution brings its parent, and each process that ends leaves the tree. Without the root helper there is no tree, and the section shows the reason (the same one the panel's protection shows for the source of executions). The pids are the host's, not the ones inside the sandbox. A process that forks without `exec` after the tab started (a subshell, workers that copy themselves) does not show up.
 
+If the running root helper is from a version older than sandmux, the section shows a warning at the top, with both versions: the helper only changes when it is restarted, and with the old one the tree may come without parents, with every process at the root. `sandmux setup` restarts the helper ([helper.md](helper.md#install)), and `r` checks again.
+
 - **Breadcrumb:** the first line shows the path to the root of the screen, starting with "tab", and the zoom level. A click on a segment goes back to it.
 - **Zoom (`+` and `-`):** three levels for the whole tree: name and pid; plus the resident memory; and a card with the command line, the CPU used, the memory, how long ago the process started and the cgroup.
 - **Folding:** `▾` open, `▸` folded (with `+N`, the hidden descendants), `·` without children. A branch with more than 12 descendants starts folded, except the roots of the screen.

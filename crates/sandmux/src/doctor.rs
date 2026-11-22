@@ -760,6 +760,26 @@ fn sandbox_group(r: &support::SupportReport, host: Option<&Host>) -> Group {
                 .cli(format!("[info] {tabs}: {why}\n{hint}"))
         }
     });
+    // O auxiliar só troca ao ser reiniciado: depois de atualizar os binários,
+    // o antigo continua de pé.
+    if let Some(old) = sandmux::helper::outdated() {
+        let label = tr!("versão do auxiliar root", "root helper version");
+        let summary = trf!(
+            "auxiliar root {old}, mais antigo que o sandmux {}",
+            "root helper {old}, older than sandmux {}",
+            env!("CARGO_PKG_VERSION")
+        );
+        let hint = tr!(
+            "  O auxiliar root em execução ainda é o da versão anterior: ele só troca ao\n  ser reiniciado. O que depende dele pode faltar ou sair incompleto (a árvore\n  de processos, por exemplo, sai sem os pais). Rode `sandmux setup`, que o\n  reinicia com sudo.",
+            "  The running root helper is still the previous version's: it only changes\n  when restarted. What depends on it may be missing or incomplete (the\n  process tree, for example, comes without parents). Run `sandmux setup`,\n  which restarts it with sudo."
+        );
+        let mark = tr!("aviso", "warn");
+        checks.push(
+            Check::new(State::Warn, label, summary.clone())
+                .help(flat(hint))
+                .cli(format!("[{mark}] {label}: {summary}\n{hint}")),
+        );
+    }
 
     let tun = std::fs::metadata("/dev/net/tun")
         .map(|m| std::os::unix::fs::FileTypeExt::is_char_device(&m.file_type()))
