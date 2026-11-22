@@ -37,7 +37,7 @@
 
 - [x] 6.1 `docs/vault.md` (seção "Pela TUI": a tecla `g`, a tela, os grupos "Sem domínio" e "Bancos", as teclas e o que ela nunca mostra) e `docs/tui.md` (seção "Configurações", linha do Cofre, e "Mouse"), com os pares em inglês. Verificar com os testes de `docs.rs`
 - [x] 6.2 Rodar `./scripts/check.sh` inteiro sob o vigia, com `CARGO_BUILD_JOBS=16`, e conferir que termina verde
-- [ ] 6.3 Conferência à mão do usuário no build local: as arestas em Braille no terminal dele, o zoom e o arrastar com o mouse, e a troca para `graph-edges = "blocos"`
+- [x] 6.3 Conferência à mão do usuário no build local: as arestas em Braille no terminal dele, o zoom e o arrastar com o mouse, e a troca para `graph-edges = "blocos"`
 
 ## Workflow follow-up
 
