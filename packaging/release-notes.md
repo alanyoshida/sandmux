@@ -1,13 +1,12 @@
-sandmux 0.1.32, antes da v1: avisa quando uma chave move para o cofre e mostra a árvore de processos da aba.
+sandmux 0.1.33, antes da v1: avisa quando o auxiliar root em execução é mais antigo que o sandmux.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
-## Novidades
+## Novidade
 
-- **Aviso de chave movida ao cofre:** quando o vigia de segredos move uma chave real para o cofre, a TUI mostra um modal por cima de qualquer aba, mesmo que não seja a afetada, listando cada sessão que precisa reiniciar. Reinicia uma sessão ou todas as listadas, sem trocar de aba sozinha.
-- **Árvore de processos na página de configurações:** a seção "Processos" (depois de Diagnóstico) mostra, para a aba ativa, a árvore de processos do último lançamento, com zoom de densidade (nome e pid; mais memória; ou um cartão com cmdline, CPU e cgroup), dobra manual e automática de ramos grandes, e drill-down com migalha de pão. Precisa do auxiliar root; sem ele, a seção mostra o motivo.
+- **Aviso de auxiliar root antigo:** o [auxiliar root](https://github.com/alanyoshida/sandmux/blob/main/docs/helper.md#instalar) só troca ao ser reiniciado, e atualizar os binários não o reinicia. Quando o auxiliar em execução é de uma versão anterior à do sandmux, o `sandmux doctor` mostra `[aviso] versão do auxiliar root`, com as duas versões e a correção, e a seção "Processos" da TUI mostra o mesmo aviso no topo. Antes, nada avisava: com o auxiliar da 0.1.30 e o sandmux 0.1.32, a árvore de processos saía com todos os processos na raiz, sem os pais, e o `doctor` mostrava a versão do auxiliar como `[ok]`. O aviso não conta como falha.
 
-Esta versão muda o cliente, o daemon e o auxiliar root. O protocolo entre o cliente e o daemon sobe para 45: depois de atualizar, rode `sandmux daemon restart`, e atualize o auxiliar (`sandmux setup`).
+Esta versão muda só o cliente. O protocolo entre o cliente e o daemon não muda, e o auxiliar root não muda de comportamento. Mesmo assim, depois de atualizar, rode `sandmux setup`: ele reinicia o auxiliar. Até lá o aviso novo aparece, porque o auxiliar em execução continua sendo o da versão anterior.
 
 ## Instalar
 
