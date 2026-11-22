@@ -305,7 +305,7 @@ O projeto usa [OpenSpec](https://github.com/Fission-AI/OpenSpec) para planejar c
 | [openspec/changes/archive/2026-11-13-add-sandbox-cli/design.md](openspec/changes/archive/2026-11-13-add-sandbox-cli/design.md) | Desenho técnico do primeiro change |
 | [AGENTS.md](AGENTS.md) | Regras para agentes que trabalham neste repositório |
 
-O primeiro change (`add-sandbox-cli`) está implementado e arquivado. Para rodar a verificação completa (formatação, lints e testes, inclusive os testes de fuga do sandbox): `./scripts/check.sh`.
+O primeiro change (`add-sandbox-cli`) está implementado e arquivado. Para rodar a verificação completa (formatação, lints e testes, inclusive os testes de fuga do sandbox): `./scripts/check.sh`. Com o [cargo-nextest](https://nexte.st) instalado (`cargo install cargo-nextest --locked`), os testes rodam em paralelo entre todos os arquivos, pela configuração em `.config/nextest.toml`; sem ele, o script usa o `cargo test`, um arquivo por vez.
 
 ## Licença
 

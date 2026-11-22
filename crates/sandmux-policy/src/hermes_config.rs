@@ -253,6 +253,7 @@ mod tests {
 
     #[test]
     fn pid_do_gateway_do_host() {
+        use std::os::unix::process::CommandExt;
         assert_eq!(
             gateway_pid(r#"{"pid": 2443, "kind": "hermes-gateway"}"#),
             Some(2443)
@@ -271,12 +272,17 @@ mod tests {
         .unwrap();
         assert_eq!(host_gateway_alive(d.path()), None);
         // Um processo vivo com `gateway` na linha de comando: aviso.
-        let mut c = std::process::Command::new("sh")
-            .args(["-c", "sleep 5; true", "gateway"])
+        // O próprio `sleep`, com `gateway` no argv[0]: sem um sh no meio,
+        // nenhum neto sobra depois do kill com a saída do teste aberta.
+        let mut c = std::process::Command::new("sleep")
+            .arg0("gateway")
+            .arg("5")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap();
         std::fs::write(d.path().join(".hermes/gateway.pid"), c.id().to_string()).unwrap();
-        // Até o `exec` do sh, a linha de comando ainda é a do teste.
+        // Até o `exec` do sleep, a linha de comando ainda é a do teste.
         let mut w = None;
         for _ in 0..50 {
             w = host_gateway_alive(d.path());
