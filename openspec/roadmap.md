@@ -114,6 +114,7 @@ O foco principal é o sandbox, não a interface:
 | OAuth | Desejado; fica no roadmap |
 | Git | ssh-agent controlado: chaves escolhidas por perfil, uso livre com registro, SSH de saída restrito aos servidores git cadastrados. As chaves ficam no cofre, e o daemon assina sem o ssh-agent do host (decisão do usuário, 2026-11-14, change 14) |
 | Tokens de ferramentas de desenvolvimento | Segredo genérico por domínio, na v1: o cofre aceita qualquer token ligado a um domínio (GitHub para o `gh`, registries privados de npm, pip e cargo). O agente usa um valor falso e a troca acontece no tráfego, como na inferência. Implementado no change 25: cada segredo tem ferramentas (`gh`, `git`, `npm`, `pip`, `cargo`, `docker`), o falso chega pela configuração só daquela execução, e a troca abre o `Authorization: Basic` |
+| Credenciais de cloud | Decidido pelo usuário em 2026-11-22, na exploração do item "Credencial temporária de cloud": o real nunca entra no sandbox (o agente recebe um falso por identidade, e o gateway troca o token, no GCP e no Kubernetes, ou reassina o pedido, na AWS); a identidade vale em toda aba, como as chaves (risco aceito: qualquer pasta age na conta); a fonte do real é a referência ao host por padrão (o daemon tira o real das CLIs do host, com SSO, MFA e plugins `exec`) e, como opção, a cópia cifrada no cofre; o limite é só o IAM da identidade, e o gateway não filtra os pedidos de cloud, só registra (sem item de política no gateway). Ordem: GCP com as peças comuns (change 93), Kubernetes, AWS. Etapa 19 |
 | Até o cofre existir | `--pass-env`, desligado por padrão e com aviso, passa uma variável específica para dentro. No opencode, `OPENCODE_CONFIG_CONTENT` faz a variável vencer o `auth.json` importado. No hermes (decisão do usuário, 2026-11-13), o `~/.hermes/.env` daquela execução é um arquivo gerado, em somente leitura, com os valores reais no lugar dos falsos; o `.env` guardado continua falso. Valores com quebra de linha ou `${` são recusados |
 
 ### 2.6 Harnesses
@@ -180,7 +181,7 @@ Pedido de 2026-11-12: os usuários serão desenvolvedores e precisam do que dese
 | Divisão do Docker privado | Um por pasta de trabalho. Imagens e volumes persistem entre sessões do mesmo projeto; os contêineres só enxergam aquele projeto e seguem a política de rede da aba. Um cache local de downloads evita baixar a mesma imagem de novo em outro projeto |
 | Duas abas na mesma pasta | Dividem o mesmo Docker privado. Com modos de rede diferentes, vale para os contêineres o mais restrito |
 | Máquina sem Docker rootless | O agente sobe sem Docker; `docker` lá dentro falha com mensagem clara e o diagnóstico diz o que instalar. Na v1 o único motor suportado é o Docker rootless |
-| CLIs de cloud (`aws`, `gcloud`, `kubectl`, `terraform`) | Na v1, liberação explícita: o usuário monta a credencial de propósito (`--ro ~/.kube`), com aviso de que ela fica ao alcance do agente. Depois da v1, credencial temporária gerada fora do sandbox |
+| CLIs de cloud (`aws`, `gcloud`, `kubectl`, `terraform`) | Na v1, liberação explícita: o usuário monta a credencial de propósito (`--ro ~/.kube`), com aviso de que ela fica ao alcance do agente. Depois da v1, a identidade de cloud no cofre, com o falso no sandbox e o real só no gateway (etapa 19, decisões de 2026-11-22 na seção 2.5) |
 | Quando | Etapa 2, com o daemon, que mantém o Docker privado vivo junto com a sessão |
 | Instalações globais | Camada privada de escrita sobre as toolchains (seção 2.3) |
 | `gh` e registries privados | Segredo genérico por domínio (seção 2.5) |
@@ -566,6 +567,18 @@ Objetivo: ver o cofre como um grafo de domínios e segredos. Pedido do usuário 
 
 Verificações: o `Canvas` compila com os recursos atuais do ratatui (tarefa 3.1, confirmado em 2026-11-21). A conferência à mão no terminal do usuário (tarefa 6.3) foi dada como feita pelo pedido de merge e release do usuário (2026-11-21).
 
+### Etapa 19 - Credenciais de cloud
+
+Objetivo: o agente usa o `gcloud`, o `kubectl`, o `aws` e as bibliotecas das nuvens sem que uma credencial real de cloud entre no sandbox. Pedido do usuário (2026-11-22): o item "Credencial temporária de cloud" de "Depois da v1". As decisões da exploração estão na seção 2.5. Cada provedor é um change; o primeiro traz as peças comuns.
+
+| # | Change | Situação | Conteúdo |
+|---|---|---|---|
+| 93 | `add-cloud-gcp` | Proposto em 2026-11-22; proposta, specs, design e tarefas validados (`openspec validate --strict`) | Capacidade nova `cloud-credentials` e um requisito modificado em `tls-interception` (a CA do `gcloud`). O tipo `cloud` no cofre e `sandmux vault add-cloud gcp <nome>` com `--configuration` (referência ao host), `--copy-adc` ou `--copy-key` (cópia); em toda aba, uma configuração do `gcloud` por identidade, com o token falso em arquivo, e o ADC com o refresh falso da padrão; o gateway troca o falso pelo real atual em `*.googleapis.com` e responde sozinho o pedido de token com o refresh falso; o real vem do `gcloud config config-helper` do host, do refresh do ADC ou do JWT da conta de serviço, só na memória do daemon, renovado com 5 minutos de folga; sem o real, `invalid_grant` e um aviso. Decisões do agente: o `auth/access_token_file` por configuração (e não reescrever o `credentials.db` do `gcloud`); a resposta local do pedido de token (serve às três fontes, e o falso nunca vai ao Google); os domínios fixos por provedor |
+| 94 | `add-cloud-kubernetes` (provisório) | A propor, depois do 93 | O kubeconfig da aba com um token falso por contexto e a CA do lançamento; o gateway decifra o API server (por IP e porta, sem domínio, com a CA do cluster e às vezes o certificado de cliente na volta); os plugins `exec` (EKS, GKE, OIDC) rodam fora, no daemon |
+| 95 | `add-cloud-aws` (provisório) | A propor, depois do 94 | O assinador SigV4 em Rust; o gateway reassina os pedidos a `*.amazonaws.com` com o real temporário; o real da referência pelo `aws configure export-credentials` do host, e o da cópia pelo STS, com o mesmo assinador. Cantos a decidir no design: o S3 com `aws-chunked`, as URLs pré-assinadas e os *event streams* |
+
+Verificação à mão pendente (93): numa máquina com o `gcloud` logado, `gcloud storage ls` e um script Python com `google.auth.default()` dentro de uma aba, com a identidade por referência e por cópia de chave. O host de desenvolvimento não tem o `gcloud`.
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
@@ -578,7 +591,7 @@ Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
 | Validação de prompt injection | Inspeção do conteúdo que vem da internet e do input do usuário; depende de ampliar a decifração de TLS |
 | Mais harnesses | Claude Code e oh-my-pi. Priorizado pelo usuário em 2026-11-15; feito nos changes 43 e 44 (presets `claude` e `omp`). O Antigravity CLI (`agy`) veio no change 63 |
 | WhatsApp no hermes | Quando houver forma de manter a sessão pareada fora do sandbox |
-| Credencial temporária de cloud | O sandmux gera fora do sandbox uma credencial de curta duração e limitada para AWS, GCP e Kubernetes, e entrega só ela ao agente |
+| Credencial temporária de cloud | O sandmux gera fora do sandbox uma credencial de curta duração e limitada para AWS, GCP e Kubernetes, e entrega só ela ao agente. Priorizado pelo usuário em 2026-11-22 ("Credencial de cloud"), como etapa 19: na exploração, o modelo virou o do falso no sandbox e o real só no gateway, sem credencial real nenhuma no sandbox, nem temporária (seção 2.5) |
 | Outros motores de contêiner | podman como alternativa ao Docker rootless; instalação do motor pelo próprio sandmux |
 | Modo de montagens e podman no sandbox | Uma aba opcional sem a camada de arquivos do Landlock, com o seccomp sem a negação das montagens e a política pelo arquivo (as marcas BPF), para montagens de verdade e o podman de um só usuário. Proposto e descartado em 2026-11-20 (o usuário já tinha decidido, no change 77, que o `bwrap` substituto basta por agora) |
 | Modo de montagens por aba | Opt-in: a aba troca a camada de arquivos do Landlock pelas marcas BPF por arquivo e libera montagens, para o bubblewrap e o podman de verdade (o `flatpak-builder`, por exemplo). Adiado pelo usuário em 2026-11-20: tira uma camada de proteção e prende a aba ao auxiliar root; o `bwrap` substituto (change 77) cobre os harnesses. O podman ainda ficaria limitado a um só usuário mapeado, sem o `newuidmap` (setuid) |
@@ -683,6 +696,8 @@ O que parece caso de eBPF e não é:
 - Com a GPU liberada por padrão, os drivers de vídeo ficam expostos a todo agente. É coerente com exploit de kernel fora do escopo.
 - Num worktree, o agente alcança o histórico e as branches dos outros worktrees do mesmo repositório.
 - Uma credencial de cloud montada de propósito é real e fica ao alcance do agente até a credencial temporária existir.
+- Com as identidades de cloud (etapa 19), o limite é só o IAM: uma identidade que pode criar chaves de conta de serviço, ou ler o Secret Manager, deixa o agente obter uma credencial real pela própria API. O `docs/cloud.md` pede uma identidade sem essas permissões. Decisão do usuário (2026-11-22): o gateway não filtra os pedidos de cloud.
+- O gateway decifra só HTTP/1.1: as bibliotecas do Google por gRPC (Pub/Sub, Firestore, Spanner) falham com `*.googleapis.com` decifrado, que toda aba decifra quando há uma identidade de GCP (change 93). O HTTP/2 no gateway fica sem change.
 - Pacotes do sistema (`apt install`) não podem ser instalados dentro do sandbox, que não tem root. O caminho é um contêiner no Docker privado.
 - Até a etapa 6, arquivos de segredo que já estão na pasta de trabalho (`.env`, chaves) ficam legíveis pelo agente, e até o change 9 a rede está aberta (registrada desde o change 8, sem filtro de domínios). Aceito pelo usuário em 2026-11-12: quem usa o sandmux nessas etapas precisa tirar os segredos da pasta.
 - No modo aberta, um destino da denylist atrás da mesma CDN de um site liberado só é pego pelo SNI ou pelo `Host`; um cliente que manda SNI vazio para um IP de CDN passa. Quem precisa de garantia usa o modo custom (change 9).
@@ -813,3 +828,5 @@ Novas decisões em aberto que surgirem ao propor um change devem ser anotadas aq
 | Paralelizar os testes para a verificação ficar mais rápida (pergunta do usuário, 2026-11-21) | Change 89 |
 | Encurtar o teste de 30 s, o piso do `check.sh` (pedido do usuário, 2026-11-21) | Change 90 |
 | Rodar na VM os testes com root que faltavam depois do change 90 (pedido do usuário, 2026-11-21) | Change 91 |
+| Investigar o lançamento recusado no 6.8 logo depois da troca do auxiliar root ("Sim, investigar", 2026-11-22) | Change 92 |
+| Credencial temporária de cloud ("Credencial de cloud", 2026-11-22) | Etapa 19: change 93 (GCP), e os provisórios 94 (Kubernetes) e 95 (AWS) |
