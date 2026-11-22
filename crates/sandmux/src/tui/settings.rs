@@ -88,6 +88,7 @@ const LANGUAGES: &[&str] = &["auto", "pt", "en"];
 
 const STYLES: &[&str] = &["blocos", "powerline", "simples"];
 const BARS: &[&str] = &["bottom", "top"];
+const GRAPH_EDGES: &[&str] = &["braille", "blocos"];
 const NETWORK: &[&str] = &["aberta", "inferencia", "custom", "sem-rede"];
 const WINDOW: &[&str] = &["false", "true", "direct"];
 
@@ -180,6 +181,17 @@ pub const ITEMS: &[Item] = &[
         [
             "Mostra o painel de proteção, recursos e rede ao abrir a TUI.",
             "Shows the protection, resources and network panel when the TUI opens."
+        ]
+    ),
+    item!(
+        1,
+        "graph-edges",
+        ["Arestas do grafo", "Graph edges"],
+        Kind::Choice(GRAPH_EDGES),
+        At::Tui,
+        [
+            "Como o grafo do cofre desenha as arestas: braille é mais fino; blocos usa meio-bloco, para fontes sem Braille.",
+            "How the vault graph draws its edges: braille is finer; blocks (blocos in the file) uses half blocks, for fonts without Braille."
         ]
     ),
     item!(
@@ -921,6 +933,8 @@ pub struct VaultView {
     pub confirm: Option<String>,
     /// Keyring ligado e o problema dele, quando há (protocolo 28).
     pub keyring: Option<(bool, Option<String>)>,
+    /// A tela do grafo, aberta por `g`: ocupa a página inteira.
+    pub graph: Option<super::vaultgraph::GraphView>,
 }
 
 /// O que o formulário do cofre faz.
@@ -1013,6 +1027,14 @@ impl VaultForm {
             step: 0,
             fields,
         }
+    }
+
+    /// Um campo que já vem preenchido (o domínio escolhido no grafo).
+    pub fn prefill(mut self, field: usize, text: String) -> VaultForm {
+        if let Some(f) = self.fields.get_mut(field) {
+            **f = text;
+        }
+        self
     }
 }
 
@@ -1250,9 +1272,18 @@ impl App {
             return Some(s);
         }
         if s.section == VAULT
-            && (s.on_items || s.vault.form.is_some() || s.vault.confirm.is_some())
+            && (s.on_items
+                || s.vault.form.is_some()
+                || s.vault.confirm.is_some()
+                || s.vault.graph.is_some())
             && self.vault_key(&mut s, &k)
         {
+            return Some(s);
+        }
+        // Na seção do cofre o alvo (global ou projeto) não vale nada: `g`
+        // abre o grafo.
+        if s.section == VAULT && k == Key::Char('g') {
+            self.graph_open(&mut s);
             return Some(s);
         }
         if s.section == DOCTOR
@@ -1381,6 +1412,7 @@ impl App {
                     s.doctor.sel = i;
                 }
             }
+            Some(Hit::GraphRow(_) | Hit::GraphNode(_)) => {}
             Some(Hit::Item(i)) => {
                 let again = s.on_items && s.item == i && s.list.is_none() && s.edit.is_none();
                 s.item = i;
@@ -1501,6 +1533,19 @@ impl App {
             },
             _ => None,
         };
+        if s.vault.graph.is_some() {
+            let dbs = match s.vault.info {
+                Some((_, true, _)) => match self.call(&Msg::DbList) {
+                    Ok(Msg::DbEntries { list }) => list,
+                    _ => Vec::new(),
+                },
+                _ => Vec::new(),
+            };
+            let v = &mut s.vault;
+            if let Some(g) = v.graph.as_mut() {
+                g.set(&v.entries, dbs);
+            }
+        }
         self.refresh_vault();
     }
 
@@ -1544,6 +1589,10 @@ impl App {
                 });
                 self.vault_refresh(s);
             }
+            return true;
+        }
+        if s.vault.graph.is_some() {
+            self.graph_key(s, k);
             return true;
         }
         let (exists, unlocked) = s
@@ -1694,6 +1743,232 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    /// `g` na seção do cofre: abre a tela do grafo. Sem cofre, só avisa.
+    fn graph_open(&mut self, s: &mut Settings) {
+        s.vault.graph = Some(Default::default());
+        self.vault_refresh(s);
+        if !matches!(s.vault.info, Some((true, _, _))) {
+            s.vault.graph = None;
+            s.note = Some((
+                tr!("não há cofre: n cria", "there is no vault: n creates one").into(),
+                true,
+            ));
+            return;
+        }
+        s.on_items = true;
+    }
+
+    /// As teclas da tela do grafo. Todas ficam nela: nenhuma chega à página.
+    fn graph_key(&mut self, s: &mut Settings, k: &Key) {
+        let unlocked = matches!(s.vault.info, Some((true, true, _)));
+        let Some(g) = s.vault.graph.as_mut() else {
+            return;
+        };
+        if g.typing {
+            match k {
+                Key::Esc => {
+                    g.typing = false;
+                    g.filter.clear();
+                }
+                Key::Enter => g.typing = false,
+                Key::Backspace => {
+                    g.filter.pop();
+                }
+                Key::Char(c) => g.filter.push(*c),
+                _ => {}
+            }
+            g.fix_sel();
+            return;
+        }
+        if !unlocked {
+            match k {
+                Key::Esc | Key::Char('q') => s.vault.graph = None,
+                Key::Char('u') => {
+                    s.vault.form = Some(VaultForm::new(FormKind::Unlock, String::new()))
+                }
+                Key::Char('r') => self.vault_refresh(s),
+                _ => {}
+            }
+            return;
+        }
+        match k {
+            Key::Esc => {
+                if g.detail {
+                    g.detail = false;
+                } else if g.focus.is_some() {
+                    g.focus = None;
+                } else if !g.filter.is_empty() {
+                    g.filter.clear();
+                    g.fix_sel();
+                } else {
+                    s.vault.graph = None;
+                }
+            }
+            Key::Up if g.focus.is_some() => g.step_focus(-1),
+            Key::Down if g.focus.is_some() => g.step_focus(1),
+            Key::Up => g.step_row(-1),
+            Key::Down => g.step_row(1),
+            Key::Tab => g.step_focus(1),
+            Key::Right if g.focus.is_none() => g.step_focus(1),
+            Key::Left => {
+                g.focus = None;
+                g.detail = false;
+            }
+            Key::Enter if g.focus.is_some() => g.detail = !g.detail,
+            Key::Enter => g.step_focus(1),
+            Key::Char('o') => {
+                if g.focus.is_some() && !g.next_owner() {
+                    s.note = Some((
+                        tr!(
+                            "este segredo não tem outro domínio dono",
+                            "this secret has no other owner domain"
+                        )
+                        .into(),
+                        true,
+                    ));
+                }
+            }
+            Key::Char('+') | Key::Char('=') => g.win.zoom_in(),
+            Key::Char('-') => g.win.zoom_out(),
+            // Mover o grafo para um lado é levar a janela para o outro.
+            Key::Char('h') => g.pan(1.0, 0.0),
+            Key::Char('l') => g.pan(-1.0, 0.0),
+            Key::Char('k') => g.pan(0.0, 1.0),
+            Key::Char('j') => g.pan(0.0, -1.0),
+            Key::Char('0') => g.reset(),
+            Key::Char('/') => g.typing = true,
+            Key::Char('r') => self.vault_refresh(s),
+            Key::Char('a' | 's' | 'd' | 'v' | 'x') => self.graph_edit(s, k),
+            _ => {}
+        }
+    }
+
+    /// As teclas de edição na tela do grafo: os formulários da seção, com o
+    /// domínio escolhido já preenchido num segredo novo. Uma conexão de
+    /// banco não se muda por aqui.
+    fn graph_edit(&mut self, s: &mut Settings, k: &Key) {
+        use super::vaultgraph::{Group, Kind};
+        let Some(g) = s.vault.graph.as_ref() else {
+            return;
+        };
+        let member = g.member().cloned();
+        if member.as_ref().is_some_and(|m| m.kind == Kind::Db) {
+            s.note = Some((
+                tr!(
+                    "as conexões de banco se gerenciam por `sandmux db`",
+                    "database connections are managed with `sandmux db`"
+                )
+                .into(),
+                true,
+            ));
+            return;
+        }
+        let domain = match g.row().map(|r| &r.group) {
+            Some(Group::Domain(d)) => d.clone(),
+            _ => String::new(),
+        };
+        let entry = member.and_then(|m| s.vault.entries.iter().find(|e| e.name == m.name).cloned());
+        match (k, entry) {
+            (Key::Char('a'), _) => {
+                s.vault.form = Some(VaultForm::new(FormKind::Add, String::new()).prefill(2, domain))
+            }
+            (Key::Char('s'), _) => {
+                s.vault.form =
+                    Some(VaultForm::new(FormKind::AddSsh, String::new()).prefill(3, domain))
+            }
+            (Key::Char('d'), Some(e)) => {
+                s.vault.form = Some(VaultForm::new(
+                    FormKind::Domains(e.name.clone()),
+                    e.domains.join(", "),
+                ))
+            }
+            (Key::Char('x'), Some(e)) => s.vault.confirm = Some(e.name.clone()),
+            (Key::Char('v'), Some(e)) if e.kind.is_empty() => {
+                s.vault.form = Some(VaultForm::new(
+                    FormKind::Value(e.name.clone()),
+                    String::new(),
+                ))
+            }
+            (Key::Char('v'), Some(_)) => {
+                s.note = Some((
+                    tr!(
+                        "uma chave SSH se troca gravando a chave nova (s)",
+                        "an SSH key is replaced by storing the new key (s)"
+                    )
+                    .into(),
+                    true,
+                ))
+            }
+            _ => {
+                s.note = Some((
+                    tr!(
+                        "ponha o foco num segredo (Tab)",
+                        "put the focus on a secret (Tab)"
+                    )
+                    .into(),
+                    true,
+                ))
+            }
+        }
+    }
+
+    /// O mouse na tela do grafo: a roda muda o zoom, arrastar move, e um
+    /// clique escolhe o domínio da lista ou põe o foco num nó.
+    pub(super) fn graph_mouse(
+        &mut self,
+        mut s: Box<Settings>,
+        m: super::modes::Mouse,
+    ) -> Box<Settings> {
+        if s.vault.form.is_some() || s.vault.confirm.is_some() {
+            return s;
+        }
+        let Some(g) = s.vault.graph.as_mut() else {
+            return s;
+        };
+        let (x, y) = (m.x.saturating_sub(1), m.y.saturating_sub(1));
+        let (ax, ay, aw, ah) = self.graph_rect.get();
+        let inside = x >= ax && x < ax + aw && y >= ay && y < ay + ah;
+        if m.is_wheel() {
+            if inside && m.wheel_up() {
+                g.win.zoom_in();
+            } else if inside {
+                g.win.zoom_out();
+            }
+            return s;
+        }
+        if m.release {
+            g.drag = None;
+            return s;
+        }
+        if m.is_motion() {
+            if m.button() == 0
+                && let Some((px, py)) = g.drag
+            {
+                g.drag_by(x as i32 - px as i32, y as i32 - py as i32);
+                g.drag = Some((x, y));
+            }
+            return s;
+        }
+        if m.button() != 0 {
+            return s;
+        }
+        let hit = self
+            .settings_hits
+            .borrow()
+            .iter()
+            .find(|(row, a, b, _)| *row == y && x >= *a && x < *b)
+            .map(|h| h.3);
+        match hit {
+            Some(Hit::GraphRow(i)) => g.select(i),
+            Some(Hit::GraphNode(i)) => g.focus = Some(i),
+            _ => {}
+        }
+        if inside {
+            g.drag = Some((x, y));
+        }
+        s
     }
 
     /// Manda o formulário ao daemon; os textos são apagados da memória ao

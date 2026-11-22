@@ -72,8 +72,48 @@ The Vault section of the settings page (Ctrl+b `e`) shows the vault state and th
 | `d` | Changes the domains of the chosen secret, without asking for the value again |
 | `x` | Removes the chosen secret, after `y` to confirm |
 | `r` | Reloads the vault |
+| `g` | Opens the [vault graph](#vault-graph) |
 
-Passwords and values show as `•` and are wiped from the TUI memory after being sent to the daemon. Database connections and key import stay on the command line.
+Passwords and values show as `•` and are wiped from the TUI memory after being sent to the daemon. Database connections, which the graph only shows, and key import stay on the command line.
+
+### Vault graph
+
+In the Vault section, `g` opens the vault graph in full screen. It shows, starting from a domain, the secrets that can go to it, and starting from a secret, all its owner domains. Values are never shown.
+
+- **On the left, the list:** one item for each owner domain, with the number of secrets. Each domain text is an item: `github.com` and `*.github.com` stay separate, because they match different requests. At the end come "No domain", with the secrets that have no owner (their value is not swapped in traffic), and "Databases", with the [database connections](#database-connections). Each of these groups only shows up when it has an item.
+- **In the middle, the graph:** the chosen domain in the center and its secrets around it, each one linked by an edge. The mark tells the kind: `●` token, `◆` SSH key, `■` database connection. A secret with other owners gets `+N` after the name (N is the number of other owners) and also shows up in the graph of each of them. With more than 8 secrets, they split into rings: 8 in the first, 12 in the second, 16 in the third.
+- **On the right, the details** of the focused secret: the kind, the fake value (or the fingerprint of an SSH key), the tools and all the owner domains. For a database connection: the kind, the server, the port, the database and the user, without the password.
+
+**Zoom:** the terminal text does not change size. The zoom, from 0.5x to 2.0x, changes the distance between the nodes and how much each one shows: below 0.7x, only the mark; up to 1.3x, the mark and the name; from there on, a card with the name, the kind and the tools. The footer shows the current zoom.
+
+| Key | Action |
+|---|---|
+| ↑ ↓ | Pick the domain; with the focus on a secret, the previous and the next one |
+| Tab or → | Move the focus to the domain's secrets; Tab again goes to the next one |
+| ← | Gives the focus back to the list |
+| Enter | Opens and closes the details, when they do not fit on the side |
+| `o` | Goes to the next owner of the focused secret, keeping it focused |
+| `+` `-` | Zoom |
+| `h` `j` `k` `l` | Move the graph left, down, up and right |
+| `0` | Back to the center and to 1.0x zoom |
+| `/` | Filters the list by the name of the domain or of a secret (Enter keeps it, Esc clears it) |
+| `a` `s` | Add a secret or an SSH key, with the chosen domain already filled in |
+| `d` `v` `x` | Change the domains, replace the value or remove the focused secret |
+| `u` | Unlocks the vault, when it is locked |
+| `r` | Reloads the vault |
+| Esc | Clears the filter, gives the focus back to the list or goes back to the Vault section |
+
+- **Mouse:** the wheel over the graph changes the zoom, dragging moves the graph, a click on the list picks the domain and a click on a node puts the focus on it.
+- **Editing:** the forms are the ones of the Vault section, and the graph is redrawn after each change. The section's `l`, `k`, `p` and `n` keys do not work on this screen. A database connection is read-only here: it is managed with `sandmux db`.
+- **Width:** with 100 columns or more, the list, the graph and the details sit side by side. From 70 to 99, the details open with Enter, in a box over the graph. With fewer than 70, the screen shows only the list.
+- **Font without Braille:** the edges use Braille dots. If they show up as squares in your terminal, switch to half blocks, in "Graph edges" in the Appearance section or in the file:
+
+```toml
+[tui]
+graph-edges = "blocos"
+```
+
+- **Limit:** the positions are fixed, in rings. With long names and many secrets in a domain, two names can overlap; zoom and movement separate them.
 
 ## Key swap in the traffic
 

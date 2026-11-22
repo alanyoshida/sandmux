@@ -13,6 +13,7 @@ pub mod picker;
 pub mod procs;
 pub mod render;
 pub mod settings;
+pub mod vaultgraph;
 
 use std::io::{Read, Write};
 use std::net::Shutdown;
@@ -363,6 +364,10 @@ pub enum Hit {
     Item(usize),
     /// Um segmento da migalha de pão da árvore de processos.
     Crumb(usize),
+    /// Um grupo da lista da tela do grafo do cofre.
+    GraphRow(usize),
+    /// Um nó do grafo do cofre.
+    GraphNode(usize),
 }
 
 pub struct FileScreen {
@@ -453,6 +458,9 @@ pub struct App {
     pub menu_button: Option<(u16, u16)>,
     /// Linhas clicáveis da página de configurações: linha, colunas e o que é.
     pub settings_hits: std::cell::RefCell<Vec<(u16, u16, u16, Hit)>>,
+    /// A área do grafo do cofre no último desenho (x, y, largura, altura),
+    /// para a roda e o arrastar do mouse.
+    pub graph_rect: std::cell::Cell<(u16, u16, u16, u16)>,
     /// Faixas das seções do painel: linha, colunas e o que é.
     pub panel_hits: std::cell::RefCell<Vec<(u16, u16, u16, PanelHit)>>,
     /// Seletor de modelo aberto, por cima do modal.
@@ -2788,13 +2796,16 @@ impl App {
             self.modal = None;
         }
         if matches!(self.modal, Some(Modal::Settings(_))) {
-            if !m.release
-                && !m.is_motion()
-                && !m.is_wheel()
-                && m.button() == 0
-                && let Some(Modal::Settings(s)) = self.modal.take()
-            {
-                let s = self.settings_click(s, m.x.saturating_sub(1), m.y.saturating_sub(1));
+            let click = !m.release && !m.is_motion() && !m.is_wheel() && m.button() == 0;
+            if let Some(Modal::Settings(s)) = self.modal.take() {
+                // A tela do grafo do cofre também usa a roda e o arrastar.
+                let s = if s.vault.graph.is_some() {
+                    self.graph_mouse(s, m)
+                } else if click {
+                    self.settings_click(s, m.x.saturating_sub(1), m.y.saturating_sub(1))
+                } else {
+                    s
+                };
                 self.modal = Some(Modal::Settings(s));
             }
             return;
@@ -3068,6 +3079,7 @@ pub fn run(group: Option<String>) -> Result<i32> {
         modal_button: std::cell::Cell::new(None),
         menu_button: None,
         settings_hits: std::cell::RefCell::new(Vec::new()),
+        graph_rect: std::cell::Cell::new((0, 0, 0, 0)),
         panel_hits: std::cell::RefCell::new(Vec::new()),
         picker: None,
         models: picker::Models::None,
@@ -3310,6 +3322,7 @@ mod tests {
             modal_button: std::cell::Cell::new(None),
             menu_button: None,
             settings_hits: std::cell::RefCell::new(Vec::new()),
+            graph_rect: std::cell::Cell::new((0, 0, 0, 0)),
             panel_hits: std::cell::RefCell::new(Vec::new()),
             picker: None,
             models: picker::Models::None,

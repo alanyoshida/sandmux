@@ -1728,3 +1728,540 @@ fn ctrl_b_t_abre_shell_dentro_da_aba() {
     t.write(b"\x02d");
     assert_eq!(t.wait_exit(), 0);
 }
+
+// ---- grafo do cofre ----
+
+/// Roda o `sandmux` com uma entrada padrão.
+fn cli_in(e: &Env, args: &[&str], input: &str) -> std::process::Output {
+    let mut c = e
+        .cmd(&e.work, args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    c.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    c.wait_with_output().unwrap()
+}
+
+fn add_secret(e: &Env, name: &str, domains: &[&str], value: &str) {
+    let mut a = vec!["add", name];
+    for d in domains {
+        a.push("--domain");
+        a.push(d);
+    }
+    let out = vault(e, &a, &format!("{value}\n"));
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+/// Um cofre de exemplo: um segredo em três domínios, um em dois, dois no
+/// mesmo domínio e um sozinho.
+fn graph_vault(e: &Env) {
+    vault_init(e);
+    add_secret(
+        e,
+        "gh-pessoal",
+        &["github.com", "api.github.com", "ghcr.io"],
+        "valor-real-gh-pessoal",
+    );
+    add_secret(
+        e,
+        "gh-trabalho",
+        &["github.com", "api.github.com"],
+        "valor-real-gh-trabalho",
+    );
+    add_secret(e, "openai-a", &["api.openai.com"], "valor-real-openai-a");
+    add_secret(e, "openai-b", &["api.openai.com"], "valor-real-openai-b");
+    add_secret(e, "npm-token", &["registry.npmjs.org"], "valor-real-npm");
+}
+
+/// A página de configurações na seção Cofre, com o foco nas seções.
+fn open_vault_section(t: &mut Term) {
+    t.write(b"\x02e");
+    t.wait_text("sandmux · configurações");
+    for _ in 0..9 {
+        t.write(DOWN);
+    }
+    t.wait_text("g grafo");
+}
+
+fn open_graph(t: &mut Term) {
+    open_vault_section(t);
+    t.write(b"g");
+    t.wait_text("sandmux · cofre · grafo");
+}
+
+/// A linha e a coluna (a partir de 0) de um texto na tela.
+fn pos_of(t: &Term, what: &str) -> (usize, usize) {
+    let s = t.screen();
+    s.lines()
+        .enumerate()
+        .find_map(|(i, l)| l.find(what).map(|b| (i, l[..b].chars().count())))
+        .unwrap_or_else(|| panic!("sem {what:?} na tela:\n{s}"))
+}
+
+fn has_braille(s: &str) -> bool {
+    s.chars().any(|c| ('\u{2800}'..='\u{28ff}').contains(&c))
+}
+
+/// Uma linha da lista da esquerda com o nome e a contagem.
+fn list_row(s: &str, name: &str, count: &str) -> bool {
+    s.lines().any(|l| {
+        let l: String = l.chars().take(27).collect();
+        let l = l.trim_start_matches(['│', '▌', ' ']);
+        l.strip_prefix(name)
+            .is_some_and(|rest| rest.trim() == count)
+    })
+}
+
+fn no_real_value(t: &Term) {
+    t.with_screen(|s| {
+        assert!(
+            !s.contents().contains("valor-real"),
+            "valor na tela:\n{}",
+            s.contents()
+        )
+    });
+}
+
+#[test]
+fn grafo_do_cofre_lista_grafo_e_detalhes() {
+    let e = Env::new();
+    graph_vault(&e);
+    let out = cli_in(
+        &e,
+        &[
+            "db",
+            "add",
+            "loja",
+            "--kind",
+            "postgres",
+            "--host",
+            "db.exemplo.com",
+            "--port",
+            "5433",
+            "--database",
+            "vendas",
+            "--user",
+            "ana",
+        ],
+        "senha-real-do-banco\n",
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    sessao(&e, &e.work);
+    let mut t = tui_cols(&e, 120);
+    t.wait_text(&tab(1, "shell:app"));
+    open_graph(&mut t);
+    // A lista: um item por domínio, com a contagem, e os bancos no fim. A
+    // conexão de banco não vira "sem domínio".
+    t.wait_text("registry.npmjs.org");
+    let s = t.screen();
+    for (d, n) in [
+        ("api.github.com", "2"),
+        ("api.openai.com", "2"),
+        ("ghcr.io", "1"),
+        ("github.com", "2"),
+        ("registry.npmjs.org", "1"),
+        ("Bancos", "1"),
+    ] {
+        assert!(list_row(&s, d, n), "{d} com {n} em:\n{s}");
+    }
+    assert!(!s.contains("Sem domínio"), "{s}");
+    assert!(s.contains("zoom 1.0x") && s.contains("cofre aberto"), "{s}");
+    // O primeiro domínio no centro, ligado aos dois segredos dele, com os
+    // outros donos de cada um.
+    t.wait_text("│ api.github.com │");
+    t.wait_text("gh-pessoal +2");
+    t.wait_text("gh-trabalho +1");
+    assert!(has_braille(&t.screen()), "{}", t.screen());
+    no_real_value(&t);
+    // Dois segredos de um só domínio.
+    t.write(DOWN);
+    t.wait_text("│ api.openai.com │");
+    t.wait_text("● openai-a");
+    t.wait_text("● openai-b");
+    // Um segredo de três domínios, no grafo de cada um.
+    t.write(DOWN);
+    t.wait_text("│ ghcr.io │");
+    t.wait_text("● gh-pessoal +2");
+    // Foco no segredo: os detalhes, sem o valor.
+    t.write(b"\t");
+    t.wait_text("domínios donos");
+    let s = t.screen();
+    for want in [
+        "token",
+        "nunca mostrado",
+        "sandmux-fake-",
+        "docker",
+        "  github.com",
+        "  api.github.com",
+        "  ghcr.io",
+        "o outro dono",
+    ] {
+        assert!(s.contains(want), "{want:?} em:\n{s}");
+    }
+    no_real_value(&t);
+    // `o`: o dono seguinte, com o segredo ainda em foco.
+    t.write(b"o");
+    t.wait_text("│ github.com │");
+    t.wait_text("↑ ↓ segredo");
+    t.wait_text("domínios donos");
+    // Esc devolve o foco à lista; o filtro pelo nome de um segredo.
+    t.write(b"\x1b");
+    t.wait_text("↑ ↓ domínio");
+    t.write(b"/npm");
+    t.wait_for("só o dono de npm-token", |s| {
+        s.contains("/ npm")
+            && list_row(s, "registry.npmjs.org", "1")
+            && !s.contains("api.openai.com")
+    });
+    t.wait_text("● npm-token");
+    t.write(b"\r");
+    t.wait_text("↑ ↓ domínio");
+    t.write(b"\x1b");
+    t.wait_text("api.openai.com");
+    // Os bancos: só leitura, sem a senha.
+    for _ in 0..8 {
+        t.write(DOWN);
+    }
+    t.wait_text("│ bancos │");
+    t.wait_text("■ loja");
+    t.write(b"\t");
+    t.wait_text("gerenciada por sandmux db");
+    let s = t.screen();
+    for want in ["postgres", "db.exemplo.com", "5433", "vendas", "ana"] {
+        assert!(s.contains(want), "{want:?} em:\n{s}");
+    }
+    assert!(!s.contains("senha-real"), "{s}");
+    t.write(b"x");
+    t.wait_text("as conexões de banco se gerenciam por");
+    let list = stdout(&e.run(&e.work, &["db", "list"]));
+    assert!(list.contains("loja"), "{list}");
+    // Esc: do foco à lista, e da lista à seção do cofre.
+    t.write(b"\x1b");
+    t.wait_text("↑ ↓ domínio");
+    t.write(b"\x1b");
+    t.wait_text("sandmux · configurações");
+    t.with_screen(|s| assert!(!s.contents().contains("cofre · grafo"), "{}", s.contents()));
+    t.write(b"\x1b");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
+fn grafo_do_cofre_zoom_movimento_e_mouse() {
+    let e = Env::new();
+    graph_vault(&e);
+    sessao(&e, &e.work);
+    let mut t = tui_cols(&e, 120);
+    t.wait_text(&tab(1, "shell:app"));
+    open_graph(&mut t);
+    t.wait_text("│ api.github.com │");
+    t.wait_text("zoom 1.0x");
+    // No zoom padrão, a marca e o nome, sem o tipo por extenso.
+    t.with_screen(|s| assert!(!s.contents().contains("token ·"), "{}", s.contents()));
+    // De perto, o cartão com o tipo e as ferramentas.
+    t.write(b"+");
+    t.wait_text("zoom 1.25x");
+    t.write(b"+");
+    t.wait_text("zoom 1.6x");
+    t.wait_text("token · gh git");
+    t.write(b"++");
+    t.wait_text("zoom 2.0x");
+    // O limite: mais um `+` não passa de 2.0x.
+    t.write(b"+h");
+    t.wait_text("zoom 2.0x");
+    // De longe, só as marcas; o domínio do centro continua com o nome.
+    t.write(b"------");
+    t.wait_text("zoom 0.5x");
+    t.wait_for("só as marcas", |s| {
+        !s.contains("gh-trabalho") && s.contains("◉ api.github.com")
+    });
+    t.write(b"-");
+    t.wait_text("zoom 0.5x");
+    // `0` volta ao centro e a 1.0x.
+    t.write(b"0");
+    t.wait_text("zoom 1.0x");
+    t.wait_text("gh-trabalho +1");
+    let (row0, col0) = pos_of(&t, "│ api.github.com │");
+    // `h` move o grafo para a esquerda; `j`, para baixo.
+    t.write(b"h");
+    t.wait_for("grafo à esquerda", |_| {
+        pos_of(&t, "│ api.github.com │") == (row0, col0 - 4)
+    });
+    t.write(b"j");
+    t.wait_for("grafo para baixo", |_| {
+        pos_of(&t, "│ api.github.com │") == (row0 + 2, col0 - 4)
+    });
+    t.write(b"0");
+    t.wait_for("de volta ao centro", |_| {
+        pos_of(&t, "│ api.github.com │") == (row0, col0)
+    });
+    // Arrastar 10 colunas para a direita leva o centro 10 colunas.
+    t.write(b"\x1b[<0;41;3M\x1b[<32;46;3M\x1b[<32;51;3M\x1b[<0;51;3m");
+    t.wait_for("arrastado", |_| {
+        pos_of(&t, "│ api.github.com │") == (row0, col0 + 10)
+    });
+    t.write(b"0");
+    t.wait_for("de volta ao centro", |_| {
+        pos_of(&t, "│ api.github.com │") == (row0, col0)
+    });
+    // A roda sobre o grafo muda o zoom; sobre a lista, não.
+    t.write(b"\x1b[<64;60;10M");
+    t.wait_text("zoom 1.25x");
+    t.write(b"\x1b[<65;60;10M");
+    t.wait_text("zoom 1.0x");
+    t.write(b"\x1b[<64;5;10M\x1b[<65;60;10M");
+    t.wait_text("zoom 0.8x");
+    t.write(b"0");
+    t.wait_text("zoom 1.0x");
+    // Um clique na lista escolhe o domínio.
+    let s = t.screen();
+    let y = s
+        .lines()
+        .position(|l| {
+            let l: String = l.chars().take(27).collect();
+            l.contains(" github.com ")
+        })
+        .unwrap_or_else(|| panic!("{s}"));
+    t.write(format!("\x1b[<0;5;{}M\x1b[<0;5;{}m", y + 1, y + 1).as_bytes());
+    t.wait_text("│ github.com │");
+    // Um clique num nó põe o foco nele.
+    let (ny, nx) = pos_of(&t, "gh-trabalho +1");
+    t.write(
+        format!(
+            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+            nx + 3,
+            ny + 1,
+            nx + 3,
+            ny + 1
+        )
+        .as_bytes(),
+    );
+    t.wait_text("↑ ↓ segredo");
+    t.wait_text("domínios donos");
+    no_real_value(&t);
+    t.write(b"\x1b\x1b");
+    t.wait_text("sandmux · configurações");
+    t.write(b"\x1b");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
+fn grafo_do_cofre_largura_e_arestas() {
+    let e = Env::new();
+    graph_vault(&e);
+    sessao(&e, &e.work);
+    // Com 120 colunas, os detalhes ficam ao lado, sem Enter.
+    let mut t = tui_cols(&e, 120);
+    t.wait_text(&tab(1, "shell:app"));
+    open_graph(&mut t);
+    t.wait_text("│ api.github.com │");
+    t.wait_text("Tab põe o foco num nó");
+    t.write(b"\t");
+    t.wait_text("domínios donos");
+    // Com 80, só lista e grafo; Enter abre e fecha os detalhes numa caixa.
+    t.resize(80, 30);
+    t.wait_for("sem os detalhes ao lado", |s| {
+        s.contains("│ api.github.com │") && !s.contains("domínios donos")
+    });
+    t.wait_text("Enter detalhes");
+    t.write(b"\r");
+    t.wait_text("domínios donos");
+    t.write(b"\r");
+    t.wait_for("caixa fechada", |s| !s.contains("domínios donos"));
+    // Com 60, só a lista e o aviso.
+    t.resize(60, 30);
+    t.wait_text("O grafo pede 70 colunas.");
+    t.with_screen(|s| {
+        let s = s.contents();
+        assert!(list_row(&s, "api.github.com", "2"), "{s}");
+        assert!(!s.contains("│ api.github.com │") && !has_braille(&s), "{s}");
+    });
+    t.resize(120, 30);
+    t.wait_text("│ api.github.com │");
+    assert!(has_braille(&t.screen()), "{}", t.screen());
+    // A escolha das arestas na seção Aparência grava `graph-edges`.
+    t.write(b"\x1b\x1b");
+    t.wait_text("sandmux · configurações");
+    t.write(b"\x1b");
+    t.wait_text("↑ ↓ seção");
+    for _ in 0..8 {
+        t.write(UP);
+    }
+    t.wait_text("Arestas do grafo");
+    t.write(b"\t");
+    for _ in 0..4 {
+        t.write(DOWN);
+    }
+    t.wait_text("graph-edges: Como o grafo do cofre desenha as arestas");
+    t.wait_text("‹ braille ›");
+    t.write(RIGHT);
+    t.wait_text("‹ blocos ›");
+    t.wait_text("graph-edges gravado em [tui]");
+    let cfg = std::fs::read_to_string(e.config_file()).unwrap();
+    assert!(cfg.contains("graph-edges = \"blocos\""), "{cfg}");
+    // Com blocos, nenhum caractere de Braille na tela do grafo.
+    t.write(b"\t");
+    for _ in 0..8 {
+        t.write(DOWN);
+    }
+    t.wait_text("g grafo");
+    t.write(b"g");
+    t.wait_text("│ api.github.com │");
+    t.wait_text("gh-trabalho +1");
+    let s = t.screen();
+    assert!(!has_braille(&s), "{s}");
+    assert!(s.contains('▀') || s.contains('▄') || s.contains('█'), "{s}");
+    t.write(b"\x1b\x1b");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
+fn grafo_do_cofre_edita_rele_e_desbloqueia() {
+    let e = Env::new();
+    vault_init(&e);
+    add_secret(
+        &e,
+        "gh-pessoal",
+        &["github.com", "ghcr.io"],
+        "valor-real-gh",
+    );
+    add_secret(&e, "npm-token", &["registry.npmjs.org"], "valor-real-npm");
+    sessao(&e, &e.work);
+    let mut t = tui_cols(&e, 120);
+    t.wait_text(&tab(1, "shell:app"));
+    open_graph(&mut t);
+    t.wait_text("│ ghcr.io │");
+    // Um segredo novo já vem com o domínio escolhido; o valor não aparece.
+    t.write(b"a");
+    t.wait_text("Novo segredo");
+    t.write(b"novo-ghcr\r");
+    t.write(b"valor-digitado-xyz");
+    t.wait_text("••••••••••••••••••");
+    t.with_screen(|s| assert!(!s.contents().contains("valor-digitado"), "{}", s.contents()));
+    t.write(b"\r");
+    t.wait_text("ghcr.io▏");
+    t.write(b"\r");
+    t.wait_text("novo-ghcr guardado no cofre");
+    t.wait_text("● novo-ghcr");
+    let list = stdout(&e.run(&e.work, &["vault", "list"]));
+    assert!(
+        list.lines()
+            .any(|l| l.contains("novo-ghcr") && l.contains("ghcr.io")),
+        "{list}"
+    );
+    // Tirar um domínio: o segredo some deste grafo e continua no outro.
+    t.write(b"\t");
+    t.wait_text("d domínios");
+    t.write(b"d");
+    t.wait_text("Domínios de gh-pessoal");
+    t.wait_text("github.com, ghcr.io▏");
+    t.write(&[0x7f; 9]);
+    t.wait_text("github.com▏");
+    t.write(b"\r");
+    t.wait_text("domínios de gh-pessoal trocados");
+    t.wait_for("fora de ghcr.io", |s| {
+        s.contains("│ ghcr.io │") && s.contains("● novo-ghcr") && !s.contains("● gh-pessoal")
+    });
+    // O segredo em foco saiu do grupo: o foco voltou à lista.
+    t.wait_text("↑ ↓ domínio");
+    t.write(DOWN);
+    t.wait_text("│ github.com │");
+    t.wait_text("● gh-pessoal");
+    // Apagar o único segredo de um domínio tira o domínio da lista.
+    t.write(DOWN);
+    t.wait_text("│ registry.npmjs.org │");
+    t.write(b"x");
+    t.wait_text("ponha o foco num segredo (Tab)");
+    t.write(b"\t");
+    t.wait_text("x apaga");
+    t.write(b"x");
+    t.wait_text("Apagar npm-token do cofre?");
+    t.write(b"s");
+    t.wait_text("npm-token apagado do cofre");
+    t.wait_for("domínio fora da lista", |s| {
+        !s.contains("registry.npmjs.org")
+    });
+    let list = stdout(&e.run(&e.work, &["vault", "list"]));
+    assert!(!list.contains("npm-token"), "{list}");
+    // `r` relê o cofre mudado por fora.
+    add_secret(&e, "extra", &["extra.exemplo.com"], "valor-real-extra");
+    t.write(b"r");
+    t.wait_text("extra.exemplo.com");
+    no_real_value(&t);
+    // Um segredo que fica sem domínio vai para o grupo do fim da lista.
+    t.write(UP);
+    t.wait_text("│ ghcr.io │");
+    t.write(b"\t");
+    t.wait_text("d domínios");
+    t.write(b"d");
+    t.wait_text("Domínios de novo-ghcr");
+    t.wait_text("ghcr.io▏");
+    t.write(&[0x7f; 7]);
+    t.write(b"\r");
+    t.wait_text("domínios de novo-ghcr trocados");
+    t.wait_for("grupo sem domínio", |s| {
+        list_row(s, "Sem domínio", "1") && !list_row(s, "ghcr.io", "1")
+    });
+    for _ in 0..5 {
+        t.write(DOWN);
+    }
+    t.wait_text("│ sem domínio │");
+    t.wait_text("● novo-ghcr");
+    t.write(b"\t");
+    t.wait_text("  nenhum");
+    t.write(b"\x1b");
+    t.wait_text("↑ ↓ domínio");
+    // Com o cofre trancado, a tela avisa e `u` desbloqueia nela mesma.
+    t.write(b"\x1b");
+    t.wait_text("sandmux · configurações");
+    t.write(b"l");
+    t.wait_text("● trancado");
+    t.write(b"g");
+    t.wait_text("sandmux · cofre · grafo");
+    t.wait_text("u desbloqueia e mostra o grafo");
+    t.with_screen(|s| {
+        assert!(
+            !s.contents().contains("extra.exemplo.com"),
+            "{}",
+            s.contents()
+        )
+    });
+    t.write(b"u");
+    t.wait_text("Desbloquear");
+    t.write(b"s\r");
+    t.wait_text("cofre aberto");
+    t.wait_text("extra.exemplo.com");
+    t.write(b"\x1b\x1b");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
+fn grafo_do_cofre_sem_cofre_so_avisa() {
+    let e = Env::new();
+    sessao(&e, &e.work);
+    let mut t = tui_cols(&e, 120);
+    t.wait_text(&tab(1, "shell:app"));
+    t.write(b"\x02e");
+    t.wait_text("sandmux · configurações");
+    for _ in 0..9 {
+        t.write(DOWN);
+    }
+    t.wait_text("sem cofre");
+    t.with_screen(|s| assert!(!s.contents().contains("g grafo"), "{}", s.contents()));
+    t.write(b"g");
+    t.wait_text("não há cofre: n cria");
+    t.with_screen(|s| assert!(!s.contents().contains("cofre · grafo"), "{}", s.contents()));
+    t.write(b"\x1b");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}

@@ -70,8 +70,48 @@ A seção Cofre da página de configurações (Ctrl+b `e`) mostra o estado do co
 | `d` | Troca os domínios do segredo escolhido, sem pedir o valor de novo |
 | `x` | Apaga o segredo escolhido, depois de `s` para confirmar |
 | `r` | Relê o cofre |
+| `g` | Abre o [grafo do cofre](#grafo-do-cofre) |
 
-Senhas e valores aparecem como `•` e são apagados da memória da TUI depois de enviados ao daemon. As conexões de banco e a importação de chaves continuam na linha de comando.
+Senhas e valores aparecem como `•` e são apagados da memória da TUI depois de enviados ao daemon. As conexões de banco, que o grafo só mostra, e a importação de chaves continuam na linha de comando.
+
+### Grafo do cofre
+
+Na seção Cofre, `g` abre o grafo do cofre em tela cheia. Ele mostra, a partir de um domínio, os segredos que podem ir para ele, e a partir de um segredo, todos os domínios donos. Os valores nunca aparecem.
+
+- **À esquerda, a lista:** um item para cada domínio dono, com o número de segredos. Cada texto de domínio é um item: `github.com` e `*.github.com` ficam separados, porque casam com pedidos diferentes. No fim vêm "Sem domínio", com os segredos sem dono (o valor deles não é trocado no tráfego), e "Bancos", com as [conexões de banco](#conexões-de-banco). Cada um desses grupos só aparece quando tem algum item.
+- **No meio, o grafo:** o domínio escolhido no centro e os segredos dele em volta, cada um ligado por uma aresta. A marca diz o tipo: `●` token, `◆` chave SSH, `■` conexão de banco. Um segredo com outros donos leva `+N` depois do nome (N é o número dos outros donos) e aparece também no grafo de cada um deles. Com mais de 8 segredos, eles se dividem em anéis: 8 no primeiro, 12 no segundo, 16 no terceiro.
+- **À direita, os detalhes** do segredo em foco: o tipo, o valor falso (ou a impressão digital de uma chave SSH), as ferramentas e todos os domínios donos. De uma conexão de banco: o tipo, o servidor, a porta, o banco e o usuário, sem a senha.
+
+**Zoom:** o texto do terminal não muda de tamanho. O zoom, de 0.5x a 2.0x, muda a distância entre os nós e quanto cada um mostra: abaixo de 0.7x, só a marca; até 1.3x, a marca e o nome; daí em diante, um cartão com o nome, o tipo e as ferramentas. O rodapé mostra o zoom atual.
+
+| Tecla | Ação |
+|---|---|
+| ↑ ↓ | Escolhem o domínio; com o foco num segredo, o anterior e o seguinte |
+| Tab ou → | Levam o foco aos segredos do domínio; Tab de novo passa ao seguinte |
+| ← | Devolve o foco à lista |
+| Enter | Abre e fecha os detalhes, quando eles não cabem ao lado |
+| `o` | Vai ao dono seguinte do segredo em foco, com ele ainda em foco |
+| `+` `-` | Zoom |
+| `h` `j` `k` `l` | Movem o grafo para a esquerda, para baixo, para cima e para a direita |
+| `0` | Volta ao centro e ao zoom 1.0x |
+| `/` | Filtra a lista pelo nome do domínio ou de um segredo (Enter mantém, Esc limpa) |
+| `a` `s` | Acrescentam um segredo ou uma chave SSH, com o domínio escolhido já preenchido |
+| `d` `v` `x` | Trocam os domínios, trocam o valor ou apagam o segredo em foco |
+| `u` | Desbloqueia o cofre, quando ele está trancado |
+| `r` | Relê o cofre |
+| Esc | Limpa o filtro, devolve o foco à lista ou volta à seção Cofre |
+
+- **Mouse:** a roda sobre o grafo muda o zoom, arrastar move o grafo, um clique na lista escolhe o domínio e um clique num nó põe o foco nele.
+- **Edição:** os formulários são os da seção Cofre, e o grafo é redesenhado depois de cada mudança. As teclas `l`, `k`, `p` e `n` da seção não valem nesta tela. Uma conexão de banco é só de leitura aqui: ela se gerencia por `sandmux db`.
+- **Largura:** com 100 colunas ou mais, lista, grafo e detalhes ficam lado a lado. De 70 a 99, os detalhes abrem com Enter, numa caixa sobre o grafo. Com menos de 70, a tela mostra só a lista.
+- **Fonte sem Braille:** as arestas usam os pontos do Braille. Se eles aparecerem como quadrados no seu terminal, troque para meio-bloco, em "Arestas do grafo" na seção Aparência ou no arquivo:
+
+```toml
+[tui]
+graph-edges = "blocos"
+```
+
+- **Limite:** as posições são fixas, em anéis. Com nomes longos e muitos segredos num domínio, dois nomes podem se sobrepor; o zoom e o movimento separam.
 
 ## Troca da chave no tráfego
 

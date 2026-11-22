@@ -8,7 +8,7 @@ sandmux works without any configuration: the built-in baseline and the harness p
 
 `$XDG_CONFIG_HOME/sandmux/config.toml`, or `~/.config/sandmux/config.toml` when `XDG_CONFIG_HOME` is not set. `sandmux doctor` shows the path and whether the file is valid.
 
-The file is optional. It has three kinds of policy section, plus two that do not change the sandboxes: `[tui]`, with the prefix key, the shortcuts, the theme and the bar of the interface ([docs/en/tui.md](tui.md)), and `[assistant]`, with the models of the chat and of the command modal and the custom providers ([docs/en/chat.md](chat.md)):
+The file is optional. It has three kinds of policy section, plus two that do not change the sandboxes: `[tui]`, with the prefix key, the shortcuts, the theme and the bar of the interface ([docs/en/tui.md](tui.md)) and the edges of the vault graph (`graph-edges`, in [docs/en/vault.md](vault.md#vault-graph)), and `[assistant]`, with the models of the chat and of the command modal and the custom providers ([docs/en/chat.md](chat.md)):
 
 ```toml
 # Applies to every run.

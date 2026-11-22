@@ -727,7 +727,12 @@ pub(super) fn settings_footer(s: &super::settings::Settings) -> String {
     {
         k.push(t("↑ ↓ seção", "↑ ↓ section"));
         k.push(t("Tab ou → entra", "Tab or → enters"));
-        if target {
+        if s.section == VAULT {
+            // Na seção do cofre, `g` abre o grafo no lugar de trocar o alvo.
+            if matches!(s.vault.info, Some((true, _, _))) {
+                k.push(t("g grafo", "g graph"));
+            }
+        } else if target {
             k.push(t("g alvo", "g target"));
         }
         k.push(t("Esc sai", "Esc quits"));
@@ -822,6 +827,7 @@ pub(super) fn settings_footer(s: &super::settings::Settings) -> String {
         if exists {
             k.push(t("p senha", "p password"));
             k.push(t("k keyring", "k keyring"));
+            k.push(t("g grafo", "g graph"));
         }
         k.push(t("r relê", "r reloads"));
         k.push(t("Esc volta às seções", "Esc back to sections"));
@@ -895,6 +901,10 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
     hits.clear();
 
     f.render_widget(Clear, full);
+    if let Some(g) = &s.vault.graph {
+        draw_vault_graph(f, full, s, g, app, &theme, &mut hits);
+        return;
+    }
     let target = match s.project() {
         Some(p) => trf!(
             " valendo em: projeto {} ",
@@ -1966,6 +1976,792 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
             x0,
             hy + 2,
             w,
+            Line::raw(note.clone()),
+            Style::default()
+                .fg(if *is_err { err } else { ok })
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
+}
+
+/// O rodapé da tela do grafo do cofre: o zoom e só as teclas que valem
+/// agora.
+fn graph_footer(
+    s: &super::settings::Settings,
+    g: &super::vaultgraph::GraphView,
+    wide: bool,
+) -> String {
+    use super::vaultgraph::Kind;
+    let t = |pt: &'static str, en: &'static str| tr!(pt, en).to_string();
+    let v = &s.vault;
+    if let Some(f) = &v.form {
+        return if f.step + 1 < f.fields.len() {
+            t("Enter avança · Esc cancela", "Enter goes on · Esc cancels")
+        } else {
+            t("Enter envia · Esc cancela", "Enter sends · Esc cancels")
+        };
+    }
+    if v.confirm.is_some() {
+        return t(
+            "s confirma · outra tecla cancela",
+            "y confirms · any other key cancels",
+        );
+    }
+    if !matches!(v.info, Some((true, true, _))) {
+        return t(
+            "u desbloqueia · r relê · Esc volta",
+            "u unlocks · r reloads · Esc goes back",
+        );
+    }
+    if g.typing {
+        return t(
+            "Enter mantém o filtro · Esc limpa",
+            "Enter keeps the filter · Esc clears it",
+        );
+    }
+    let mut k = vec![format!("zoom {}", g.win.label())];
+    match g.member() {
+        Some(m) => {
+            k.push(t("↑ ↓ segredo", "↑ ↓ secret"));
+            k.push(t("← lista", "← list"));
+            if !wide {
+                k.push(t("Enter detalhes", "Enter details"));
+            }
+            if m.others > 0 {
+                k.push(t("o outro dono", "o other owner"));
+            }
+            if m.kind != Kind::Db {
+                k.push(t("d domínios", "d domains"));
+                if m.kind == Kind::Token {
+                    k.push(t("v valor", "v value"));
+                }
+                k.push(t("x apaga", "x removes"));
+            }
+        }
+        None => {
+            k.push(t("↑ ↓ domínio", "↑ ↓ domain"));
+            k.push(t("Tab segredo", "Tab secret"));
+            k.push(t("/ filtra", "/ filter"));
+            k.push(t("a segredo", "a secret"));
+            k.push(t("s chave SSH", "s SSH key"));
+        }
+    }
+    k.push(t("+ - zoom", "+ - zoom"));
+    k.push(t("h j k l move", "h j k l move"));
+    k.push(t("0 centro", "0 center"));
+    k.push(t("Esc volta", "Esc back"));
+    k.join(" · ")
+}
+
+/// Escreve um texto numa linha, cortado nas bordas da área. Devolve a linha
+/// e as colunas ocupadas.
+fn put_clip(
+    f: &mut Frame,
+    area: Rect,
+    col: i32,
+    row: i32,
+    text: &str,
+    style: Style,
+) -> Option<(u16, u16, u16)> {
+    if row < area.y as i32 || row >= (area.y + area.height) as i32 {
+        return None;
+    }
+    let (left, right) = (area.x as i32, (area.x + area.width) as i32);
+    let (a, b) = (
+        col.max(left),
+        (col + text.chars().count() as i32).min(right),
+    );
+    if a >= b {
+        return None;
+    }
+    let part: String = text
+        .chars()
+        .skip((a - col) as usize)
+        .take((b - a) as usize)
+        .collect();
+    f.buffer_mut().set_string(a as u16, row as u16, part, style);
+    Some((row as u16, a as u16, b as u16))
+}
+
+/// Uma caixa de cantos redondos com um texto por linha, cortada na área.
+/// Devolve as linhas e as colunas ocupadas.
+fn clip_box(
+    f: &mut Frame,
+    area: Rect,
+    x: i32,
+    y: i32,
+    lines: &[(String, Style)],
+    border: Style,
+) -> Vec<(u16, u16, u16)> {
+    let w = lines
+        .iter()
+        .map(|(t, _)| t.chars().count())
+        .max()
+        .unwrap_or(0);
+    let bar = "─".repeat(w + 2);
+    let mut spans = Vec::new();
+    spans.extend(put_clip(f, area, x, y, &format!("╭{bar}╮"), border));
+    for (i, (text, style)) in lines.iter().enumerate() {
+        let row = y + 1 + i as i32;
+        spans.extend(put_clip(
+            f,
+            area,
+            x,
+            row,
+            &format!("│ {text:<w$} │"),
+            border,
+        ));
+        put_clip(f, area, x + 1, row, &format!(" {text:<w$} "), *style);
+    }
+    spans.extend(put_clip(
+        f,
+        area,
+        x,
+        y + 1 + lines.len() as i32,
+        &format!("╰{bar}╯"),
+        border,
+    ));
+    spans
+}
+
+/// A tela do grafo do cofre, na página inteira: a lista dos domínios donos,
+/// o grupo escolhido no centro com os segredos em volta, e os detalhes do
+/// segredo em foco. O valor de um segredo nunca é desenhado.
+fn draw_vault_graph(
+    f: &mut Frame,
+    full: Rect,
+    s: &super::settings::Settings,
+    g: &super::vaultgraph::GraphView,
+    app: &App,
+    theme: &Theme,
+    hits: &mut Vec<(u16, u16, u16, super::Hit)>,
+) {
+    use super::Hit;
+    use super::vaultgraph::{DETAIL_W, Group, Kind, LIST_W, Level, MIN_COLS, Member, WIDE_COLS};
+    use ratatui::symbols::Marker;
+    use ratatui::widgets::canvas::{Canvas, Line as Edge};
+
+    let c = |el: &str| pl(theme, el, "default");
+    let (bg, fg, surface, accent) = (c("page-bg"), c("page-fg"), c("surface-bg"), c("accent"));
+    let (muted, ok, err, warn) = (c("muted-fg"), c("ok-fg"), c("error-fg"), c("status-fg"));
+    let base = Style::default().fg(fg).bg(bg);
+    let v = &s.vault;
+    let unlocked = matches!(v.info, Some((true, true, _)));
+    let wide = full.width >= WIDE_COLS;
+    app.graph_rect.set((0, 0, 0, 0));
+
+    let state = if unlocked {
+        tr!(" cofre aberto ", " vault open ")
+    } else {
+        tr!(" cofre trancado ", " vault locked ")
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(accent).bg(bg))
+        .style(base)
+        .title(Line::styled(
+            tr!(" sandmux · cofre · grafo ", " sandmux · vault · graph "),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ))
+        .title_top(
+            Line::styled(state, Style::default().fg(if unlocked { ok } else { warn }))
+                .right_aligned(),
+        )
+        .title_bottom(Line::styled(
+            format!(" {} ", graph_footer(s, g, wide)),
+            Style::default().fg(muted),
+        ));
+    let inner = block.inner(full);
+    f.render_widget(block, full);
+    if inner.width < 20 || inner.height < 6 {
+        return;
+    }
+    // A última linha fica para o aviso e a confirmação de apagar.
+    let note_y = inner.y + inner.height - 1;
+    let body = Rect::new(inner.x, inner.y, inner.width, inner.height - 1);
+
+    if !unlocked {
+        let y = body.y + body.height / 2;
+        put(
+            f,
+            body.x + 2,
+            y.saturating_sub(1),
+            body.width - 2,
+            Line::from(vec![
+                Span::styled("● ", base.fg(warn)),
+                Span::styled(
+                    tr!("cofre trancado", "vault locked"),
+                    base.add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            base,
+        );
+        put(
+            f,
+            body.x + 2,
+            y + 1,
+            body.width - 2,
+            Line::styled(
+                tr!(
+                    "u desbloqueia e mostra o grafo",
+                    "u unlocks and shows the graph"
+                ),
+                base.fg(muted),
+            ),
+            base,
+        );
+    } else {
+        // A lista dos grupos.
+        let list_w = LIST_W.min(body.width);
+        let lw = list_w as usize;
+        let vis = g.visible();
+        let head = if g.typing || !g.filter.is_empty() {
+            Line::from(vec![
+                Span::styled("/ ", base.fg(accent)),
+                Span::styled(
+                    format!("{}{}", g.filter, if g.typing { "▏" } else { "" }),
+                    base.add_modifier(Modifier::BOLD),
+                ),
+            ])
+        } else {
+            Line::styled(tr!("Domínios", "Domains"), base.fg(muted))
+        };
+        put(f, body.x + 1, body.y, list_w.saturating_sub(1), head, base);
+        let room = body.height.saturating_sub(2) as usize;
+        let pos = vis.iter().position(|i| *i == g.sel).unwrap_or(0);
+        let start = pos.saturating_sub(room.saturating_sub(1));
+        for (n, &i) in vis.iter().enumerate().skip(start).take(room) {
+            let r = &g.rows[i];
+            let y = body.y + 2 + (n - start) as u16;
+            let sel = i == g.sel;
+            let row_bg = if sel { surface } else { bg };
+            let (label, color) = match &r.group {
+                Group::Domain(d) => (d.clone(), fg),
+                Group::NoDomain => (tr!("Sem domínio", "No domain").to_string(), err),
+                Group::Dbs => (tr!("Bancos", "Databases").to_string(), muted),
+            };
+            let count = r.members.len().to_string();
+            let name_w = lw.saturating_sub(count.len() + 4);
+            let line = Line::from(vec![
+                Span::styled(
+                    if sel { "▌" } else { " " },
+                    Style::default()
+                        .fg(if g.focus.is_none() { accent } else { muted })
+                        .bg(row_bg),
+                ),
+                Span::styled(
+                    format!(" {:<name_w$} ", cut(&label, name_w)),
+                    Style::default().fg(color).bg(row_bg).add_modifier(if sel {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+                ),
+                Span::styled(format!("{count} "), Style::default().fg(accent).bg(row_bg)),
+            ]);
+            put(f, body.x, y, list_w, line, Style::default().bg(row_bg));
+            hits.push((y, body.x, body.x + list_w, Hit::GraphRow(i)));
+        }
+        if vis.is_empty() {
+            let why = if g.rows.is_empty() {
+                tr!("nenhum segredo", "no secrets")
+            } else {
+                tr!("nada com esse filtro", "nothing matches")
+            };
+            put(
+                f,
+                body.x + 1,
+                body.y + 2,
+                list_w.saturating_sub(1),
+                Line::styled(why, base.fg(muted)),
+                base,
+            );
+        }
+
+        if body.width > list_w + 2 {
+            for y in body.y..body.y + body.height {
+                put(
+                    f,
+                    body.x + list_w,
+                    y,
+                    1,
+                    Line::styled("│", base.fg(muted)),
+                    base,
+                );
+            }
+            let rx = body.x + list_w + 1;
+            let rw = body.width - list_w - 1;
+            if full.width < MIN_COLS {
+                f.render_widget(
+                    Paragraph::new(tr!(
+                        "O grafo pede 70 colunas.",
+                        "The graph needs 70 columns."
+                    ))
+                    .style(base.fg(muted))
+                    .wrap(Wrap { trim: true }),
+                    Rect::new(rx + 1, body.y, rw.saturating_sub(1), body.height.min(3)),
+                );
+            } else {
+                let gw = if wide {
+                    rw.saturating_sub(DETAIL_W + 1)
+                } else {
+                    rw
+                };
+                let garea = Rect::new(rx, body.y, gw, body.height);
+                // Os detalhes do nó em foco, ou do grupo.
+                let val_w = (DETAIL_W as usize).saturating_sub(14);
+                let kv = |k: &str, val: &str, dim: bool| {
+                    Line::from(vec![
+                        Span::styled(format!("{k:<11} "), base.fg(muted)),
+                        Span::styled(cut(val, val_w), if dim { base.fg(muted) } else { base }),
+                    ])
+                };
+                let never = tr!("nunca mostrado", "never shown");
+                let group_label = |grp: &Group| match grp {
+                    Group::Domain(d) => d.clone(),
+                    Group::NoDomain => tr!("sem domínio", "no domain").to_string(),
+                    Group::Dbs => tr!("bancos", "databases").to_string(),
+                };
+                let (title, lines): (String, Vec<Line>) = match (g.row(), g.member()) {
+                    (_, Some(m)) if m.kind == Kind::Db => {
+                        let mut l = Vec::new();
+                        if let Some(d) = g.dbs.iter().find(|d| d.name == m.name) {
+                            l.push(kv(tr!("tipo", "type"), &d.kind, false));
+                            l.push(kv(tr!("servidor", "server"), &d.host, false));
+                            l.push(kv(tr!("porta", "port"), &d.port.to_string(), false));
+                            l.push(kv(tr!("banco", "database"), &d.database, false));
+                            l.push(kv(tr!("usuário", "user"), &d.user, false));
+                            l.push(kv(tr!("senha", "password"), never, true));
+                            l.push(Line::raw(""));
+                            l.push(Line::styled(
+                                tr!("gerenciada por sandmux db", "managed with sandmux db"),
+                                base.fg(muted),
+                            ));
+                        }
+                        (m.name.clone(), l)
+                    }
+                    (_, Some(m)) => {
+                        let mut l = Vec::new();
+                        if let Some(e) = v.entries.iter().find(|e| e.name == m.name) {
+                            let ssh = m.kind == Kind::Ssh;
+                            l.push(kv(
+                                tr!("tipo", "type"),
+                                if ssh {
+                                    tr!("chave ssh", "ssh key")
+                                } else {
+                                    "token"
+                                },
+                                false,
+                            ));
+                            l.push(kv(tr!("valor", "value"), never, true));
+                            if ssh {
+                                l.push(kv(tr!("impressão", "fingerprint"), &e.fingerprint, false));
+                            } else {
+                                l.push(kv(
+                                    tr!("falso", "fake"),
+                                    e.fake.as_deref().unwrap_or("—"),
+                                    false,
+                                ));
+                                let tools = e.tools.join(" ");
+                                l.push(kv(
+                                    tr!("usado por", "used by"),
+                                    if tools.is_empty() { "—" } else { &tools },
+                                    tools.is_empty(),
+                                ));
+                            }
+                            l.push(Line::raw(""));
+                            l.push(Line::styled(
+                                if ssh {
+                                    tr!("servidores", "servers")
+                                } else {
+                                    tr!("domínios donos", "owner domains")
+                                },
+                                base.fg(muted),
+                            ));
+                            if e.domains.is_empty() {
+                                l.push(Line::styled(tr!("  nenhum", "  none"), base.fg(err)));
+                            }
+                            for d in &e.domains {
+                                l.push(Line::styled(
+                                    format!("  {}", cut(d, (DETAIL_W as usize).saturating_sub(4))),
+                                    base,
+                                ));
+                            }
+                        }
+                        (m.name.clone(), l)
+                    }
+                    (Some(r), None) => {
+                        let n = r.members.len();
+                        let count = match (&r.group, n) {
+                            (Group::Dbs, 1) => tr!("1 conexão", "1 connection").to_string(),
+                            (Group::Dbs, _) => trf!("{n} conexões", "{n} connections"),
+                            (_, 1) => tr!("1 segredo", "1 secret").to_string(),
+                            _ => trf!("{n} segredos", "{n} secrets"),
+                        };
+                        (
+                            group_label(&r.group),
+                            vec![
+                                Line::styled(count, base),
+                                Line::raw(""),
+                                Line::styled(
+                                    tr!("Tab põe o foco num nó", "Tab puts the focus on a node"),
+                                    base.fg(muted),
+                                ),
+                            ],
+                        )
+                    }
+                    (None, None) => (String::new(), Vec::new()),
+                };
+
+                if let Some(row) = g.row().filter(|_| garea.width >= 10 && garea.height >= 5) {
+                    app.graph_rect
+                        .set((garea.x, garea.y, garea.width, garea.height));
+                    let pts = g.points();
+                    let level = g.win.level();
+                    let (cx, cy) = (
+                        (garea.x + garea.width / 2) as i32,
+                        (garea.y + garea.height / 2) as i32,
+                    );
+                    let at = |p: (f64, f64)| {
+                        let (dc, dr) = g.win.cell(p);
+                        (cx + dc, cy + dr)
+                    };
+                    let origin = at((0.0, 0.0));
+                    let color_of = |m: &Member| match (m.kind, &row.group) {
+                        (Kind::Db, _) => fg,
+                        (_, Group::NoDomain) => err,
+                        _ if m.others > 0 => warn,
+                        _ => ok,
+                    };
+                    // As arestas, só de um domínio para os segredos dele. O
+                    // canvas usa as células da área como unidade.
+                    if matches!(row.group, Group::Domain(_)) {
+                        let (w, h) = (garea.width as f64, garea.height as f64);
+                        let rel = |(col, line): (i32, i32)| {
+                            (
+                                (col - garea.x as i32) as f64 + 0.5,
+                                h - ((line - garea.y as i32) as f64 + 0.5),
+                            )
+                        };
+                        let (x1, y1) = rel(origin);
+                        let edges: Vec<Edge> = row
+                            .members
+                            .iter()
+                            .zip(&pts)
+                            .map(|(m, p)| {
+                                let (x2, y2) = rel(at(*p));
+                                Edge::new(x1, y1, x2, y2, color_of(m))
+                            })
+                            .collect();
+                        f.render_widget(
+                            Canvas::default()
+                                .marker(if app.cfg.graph_blocks {
+                                    Marker::HalfBlock
+                                } else {
+                                    Marker::Braille
+                                })
+                                .background_color(bg)
+                                .x_bounds([0.0, w])
+                                .y_bounds([0.0, h])
+                                .paint(|ctx| {
+                                    for e in &edges {
+                                        ctx.draw(e);
+                                    }
+                                }),
+                            garea,
+                        );
+                    }
+                    // A caixa do centro.
+                    let n = row.members.len();
+                    let sub = match (&row.group, n) {
+                        (Group::Dbs, 1) => tr!("1 conexão", "1 connection").to_string(),
+                        (Group::Dbs, _) => trf!("{n} conexões", "{n} connections"),
+                        (_, 1) => tr!("1 segredo", "1 secret").to_string(),
+                        _ => trf!("{n} segredos", "{n} secrets"),
+                    };
+                    let is_domain = matches!(row.group, Group::Domain(_));
+                    let mut center = vec![(
+                        group_label(&row.group),
+                        if is_domain {
+                            base.add_modifier(Modifier::BOLD)
+                        } else {
+                            base.fg(muted)
+                        },
+                    )];
+                    if level == Level::Card {
+                        center.push((sub, base.fg(muted)));
+                    }
+                    let center_color = if is_domain { accent } else { muted };
+                    if level == Level::Mark {
+                        // De longe os nós ficam junto do centro: só o nome,
+                        // sem a caixa.
+                        let label = format!("◉ {}", center[0].0);
+                        let x = origin.0 - label.chars().count() as i32 / 2;
+                        put_clip(f, garea, x, origin.1, &label, center[0].1);
+                        put_clip(f, garea, x, origin.1, "◉", base.fg(center_color));
+                    } else {
+                        let cw = center
+                            .iter()
+                            .map(|(t, _)| t.chars().count())
+                            .max()
+                            .unwrap_or(0) as i32
+                            + 4;
+                        clip_box(
+                            f,
+                            garea,
+                            origin.0 - cw / 2,
+                            origin.1 - 1,
+                            &center,
+                            Style::default().fg(center_color).bg(bg),
+                        );
+                    }
+                    // Os nós; o que está em foco por último, por cima.
+                    let order: Vec<usize> = (0..n)
+                        .filter(|i| Some(*i) != g.focus)
+                        .chain(g.focus)
+                        .collect();
+                    for i in order {
+                        let (m, p) = (&row.members[i], pts[i]);
+                        let (col, line) = at(p);
+                        let focused = g.focus == Some(i);
+                        let node_bg = if focused { surface } else { bg };
+                        let color = color_of(m);
+                        let mark = m.kind.mark().to_string();
+                        let mut text = cut(&m.name, 24);
+                        if m.others > 0 {
+                            text.push_str(&format!(" +{}", m.others));
+                        }
+                        let name_style = if focused {
+                            Style::default()
+                                .fg(fg)
+                                .bg(surface)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            base
+                        };
+                        let mark_style = Style::default().fg(color).bg(node_bg);
+                        // O texto sai para fora do centro, e fica dentro da
+                        // área enquanto o nó está nela.
+                        let side = if p.0 > 0.01 {
+                            1
+                        } else if p.0 < -0.01 {
+                            -1
+                        } else {
+                            0
+                        };
+                        let (lo, hi) = (garea.x as i32, (garea.x + garea.width) as i32);
+                        let place = |w: i32| {
+                            let x = match side {
+                                1 => col,
+                                -1 => col - w + 1,
+                                _ => col - w / 2,
+                            };
+                            if col >= lo && col < hi {
+                                x.clamp(lo, (hi - w).max(lo))
+                            } else {
+                                x
+                            }
+                        };
+                        let spans: Vec<(u16, u16, u16)> = match level {
+                            Level::Mark => put_clip(f, garea, col, line, &mark, mark_style)
+                                .into_iter()
+                                .collect(),
+                            Level::Name => {
+                                let label = if side < 0 {
+                                    format!("{text} {mark}")
+                                } else {
+                                    format!("{mark} {text}")
+                                };
+                                let w = label.chars().count() as i32;
+                                let x = place(w);
+                                let sp = put_clip(f, garea, x, line, &label, name_style);
+                                put_clip(
+                                    f,
+                                    garea,
+                                    if side < 0 { x + w - 1 } else { x },
+                                    line,
+                                    &mark,
+                                    mark_style,
+                                );
+                                sp.into_iter().collect()
+                            }
+                            Level::Card => {
+                                let meta = match m.kind {
+                                    Kind::Db => g
+                                        .dbs
+                                        .iter()
+                                        .find(|d| d.name == m.name)
+                                        .map(|d| d.kind.clone())
+                                        .unwrap_or_default(),
+                                    Kind::Ssh => tr!("chave ssh", "ssh key").to_string(),
+                                    Kind::Token => {
+                                        let tools = v
+                                            .entries
+                                            .iter()
+                                            .find(|e| e.name == m.name)
+                                            .map(|e| e.tools.join(" "))
+                                            .unwrap_or_default();
+                                        if tools.is_empty() {
+                                            "token".to_string()
+                                        } else {
+                                            format!("token · {tools}")
+                                        }
+                                    }
+                                };
+                                let first = format!("{mark} {text}");
+                                let w = first.chars().count().max(meta.chars().count()) as i32 + 4;
+                                let x = place(w);
+                                let sp = clip_box(
+                                    f,
+                                    garea,
+                                    x,
+                                    line - 1,
+                                    &[
+                                        (first, name_style),
+                                        (meta, Style::default().fg(muted).bg(node_bg)),
+                                    ],
+                                    Style::default().fg(if focused { fg } else { color }).bg(bg),
+                                );
+                                put_clip(f, garea, x + 2, line, &mark, mark_style);
+                                sp
+                            }
+                        };
+                        for (y, a, b) in spans {
+                            hits.push((y, a, b, Hit::GraphNode(i)));
+                        }
+                    }
+                }
+
+                if wide {
+                    let dx = rx + gw;
+                    for y in body.y..body.y + body.height {
+                        put(f, dx, y, 1, Line::styled("│", base.fg(muted)), base);
+                    }
+                    put(
+                        f,
+                        dx + 2,
+                        body.y,
+                        DETAIL_W.saturating_sub(2),
+                        Line::styled(
+                            cut(&title, (DETAIL_W as usize).saturating_sub(2)),
+                            base.fg(accent).add_modifier(Modifier::BOLD),
+                        ),
+                        base,
+                    );
+                    for (i, l) in lines.into_iter().enumerate() {
+                        put(
+                            f,
+                            dx + 2,
+                            body.y + 2 + i as u16,
+                            DETAIL_W.saturating_sub(2),
+                            l,
+                            base,
+                        );
+                    }
+                } else if g.detail && g.member().is_some() {
+                    // Sem lugar ao lado: uma caixa sobre o grafo.
+                    let w = (DETAIL_W + 2).min(garea.width);
+                    let h = (lines.len() as u16 + 2).min(garea.height);
+                    let r = Rect::new(garea.x + garea.width - w, garea.y, w, h);
+                    f.render_widget(Clear, r);
+                    let blk = Block::default()
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(accent).bg(bg))
+                        .style(base)
+                        .title(Line::styled(
+                            format!(" {} ", cut(&title, (w as usize).saturating_sub(4))),
+                            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+                        ));
+                    let ri = blk.inner(r);
+                    f.render_widget(blk, r);
+                    for (i, l) in lines.into_iter().enumerate().take(ri.height as usize) {
+                        put(
+                            f,
+                            ri.x + 1,
+                            ri.y + i as u16,
+                            ri.width.saturating_sub(1),
+                            l,
+                            base,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // O formulário da seção do cofre, sobre a tela.
+    if let Some(form) = &v.form {
+        let fields = form.kind.fields();
+        let r = centered(inner, 64, fields.len() as u16 + 4);
+        f.render_widget(Clear, r);
+        let blk = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(accent).bg(bg))
+            .style(base)
+            .title(Line::styled(
+                format!(" {} ", form.kind.title()),
+                Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            ));
+        let ri = blk.inner(r);
+        f.render_widget(blk, r);
+        for (i, ((labels, secret), text)) in fields.iter().zip(form.fields.iter()).enumerate() {
+            let label = tr!(labels[0], labels[1]);
+            let shown = if *secret {
+                "•".repeat(text.chars().count())
+            } else {
+                text.to_string()
+            };
+            let cur = i == form.step;
+            let line = Line::from(vec![
+                Span::styled(format!("{label:<30} "), base.fg(muted)),
+                Span::styled(
+                    format!("{shown}{}", if cur { "▏" } else { "" }),
+                    if cur {
+                        Style::default()
+                            .fg(fg)
+                            .bg(surface)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        base
+                    },
+                ),
+            ]);
+            put(
+                f,
+                ri.x + 1,
+                ri.y + 1 + i as u16,
+                ri.width.saturating_sub(2),
+                line,
+                base,
+            );
+        }
+    }
+
+    if let Some(name) = &v.confirm {
+        put(
+            f,
+            inner.x + 1,
+            note_y,
+            inner.width.saturating_sub(2),
+            Line::styled(
+                trf!(
+                    "Apagar {name} do cofre? s confirma · outra tecla cancela",
+                    "Remove {name} from the vault? y confirms · any other key cancels"
+                ),
+                base.fg(err).add_modifier(Modifier::BOLD),
+            ),
+            base,
+        );
+    } else if let Some((note, is_err)) = &s.note {
+        put(
+            f,
+            inner.x + 1,
+            note_y,
+            inner.width.saturating_sub(2),
             Line::raw(note.clone()),
             Style::default()
                 .fg(if *is_err { err } else { ok })
