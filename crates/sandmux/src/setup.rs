@@ -186,29 +186,64 @@ pub enum HelperStep {
     Unsafe(String),
     /// As unidades já estão instaladas (pelo setup ou por um pacote).
     UpToDate,
+    /// As unidades estão em dia, mas o auxiliar em execução é desta versão,
+    /// mais antiga: atualizar o binário não o reinicia.
+    Restart(String),
     /// Gravar as unidades e ligar o socket.
     Install(PathBuf),
 }
 
+/// `running_old` é a versão do auxiliar em execução, quando ela é anterior
+/// à deste sandmux.
 pub fn helper_step(
     bin: Option<PathBuf>,
     meta: impl Fn(&Path) -> Option<(u32, u32)>,
     installed: Option<&str>,
     package: bool,
+    running_old: Option<String>,
 ) -> HelperStep {
     let Some(bin) = bin else {
         return HelperStep::NoBinary;
     };
+    let in_place = || match running_old.clone() {
+        Some(v) => HelperStep::Restart(v),
+        None => HelperStep::UpToDate,
+    };
     if package {
-        return HelperStep::UpToDate;
+        return in_place();
     }
     if let Err(e) = helper_path_safe(&bin, meta) {
         return HelperStep::Unsafe(e);
     }
     if installed == Some(helper_units(&bin).1.as_str()) {
-        return HelperStep::UpToDate;
+        return in_place();
     }
     HelperStep::Install(bin)
+}
+
+/// O comando que reinicia o auxiliar, para quem roda à mão.
+pub const HELPER_RESTART: &str = "sudo systemctl restart sandmux-helper.service";
+
+/// Reinicia o serviço do auxiliar, direto (root) ou por `sudo`.
+fn restart_helper(sudo: bool) -> Result<()> {
+    let args = ["systemctl", "try-restart", "sandmux-helper.service"];
+    let mut c = if sudo {
+        let mut c = Command::new("sudo");
+        c.args(args);
+        c
+    } else {
+        let mut c = Command::new(args[0]);
+        c.args(&args[1..]);
+        c
+    };
+    let st = c
+        .stdout(Stdio::null())
+        .status()
+        .with_context(|| trf!("executar {}", "run {}", args[0]))?;
+    if !st.success() {
+        bail!(trf!("`{}` falhou", "`{}` failed", args.join(" ")));
+    }
+    Ok(())
 }
 
 /// Os comandos que instalam o auxiliar, para quem roda como root.
@@ -282,7 +317,13 @@ fn setup_helper(root: bool, no_sudo: bool) -> Result<()> {
     let package = Path::new(PACKAGE_UNIT_DIR)
         .join("sandmux-helper.service")
         .exists();
-    match helper_step(helper_binary(), real_meta, installed.as_deref(), package) {
+    match helper_step(
+        helper_binary(),
+        real_meta,
+        installed.as_deref(),
+        package,
+        sandmux::helper::outdated(),
+    ) {
         HelperStep::NoBinary => println!(
             "{}",
             tr!(
@@ -304,6 +345,51 @@ fn setup_helper(root: bool, no_sudo: bool) -> Result<()> {
                 "Root helper: the sandmux-helper units are already installed."
             )
         ),
+        HelperStep::Restart(old) => {
+            let own = env!("CARGO_PKG_VERSION");
+            let interactive = std::io::stdin().is_terminal();
+            let restart = if root {
+                Some(false)
+            } else if !no_sudo
+                && interactive
+                && has_sudo()
+                && ask(&trf!(
+                    "O auxiliar root em execução é o {old}, mais antigo que este sandmux {own}: ele só troca ao ser reiniciado. Reiniciar o serviço com sudo?",
+                    "The running root helper is {old}, older than this sandmux {own}: it only changes when restarted. Restart the service with sudo?"
+                ))?
+            {
+                Some(true)
+            } else {
+                None
+            };
+            let Some(sudo) = restart else {
+                println!(
+                    "{}",
+                    trf!(
+                        "Auxiliar root: o auxiliar em execução é o {old}, mais antigo que este sandmux {own}. Para trocar pelo novo, rode:\n\n{HELPER_RESTART}\n",
+                        "Root helper: the running helper is {old}, older than this sandmux {own}. To switch to the new one, run:\n\n{HELPER_RESTART}\n"
+                    )
+                );
+                return Ok(());
+            };
+            restart_helper(sudo)?;
+            match sandmux::helper::outdated() {
+                None => println!(
+                    "{}",
+                    trf!(
+                        "Auxiliar root: o auxiliar {old} foi reiniciado com o binário novo.",
+                        "Root helper: the {old} helper was restarted with the new binary."
+                    )
+                ),
+                Some(v) => println!(
+                    "{}",
+                    trf!(
+                        "Auxiliar root: o serviço foi reiniciado, mas o auxiliar ainda responde {v}. Confira o binário em ExecStart da unidade.",
+                        "Root helper: the service was restarted, but the helper still answers {v}. Check the binary in the unit's ExecStart."
+                    )
+                ),
+            }
+        }
         HelperStep::Install(bin) => {
             let interactive = std::io::stdin().is_terminal();
             if root {
@@ -462,14 +548,43 @@ mod tests {
         ];
         let bin = PathBuf::from("/usr/local/bin/sandmux-helper");
         assert_eq!(
-            helper_step(Some(bin.clone()), meta_de(&root_tab), None, false),
+            helper_step(Some(bin.clone()), meta_de(&root_tab), None, false, None),
             HelperStep::Install(bin.clone())
         );
         let (_, svc) = helper_units(&bin);
         assert!(svc.contains("ExecStart=/usr/local/bin/sandmux-helper\n"));
         assert_eq!(
-            helper_step(Some(bin.clone()), meta_de(&root_tab), Some(&svc), false),
+            helper_step(
+                Some(bin.clone()),
+                meta_de(&root_tab),
+                Some(&svc),
+                false,
+                None
+            ),
             HelperStep::UpToDate
+        );
+        // Unidades em dia e o auxiliar em execução antigo: reiniciar.
+        assert_eq!(
+            helper_step(
+                Some(bin.clone()),
+                meta_de(&root_tab),
+                Some(&svc),
+                false,
+                Some("0.1.30".into())
+            ),
+            HelperStep::Restart("0.1.30".into())
+        );
+        // Unidades velhas: grava de novo (o try-restart da instalação pega o
+        // binário novo).
+        assert_eq!(
+            helper_step(
+                Some(bin.clone()),
+                meta_de(&root_tab),
+                Some("[Service]\nExecStart=/outro\n"),
+                false,
+                Some("0.1.30".into())
+            ),
+            HelperStep::Install(bin.clone())
         );
         // No HOME: do usuário.
         let home_tab = [
@@ -481,7 +596,13 @@ mod tests {
             ("/home/u/.local/bin/sandmux-helper", 1000, 0o100755),
         ];
         let hb = PathBuf::from("/home/u/.local/bin/sandmux-helper");
-        match helper_step(Some(hb), meta_de(&home_tab), None, false) {
+        match helper_step(
+            Some(hb),
+            meta_de(&home_tab),
+            None,
+            false,
+            Some("0.1.30".into()),
+        ) {
             HelperStep::Unsafe(why) => assert!(why.contains("sandmux-helper"), "{why}"),
             x => panic!("{x:?}"),
         }
@@ -489,17 +610,32 @@ mod tests {
         let mut tab = root_tab;
         tab[3].2 = 0o40777;
         assert!(matches!(
-            helper_step(Some(bin.clone()), meta_de(&tab), None, false),
+            helper_step(Some(bin.clone()), meta_de(&tab), None, false, None),
             HelperStep::Unsafe(_)
         ));
         assert_eq!(
-            helper_step(None, meta_de(&root_tab), None, false),
+            helper_step(None, meta_de(&root_tab), None, false, Some("0.1.30".into())),
             HelperStep::NoBinary
         );
-        // Instalado por pacote: não mexe.
+        // Instalado por pacote: não mexe nas unidades, mas reinicia o
+        // auxiliar antigo.
         assert_eq!(
-            helper_step(Some(bin.clone()), meta_de(&tab), None, true),
+            helper_step(Some(bin.clone()), meta_de(&tab), None, true, None),
             HelperStep::UpToDate
+        );
+        assert_eq!(
+            helper_step(
+                Some(bin.clone()),
+                meta_de(&tab),
+                None,
+                true,
+                Some("0.1.30".into())
+            ),
+            HelperStep::Restart("0.1.30".into())
+        );
+        assert_eq!(
+            HELPER_RESTART,
+            "sudo systemctl restart sandmux-helper.service"
         );
         let m = helper_manual_commands(&bin);
         assert!(m.contains("sudo systemctl enable --now sandmux-helper.socket"));

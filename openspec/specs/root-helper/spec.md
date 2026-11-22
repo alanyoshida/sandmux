@@ -168,11 +168,11 @@ O pedido `observe` MUST mandar um evento com o pid quando um processo do cgroup 
 - **THEN** o auxiliar MUST NOT mandar evento de saída
 
 ### Requirement: Aviso de auxiliar root antigo
-Quando o auxiliar root em execução responde com uma versão anterior à do sandmux, o `sandmux doctor` MUST mostrar um aviso com as duas versões e a correção (`sandmux setup`). O aviso MUST NOT contar como falha nem mudar o código de saída. Sem auxiliar em execução, ou com o auxiliar na mesma versão ou numa mais nova, o `sandmux doctor` MUST NOT mostrar o aviso.
+Quando o auxiliar root em execução responde com uma versão anterior à do sandmux, o `sandmux doctor` MUST mostrar um aviso com as duas versões e a correção: `sandmux setup`, que reinicia o auxiliar, ou `sudo systemctl restart sandmux-helper.service`. O aviso MUST NOT contar como falha nem mudar o código de saída. Sem auxiliar em execução, ou com o auxiliar na mesma versão ou numa mais nova, o `sandmux doctor` MUST NOT mostrar o aviso.
 
 #### Scenario: Auxiliar de antes da atualização
 - **WHEN** o sandmux instalado é o 0.1.32, o auxiliar em execução responde 0.1.30 e o usuário roda `sandmux doctor`
-- **THEN** a saída tem um aviso com `0.1.30`, `0.1.32` e `sandmux setup`, e o código de saída é o mesmo de sem o aviso
+- **THEN** a saída tem um aviso com `0.1.30`, `0.1.32`, `sandmux setup` e `sudo systemctl restart sandmux-helper.service`, e o código de saída é o mesmo de sem o aviso
 
 #### Scenario: Auxiliar na mesma versão
 - **WHEN** o auxiliar em execução responde a mesma versão do sandmux

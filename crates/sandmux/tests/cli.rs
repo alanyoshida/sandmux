@@ -76,7 +76,7 @@ fn doctor_avisa_do_auxiliar_root_antigo() {
         "{s}"
     );
     assert!(
-        s.contains("Rode `sandmux setup`, que o\n  reinicia com sudo."),
+        s.contains("Rode `sandmux setup`, que o reinicia\n  com sudo, ou:\n\n  sudo systemctl restart sandmux-helper.service"),
         "{s}"
     );
     // Na mesma versão, ou numa mais nova, nada; e o aviso não muda o código

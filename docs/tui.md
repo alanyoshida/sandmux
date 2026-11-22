@@ -256,7 +256,7 @@ A seção Processos, no fim da página, mostra a árvore dos processos vivos da 
 
 A árvore vem da observação das execuções pelo kernel ([helper.md](helper.md)): cada execução traz o pai, e cada processo que termina sai da árvore. Sem o auxiliar root, não há árvore, e a seção mostra o motivo (o mesmo que a proteção do painel mostra para a fonte das execuções). Os pids são os do host, não os de dentro do sandbox. Um processo que faz `fork` sem `exec` depois que a aba começou (um subshell, workers que se copiam) não aparece.
 
-Se o auxiliar root em execução for de uma versão anterior à do sandmux, a seção mostra um aviso no topo, com as duas versões: o auxiliar só troca ao ser reiniciado, e com o antigo a árvore pode sair sem os pais, com todos os processos na raiz. `sandmux setup` reinicia o auxiliar ([helper.md](helper.md#instalar)), e `r` confere de novo.
+Se o auxiliar root em execução for de uma versão anterior à do sandmux, a seção mostra um aviso no topo, com as duas versões e como reiniciar o auxiliar: `sandmux setup` ou `sudo systemctl restart sandmux-helper.service` ([helper.md](helper.md#instalar)). `r` confere de novo. A árvore sai com os pais mesmo com um auxiliar antigo: quando a execução chega sem o pai (antes da 0.1.32), o pai vem do `/proc`.
 
 - **Migalha de pão:** a primeira linha mostra o caminho até a raiz da tela, começando por "aba", e o nível de zoom. Um clique num segmento volta a ele.
 - **Zoom (`+` e `-`):** três níveis para a árvore inteira: nome e pid; mais a memória residente; e um cartão com a linha de comando, o CPU usado, a memória, há quanto tempo o processo começou e o cgroup.

@@ -1595,7 +1595,8 @@ fn processos_avisa_do_auxiliar_root_antigo() {
     t.wait_text(&format!(
         "auxiliar root 0.0.1 mais antigo que o sandmux {own}"
     ));
-    t.wait_text("rode `sandmux setup` para reiniciar o auxiliar");
+    t.wait_text("ele só troca ao ser reiniciado: `sandmux setup` ou");
+    t.wait_text("sudo systemctl restart sandmux-helper.service");
     // Com o auxiliar em dia, `r` confere de novo e o aviso some.
     h.set_version(own);
     t.write(b"\t");

@@ -75,8 +75,9 @@ pub enum Change {
 }
 
 /// As mudanças de uma mensagem da observação, com o `starttime` lido no
-/// `/proc` (fora do lock do daemon). Um auxiliar antigo manda a execução sem
-/// `ppid`: o nó fica como raiz.
+/// `/proc` (fora do lock do daemon). Um auxiliar de antes da 0.1.32 manda a
+/// execução sem `ppid`: o pai vem do `/proc`, e o nó só fica sem pai quando
+/// o processo já terminou.
 pub fn changes(msg: &Value, proc_root: &Path) -> Vec<Change> {
     msg["ev"]
         .as_array()
@@ -85,11 +86,20 @@ pub fn changes(msg: &Value, proc_root: &Path) -> Vec<Change> {
         .filter_map(|e| {
             let pid = e["pid"].as_u64().and_then(|p| u32::try_from(p).ok())?;
             match e["kind"].as_str() {
-                Some("exec") => Some(Change::Exec {
-                    pid,
-                    ppid: e["ppid"].as_u64().unwrap_or(0) as u32,
-                    start: stat(proc_root, pid).map(|s| s.start).unwrap_or(0),
-                }),
+                Some("exec") => {
+                    let st = stat(proc_root, pid);
+                    let ppid = e["ppid"]
+                        .as_u64()
+                        .and_then(|p| u32::try_from(p).ok())
+                        .filter(|p| *p != 0)
+                        .or_else(|| st.as_ref().map(|s| s.ppid))
+                        .unwrap_or(0);
+                    Some(Change::Exec {
+                        pid,
+                        ppid,
+                        start: st.map(|s| s.start).unwrap_or(0),
+                    })
+                }
                 Some("exit") => Some(Change::Exit(pid)),
                 _ => None,
             }
@@ -374,6 +384,51 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].pid, me);
         assert!(v[0].rss > 0 && !v[0].cmdline.is_empty(), "{:?}", v[0]);
+    }
+
+    #[test]
+    fn evento_sem_pai_usa_o_do_proc() {
+        // O auxiliar de antes da 0.1.32 não manda o pai.
+        let p = fake_proc(&[
+            (20, 1, "sandmux-run", 5),
+            (21, 20, "opencode", 6),
+            (22, 21, "bash", 7),
+            (23, 22, "sleep", 8),
+        ]);
+        let mut t = ProcTree::default();
+        t.apply(
+            &json!({"ev": [{"kind": "exec", "pid": 20, "ppid": 1}]}),
+            p.path(),
+        );
+        t.apply(
+            &json!({"ev": [
+                {"kind": "exec", "pid": 21, "path": "/x/opencode"},
+                {"kind": "exec", "pid": 22, "path": "/bin/bash"},
+                {"kind": "exec", "pid": 23, "ppid": 0, "path": "/bin/sleep"},
+                {"kind": "exec", "pid": 99, "path": "/bin/sumiu"}
+            ]}),
+            p.path(),
+        );
+        // O 99 já não está no /proc: fica sem pai e sai no pedido.
+        assert_eq!(
+            pais(&mut t, p.path()),
+            [(20, 0), (21, 20), (22, 21), (23, 22)]
+        );
+        // O pai do evento, quando vem, ganha do /proc.
+        let mut t = ProcTree::default();
+        t.apply(
+            &json!({"ev": [
+                {"kind": "exec", "pid": 22, "ppid": 21},
+                {"kind": "exec", "pid": 23, "ppid": 21}
+            ]}),
+            p.path(),
+        );
+        assert_eq!(pais(&mut t, p.path()), [(22, 0), (23, 0)]);
+        t.apply(
+            &json!({"ev": [{"kind": "exec", "pid": 21, "ppid": 20}]}),
+            p.path(),
+        );
+        assert_eq!(pais(&mut t, p.path()), [(21, 0), (22, 21), (23, 21)]);
     }
 
     #[test]

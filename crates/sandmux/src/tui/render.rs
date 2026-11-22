@@ -1075,14 +1075,25 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
                 w,
                 Line::styled(
                     tr!(
-                        "a árvore pode sair sem os pais; rode `sandmux setup` para reiniciar o auxiliar",
-                        "the tree may come without parents; run `sandmux setup` to restart the helper"
+                        "ele só troca ao ser reiniciado: `sandmux setup` ou",
+                        "it only changes when restarted: `sandmux setup` or"
                     ),
                     base.fg(muted),
                 ),
                 base,
             );
-            y += 3;
+            put(
+                f,
+                x0,
+                y + 2,
+                w,
+                Line::styled(
+                    "sudo systemctl restart sandmux-helper.service",
+                    base.fg(muted),
+                ),
+                base,
+            );
+            y += 4;
         }
         if let Some(why) = &v.unavailable {
             put(

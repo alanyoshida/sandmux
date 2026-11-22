@@ -159,6 +159,13 @@ for b in $BINS; do
     as_dest install -m 0755 "$src/bin/$b" "$prefix/$b"
 done
 say "binários instalados em $prefix"
+# O auxiliar root em execução só troca ao ser reiniciado: numa atualização, a
+# unidade continua igual e o setup não o reinicia. Os pacotes fazem o mesmo.
+if [ "$priv" -eq 1 ] && [ -e /etc/systemd/system/sandmux-helper.service ] \
+    && [ -d /run/systemd/system ]; then
+    $SUDO systemctl try-restart sandmux-helper.service 2>/dev/null \
+        && say "auxiliar root reiniciado com o binário novo" || true
+fi
 case ":$PATH:" in
     *":$prefix:"*) ;;
     *) say "aviso: $prefix não está no PATH; acrescente-o ao seu shell" ;;
