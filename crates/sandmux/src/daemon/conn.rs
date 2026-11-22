@@ -491,6 +491,35 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     Err(e) => error(&mut stream, e)?,
                 }
             }
+            Msg::CloudCapture {
+                tag,
+                parent,
+                creds,
+                expires,
+            } => {
+                let _ = tag;
+                let open = shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .unlocked();
+                if open {
+                    let (id, secret, token) =
+                        shared
+                            .cloud
+                            .capture(&parent, *creds, expires, crate::cloud::now());
+                    write_control(&mut stream, &Msg::CloudCaptured { id, secret, token })?;
+                } else {
+                    error(
+                        &mut stream,
+                        tr!(
+                            "o cofre está trancado: a credencial não foi guardada",
+                            "the vault is locked: the credential was not stored"
+                        )
+                        .to_string(),
+                    )?;
+                }
+            }
             Msg::ConfineTab {
                 tag,
                 mounts,

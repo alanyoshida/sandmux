@@ -215,6 +215,9 @@ pub struct RunOptions {
     /// A pasta do `kubectl` só desta execução, com o kubeconfig das
     /// identidades de Kubernetes do cofre (só falsos).
     pub kube_dir: Option<PathBuf>,
+    /// A pasta do `aws` só desta execução, com os pares falsos das
+    /// identidades da AWS do cofre.
+    pub aws_dir: Option<PathBuf>,
     /// Registro de rede deste lançamento (pasta e etiqueta). Sem ele, o
     /// sandbox usa a rede do host (testes da composição).
     pub net: Option<NetLaunch>,
@@ -273,6 +276,7 @@ impl RunOptions {
             tool_secrets: Vec::new(),
             gcloud_dir: None,
             kube_dir: None,
+            aws_dir: None,
             net: None,
         }
     }
@@ -887,6 +891,12 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     // Identidades de Kubernetes: a pasta do `kubectl` desta execução, com
     // escrita (`kubectl config use-context` e o cache de descoberta), e a CA
     // do lançamento ao lado do kubeconfig, que aponta para ela.
+    // Identidades da AWS: a pasta do `aws` desta execução, com escrita (o
+    // cache do `aws` grava nela).
+    let aws = gateway && opts.aws_dir.is_some();
+    if let Some(d) = opts.aws_dir.as_ref().filter(|_| gateway) {
+        b.bind(d, &host.home.join(crate::cloudtab::AWS_DIR), true);
+    }
     let kube = gateway && opts.kube_dir.is_some();
     if let Some(d) = opts.kube_dir.as_ref().filter(|_| gateway) {
         let dest = host.home.join(crate::cloudtab::KUBE_DIR);
@@ -1146,6 +1156,17 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         env.push(("SANDMUX_HOST".into(), HOST_NAME.into()));
     }
     env.extend(tls_env);
+    if aws {
+        let d = host.home.join(crate::cloudtab::AWS_DIR);
+        env.push((
+            "AWS_CONFIG_FILE".into(),
+            d.join("config").display().to_string(),
+        ));
+        env.push((
+            "AWS_SHARED_CREDENTIALS_FILE".into(),
+            d.join("credentials").display().to_string(),
+        ));
+    }
     if kube {
         env.push((
             "KUBECONFIG".into(),
@@ -1346,6 +1367,7 @@ pub const CA_VARS: &[&str] = &[
     "CURL_CA_BUNDLE",
     "GIT_SSL_CAINFO",
     "CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE",
+    "AWS_CA_BUNDLE",
 ];
 
 /// Pacotes de CAs do sistema, na ordem de procura.

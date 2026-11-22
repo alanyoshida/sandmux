@@ -525,7 +525,35 @@ fn documentacao_das_credenciais_de_cloud_acompanha_o_codigo() {
         sandmux_policy::cloudtab::KUBE_CA_FILE
     )));
     assert!(doc.contains(&format!("{} minutos", sandmux::kube::NO_EXPIRY / 60 - 5)));
+    // A AWS.
+    for c in [
+        "sandmux vault add-cloud aws",
+        "--profile",
+        "aws configure export-credentials --profile <perfil> --format process",
+        "AWS_CONFIG_FILE",
+        "AWS_SHARED_CREDENTIALS_FILE",
+        "AWS_CA_BUNDLE",
+        "X-Amz-Security-Token",
+        "STREAMING-AWS4-HMAC-SHA256-PAYLOAD",
+        "GetSessionToken",
+        "GetRoleCredentials",
+        "GetCredentialsForIdentity",
+        "iam:CreateAccessKey",
+        "SigV4a",
+        "403",
+        "32 MiB",
+    ] {
+        assert!(doc.contains(c), "docs/cloud.md não cita {c}");
+    }
+    assert!(doc.contains(sandmux_spec::net::AWS_ID_PREFIX));
+    assert!(doc.contains(sandmux_spec::net::AWS_CAPTURED_PREFIX));
+    assert_eq!(sandmux_net::aws::MAX_BODY, 32 << 20);
+    assert!(sandmux_policy::compose::CA_VARS.contains(&"AWS_CA_BUNDLE"));
+    for a in sandmux_net::aws::STS_ACTIONS.iter().take(1) {
+        assert!(doc.contains(a));
+    }
     let en = std::fs::read_to_string(format!("{root}/docs/en/cloud.md")).unwrap();
+    assert!(en.contains("sandmux vault add-cloud aws") && en.contains("SigV4a"));
     assert!(en.contains("sandmux vault add-cloud kubernetes") && en.contains("10 minutes"));
 }
 

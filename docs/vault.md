@@ -181,7 +181,7 @@ Chaves em hardware (YubiKey) e agentes de terceiros (como o do 1Password) não s
 
 ## Identidades de cloud
 
-O cofre também guarda identidades de cloud (`sandmux vault add-cloud gcp <nome>` e `sandmux vault add-cloud kubernetes`): o agente usa o `gcloud`, as bibliotecas do Google e o `kubectl` com um token falso, e o real fica fora do sandbox, com o daemon. Na TUI e no grafo, uma identidade aparece no domínio dela (`*.googleapis.com` no GCP, `<nome>.kube.sandmux.internal` no Kubernetes), só para leitura: `x` apaga. Detalhes em [cloud.md](cloud.md).
+O cofre também guarda identidades de cloud (`sandmux vault add-cloud gcp <nome>`, `sandmux vault add-cloud kubernetes` e `sandmux vault add-cloud aws`): o agente usa o `gcloud`, as bibliotecas do Google, o `kubectl` e o `aws` com um falso, e o real fica fora do sandbox, com o daemon. Na TUI e no grafo, uma identidade aparece no domínio dela (`*.googleapis.com` no GCP, `<nome>.kube.sandmux.internal` no Kubernetes, `*.amazonaws.com` na AWS), só para leitura: `x` apaga. Detalhes em [cloud.md](cloud.md).
 
 ## Conexões de banco
 

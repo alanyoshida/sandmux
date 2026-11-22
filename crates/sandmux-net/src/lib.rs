@@ -7,6 +7,7 @@
 //! repassado, o DNS em `10.0.2.3` é respondido com o resolvedor do host, e
 //! tudo é registrado. Os metadados de cloud, o QUIC e o ICMP são bloqueados.
 
+pub mod aws;
 pub mod dns;
 pub mod hostports;
 pub mod inject;
@@ -15,6 +16,7 @@ pub mod mitm;
 pub mod policy;
 pub mod ports;
 pub mod procinfo;
+pub mod sigv4;
 pub mod sniff;
 pub mod tls;
 mod tun;

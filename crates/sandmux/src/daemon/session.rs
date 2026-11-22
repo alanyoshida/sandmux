@@ -602,6 +602,7 @@ pub fn spawn(
     // com falsos.
     let gcloud_dir = gcloud_dir(shared, &tag, &host.home);
     let kube_dir = kube_dir(shared, &tag, &host.home);
+    let aws_dir = aws_dir(shared, &tag);
     let access = sandmux_spec::VaultAccess {
         socket: shared.socket.clone(),
         data_dir: shared.base.data_dir.clone(),
@@ -619,6 +620,7 @@ pub fn spawn(
             tool_secrets,
             gcloud_dir,
             kube_dir,
+            aws_dir,
             ssh_agent_socket: ssh_agent.as_ref().map(|a| a.path.clone()),
             ssh_servers,
             db_socket: db.as_ref().map(|d| d.path.clone()),
@@ -1362,6 +1364,7 @@ fn reader(shared: Arc<Shared>, id: u32, pid: i32, master: Arc<File>, mut child: 
         for t in &s.tags {
             let _ = std::fs::remove_dir_all(crate::launch::gcloud_dir_path(t));
             let _ = std::fs::remove_dir_all(crate::launch::kube_dir_path(t));
+            let _ = std::fs::remove_dir_all(crate::launch::aws_dir_path(t));
         }
         workdir = Some(s.opts.workdir.clone());
     }
@@ -1660,6 +1663,41 @@ pub fn vault_unlocked(shared: &Arc<Shared>) {
 
 /// Grava a pasta do `gcloud` do lançamento `tag` com as identidades de GCP do
 /// cofre aberto (só os falsos). `None` sem identidade, ou com o cofre trancado.
+/// A pasta do `aws` da aba, com as identidades da AWS do cofre aberto (só
+/// falsos); `None` sem identidade.
+fn aws_dir(shared: &Arc<Shared>, tag: &str) -> Option<std::path::PathBuf> {
+    let ids: Vec<sandmux_policy::cloudtab::AwsTab> = shared
+        .vault
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .cloud_identities()
+        .into_iter()
+        .filter(|i| i.data.info.provider == "aws")
+        .map(|i| sandmux_policy::cloudtab::AwsTab {
+            profile: i.data.info.configuration.clone(),
+            region: i.data.info.region.clone(),
+            fake_id: i.fake.clone(),
+            fake_secret: i.data.info.secret_fake.clone(),
+            default: i.data.info.default,
+        })
+        .collect();
+    let dir = crate::launch::aws_dir_path(tag);
+    match sandmux_policy::cloudtab::write_aws_dir(&dir, &ids) {
+        Ok(true) => Some(dir),
+        Ok(false) => None,
+        Err(e) => {
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmuxd: pasta do aws da aba não gravada: {e}",
+                    "sandmuxd: the tab's aws folder was not written: {e}"
+                )
+            );
+            None
+        }
+    }
+}
+
 /// A pasta do `kubectl` da aba, com as identidades de Kubernetes do cofre
 /// aberto (só falsos); `None` sem identidade.
 fn kube_dir(shared: &Arc<Shared>, tag: &str, home: &std::path::Path) -> Option<std::path::PathBuf> {

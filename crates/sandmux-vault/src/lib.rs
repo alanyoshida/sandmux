@@ -223,6 +223,23 @@ pub fn new_fake_with(format_prefix: &str) -> String {
     format!("{format_prefix}{FAKE_PREFIX}{hex}")
 }
 
+/// Um par falso da AWS: o ID da chave (`id_prefix` mais `[A-Z2-7]` até 20
+/// caracteres, como um ID de verdade) e a chave secreta de 40 caracteres
+/// (`sandmux-fake-` e hexadecimais).
+pub fn new_aws_fake(id_prefix: &str) -> (String, String) {
+    const B32: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let r = random::<20>();
+    let id: String = id_prefix
+        .chars()
+        .chain(r.iter().map(|x| B32[(*x as usize) % 32] as char))
+        .take(20)
+        .collect();
+    let s = random::<14>();
+    let hex: String = s.iter().map(|x| format!("{x:02x}")).collect();
+    let secret = format!("{FAKE_PREFIX}{hex}")[..40].to_string();
+    (id, secret)
+}
+
 /// Parâmetros do Argon2id: 64 MiB, 3 passadas, 1 via.
 const M_KIB: u32 = 64 * 1024;
 const T: u32 = 3;
@@ -472,6 +489,21 @@ mod tests {
             kind: String::new(),
             tools: Vec::new(),
         }
+    }
+
+    #[test]
+    fn par_falso_da_aws() {
+        let (id, secret) = new_aws_fake("AKIASANDMUX");
+        assert_eq!(id.len(), 20);
+        assert!(id.starts_with("AKIASANDMUX"), "{id}");
+        assert!(
+            id.chars()
+                .all(|c| c.is_ascii_uppercase() || ('2'..='7').contains(&c)),
+            "{id}"
+        );
+        assert_eq!(secret.len(), 40);
+        assert!(secret.starts_with(FAKE_PREFIX));
+        assert_ne!(new_aws_fake("AKIASANDMUX").0, id);
     }
 
     #[test]

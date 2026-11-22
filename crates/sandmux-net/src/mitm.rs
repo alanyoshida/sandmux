@@ -792,12 +792,36 @@ where
                 n: 0,
                 done: Some(Box::new(move |n| up2.store(n, Ordering::Relaxed))),
             };
-            let mut out = hyper::Request::from_parts(parts, body.boxed());
+            // A AWS: o pedido com o par falso de uma identidade é reassinado.
+            let aws = match crate::aws::prepare(parts, body.boxed(), &list).await {
+                Ok(p) => p,
+                Err(e) => {
+                    let (r, status) = *e;
+                    ctx.log.write_http(
+                        ctx.proto,
+                        &ctx.domain,
+                        &ctx.ip,
+                        ctx.port,
+                        up.load(Ordering::Relaxed),
+                        0,
+                        t0.elapsed().as_millis() as u64,
+                        crate::log::Http {
+                            method: &method,
+                            path: &path,
+                            status,
+                            secret: None,
+                        },
+                    );
+                    return Ok(r);
+                }
+            };
+            let (aws_name, aws_capture) = (aws.name, aws.capture);
+            let mut out = hyper::Request::from_parts(aws.parts, aws.body);
             if ws {
                 // Sem compressão, as mensagens de texto podem ser lidas.
                 out.headers_mut().remove("sec-websocket-extensions");
             }
-            let secret = rewrite(&mut out, &list).or(kube);
+            let secret = rewrite(&mut out, &list).or(kube).or(aws_name);
             let resp = {
                 let mut s = sender.lock().await;
                 match s.ready().await {
@@ -835,6 +859,29 @@ where
                 }
             };
             let status = resp.status().as_u16();
+            // Credenciais emitidas dentro da aba: o real vira falsos.
+            if let Some(parent) = aws_capture.filter(|_| resp.status().is_success()) {
+                let (status, r) = match crate::aws::swap_response(resp, &ctx, &parent).await {
+                    Ok(r) => (status, r),
+                    Err((st, msg)) => (st, refuse(st, &msg)),
+                };
+                ctx.log.write_http(
+                    ctx.proto,
+                    &ctx.domain,
+                    &ctx.ip,
+                    ctx.port,
+                    up.load(Ordering::Relaxed),
+                    r.body().size_hint().exact().unwrap_or(0),
+                    t0.elapsed().as_millis() as u64,
+                    crate::log::Http {
+                        method: &method,
+                        path: &path,
+                        status,
+                        secret: secret.as_deref(),
+                    },
+                );
+                return Ok(r);
+            }
             if let (Some(guest_up), 101) = (guest_up, status) {
                 let mut resp = resp;
                 let dest_up = hyper::upgrade::on(&mut resp);
@@ -1146,6 +1193,7 @@ mod tests {
             expires,
             error: error.into(),
             kube: None,
+            aws: None,
         }
     }
 

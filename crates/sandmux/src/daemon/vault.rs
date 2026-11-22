@@ -360,15 +360,16 @@ impl VaultState {
     /// os falsos novos. A primeira do provedor, ou uma com `default`, vira a
     /// padrão.
     pub fn add_cloud(&mut self, mut c: sandmux_proto::msg::CloudAdd) -> Result<String, String> {
+        let aws = c.info.provider == "aws";
         let kube = c.info.provider == "kubernetes";
-        if !kube && c.info.provider != "gcp" {
+        if !kube && !aws && c.info.provider != "gcp" {
             return Err(trf!(
-                "provedor de cloud desconhecido: {}; use gcp ou kubernetes",
-                "unknown cloud provider: {}; use gcp or kubernetes",
+                "provedor de cloud desconhecido: {}; use gcp, kubernetes ou aws",
+                "unknown cloud provider: {}; use gcp, kubernetes or aws",
                 c.info.provider
             ));
         }
-        let name_ok = if kube {
+        let name_ok = if kube || aws {
             sandmux_spec::net::kube_name(&c.name).as_deref() == Some(c.name.as_str())
         } else {
             crate::cloud::valid_name(&c.name)
@@ -380,8 +381,19 @@ impl VaultState {
                 c.name
             ));
         }
-        match (kube, c.info.source.as_str()) {
+        match (kube || aws, c.info.source.as_str()) {
             (_, "host") if !c.info.configuration.is_empty() => {}
+            (true, "copy") if aws => {
+                let k: sandmux_proto::msg::AwsCreds =
+                    serde_json::from_str(&c.secret).map_err(|e| e.to_string())?;
+                if k.access_key_id.is_empty() || k.secret.is_empty() {
+                    return Err(tr!(
+                        "a cópia da AWS precisa das duas partes da chave",
+                        "the AWS copy needs both parts of the key"
+                    )
+                    .into());
+                }
+            }
             (false, "adc") => {
                 crate::cloud::check_adc(&c.secret)?;
             }
@@ -406,6 +418,13 @@ impl VaultState {
                 )
                 .into());
             }
+            (true, _) if aws => {
+                return Err(tr!(
+                    "identidade da AWS sem perfil",
+                    "AWS identity without a profile"
+                )
+                .into());
+            }
             (true, _) => {
                 return Err(tr!(
                     "identidade de Kubernetes sem contexto",
@@ -414,7 +433,13 @@ impl VaultState {
                 .into());
             }
         }
-        let prefix = if kube { "kube" } else { "gcp" };
+        let prefix = if kube {
+            "kube"
+        } else if aws {
+            "aws"
+        } else {
+            "gcp"
+        };
         let name = format!("{prefix}:{}", c.name);
         let o = self.opened()?;
         if o.contents.secrets.iter().any(|s| s.name == name) {
@@ -441,7 +466,11 @@ impl VaultState {
                 }
             }
         }
-        let (domains, fake) = if kube {
+        let (domains, fake) = if aws {
+            let (id, secret) = sandmux_vault::new_aws_fake(sandmux_spec::net::AWS_ID_PREFIX);
+            c.info.secret_fake = secret;
+            (vec![sandmux_spec::net::aws_domain()], id)
+        } else if kube {
             (
                 vec![sandmux_spec::net::kube_domain(&c.name)],
                 sandmux_vault::new_fake_with("").replacen(
@@ -1015,6 +1044,47 @@ mod tests {
             d,
             vec!["gcp:trabalho".to_string(), "kube:kind-dev".to_string()]
         );
+    }
+
+    #[test]
+    fn identidades_da_aws_no_cofre() {
+        let d = tempfile::tempdir().unwrap();
+        let mut v = VaultState::new(d.path());
+        v.init("s").unwrap();
+        let aws = |name: &str, source: &str, secret: &str| sandmux_proto::msg::CloudAdd {
+            name: name.into(),
+            info: sandmux_proto::msg::CloudInfo {
+                provider: "aws".into(),
+                source: source.into(),
+                configuration: if source == "host" {
+                    name.into()
+                } else {
+                    String::new()
+                },
+                region: "sa-east-1".into(),
+                ..Default::default()
+            },
+            secret: secret.into(),
+        };
+        assert_eq!(v.add_cloud(aws("dev", "host", "")).unwrap(), "aws:dev");
+        let copy = r#"{"access_key_id":"AKIAREAL","secret":"SEGREDO-REAL"}"#;
+        v.add_cloud(aws("ci", "copy", copy)).unwrap();
+        assert!(
+            v.add_cloud(aws("x", "copy", r#"{"access_key_id":"A","secret":""}"#))
+                .is_err()
+        );
+        assert!(v.add_cloud(aws("Dev_SSO", "host", "")).is_err());
+        let list = v.list().unwrap();
+        let e = list.iter().find(|e| e.name == "aws:ci").unwrap();
+        let fake = e.fake.as_deref().unwrap();
+        assert!(
+            fake.starts_with("AKIASANDMUX") && fake.len() == 20,
+            "{fake}"
+        );
+        assert_eq!(e.cloud.as_ref().unwrap().secret_fake.len(), 40);
+        assert_eq!(e.domains, vec!["*.amazonaws.com".to_string()]);
+        assert!(!format!("{list:?}").contains("SEGREDO-REAL"));
+        assert_eq!(default_of(&mut v), vec!["aws:dev".to_string()]);
     }
 
     #[test]

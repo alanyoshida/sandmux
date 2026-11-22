@@ -416,6 +416,7 @@ pub fn real_of(mut m: Material, now: u64) -> Result<Real, String> {
         token,
         expires,
         kube: Some(std::mem::take(&mut m.target)),
+        aws: None,
     })
 }
 
@@ -435,6 +436,7 @@ pub fn resolve(id: &CloudAdd) -> Result<Real, String> {
                 token: c.token.clone(),
                 expires: now() + NO_EXPIRY,
                 kube: Some(c.target.clone()),
+                aws: None,
             })
         }
         other => Err(trf!(

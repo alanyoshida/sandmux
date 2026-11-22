@@ -230,6 +230,8 @@ pub struct VaultLaunch {
     pub gcloud_dir: Option<PathBuf>,
     /// A pasta do `kubectl` da execução, com as identidades de Kubernetes.
     pub kube_dir: Option<PathBuf>,
+    /// A pasta do `aws` da execução, com as identidades da AWS.
+    pub aws_dir: Option<PathBuf>,
     /// Socket do agente SSH do lançamento e os servidores das chaves.
     pub ssh_agent_socket: Option<PathBuf>,
     pub ssh_servers: Vec<String>,
@@ -394,6 +396,7 @@ pub fn prepare_with(
     run.tool_secrets = vault.tool_secrets;
     run.gcloud_dir = vault.gcloud_dir;
     run.kube_dir = vault.kube_dir;
+    run.aws_dir = vault.aws_dir;
     run.ssh_agent_socket = vault.ssh_agent_socket;
     run.ssh_servers = vault.ssh_servers;
     let window = crate::window::open(eff.window.value, &host.env, net_tag)?;
@@ -606,6 +609,11 @@ pub fn launch_ca() -> Option<sandmux_spec::TlsSpec> {
 /// A pasta do `gcloud` de um lançamento (só falsos), apagada no fim dele.
 pub fn gcloud_dir_path(tag: &str) -> PathBuf {
     crate::paths::runtime_dir().join("cloud").join(tag)
+}
+
+/// A pasta do `aws` de um lançamento (só falsos), apagada no fim dele.
+pub fn aws_dir_path(tag: &str) -> PathBuf {
+    crate::paths::runtime_dir().join("aws").join(tag)
 }
 
 /// A pasta do `kubectl` de um lançamento (só falsos), apagada no fim dele.

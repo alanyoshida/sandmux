@@ -2,9 +2,9 @@
 
 > Português: [cloud.md](../cloud.md)
 
-The agent uses `gcloud`, the Google Cloud libraries and `kubectl` inside the sandbox, but no real cloud credential enters it. Each cloud identity in the vault becomes a fake token in the tab. The real one stays outside the sandbox, with the daemon, and the gateway puts it in place of the fake only in requests to that identity's cloud. A fake copied out is worth nothing.
+The agent uses `gcloud`, the Google Cloud libraries, `kubectl`, `aws` and the AWS SDKs inside the sandbox, but no real cloud credential enters it. Each cloud identity in the vault becomes a fake token in the tab. The real one stays outside the sandbox, with the daemon, and the gateway puts it in place of the fake only in requests to that identity's cloud. A fake copied out is worth nothing.
 
-Today sandmux covers GCP and Kubernetes ([below](#kubernetes)). AWS comes later.
+sandmux covers GCP, Kubernetes ([below](#kubernetes)) and AWS ([below](#aws)).
 
 ## Storing an identity
 
@@ -119,3 +119,65 @@ Whatever the RBAC of each context allows: the gateway does not filter requests t
 - **kubeconfig `proxy-url`:** the gateway connects straight to the server.
 - **`insecure-skip-tls-verify`:** when the host kubeconfig asks for it, the gateway does not verify the server either.
 - **A renewed client certificate** takes effect on the next connection; a long connection (`get -w`) keeps the previous one until the server closes it.
+
+## AWS
+
+### Storing the profiles
+
+With the vault unlocked, one command stores every profile of the host (the ones in `~/.aws/config` and `~/.aws/credentials`, or in `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE`), each as an identity:
+
+```sh
+# Every profile, by reference to the host (the default)
+sandmux vault add-cloud aws
+
+# Only some profiles
+sandmux vault add-cloud aws --profile dev --profile ci
+
+# Copy of the long-term key of an IAM user
+sandmux vault add-cloud aws --profile ci --copy
+```
+
+The name in the vault is `aws:<name>`, with the same rule as Kubernetes: `Dev_SSO` becomes `aws:dev-sso`. A name already in the vault is skipped, with a warning. The identity of the `default` profile is the default; without it, the one of the `AWS_PROFILE` profile, or the first one stored.
+
+- **Reference to the host (the default):** the vault keeps only the profile, the region and the variables of the host files. The daemon gets the real one from the host `aws` (`aws configure export-credentials --profile <profile> --format process`), with your environment, outside the sandbox. SSO, `assume-role` and `credential_process` work as in your terminal; when SSO expires, run `aws sso login` on the host.
+- **Copy (`--copy`):** both parts of the profile's long-term key are encrypted in the vault, and the gateway signs with it directly. A profile without a static key (SSO, `role_arn`, `credential_process`) or with a session token cannot be copied.
+
+Without `--profile`, a refused profile is skipped with the reason. `sandmux vault list` shows each identity with the source, the region and the fake ID, never the key.
+
+### In the tab
+
+With at least one AWS identity, every tab gets, only during the run, a writable `~/.aws` folder (`AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` point to it):
+
+- one profile per identity, with the original name and the region;
+- one fake pair per profile: the key ID (`AKIASANDMUX…`, 20 characters) and a fake secret key;
+- the `[default]` with the default identity.
+
+`aws` trusts the launch CA (`AWS_CA_BUNDLE`), and its cache (`~/.aws/cli/cache`) goes away at the end.
+
+### In the gateway
+
+With an AWS identity in the vault, every tab decrypts `*.amazonaws.com`. On AWS, the secret does not travel in the request: the SDK signs each request (SigV4) with the secret key. The gateway finds the identity by the fake ID in the request and redoes the signature with the real key, over the same canonical request:
+
+- in the `Authorization` and in the presigned URL (`X-Amz-Signature`);
+- with the real session token (`X-Amz-Security-Token`), when the real one is temporary;
+- in S3 uploads with signed `aws-chunked` (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`, also with the trailer), chunk by chunk, streaming.
+
+A request without `x-amz-content-sha256` has its body read for the hash, up to 32 MiB; above that, `413`. The log has the identity name (`key: aws:dev`), never the key.
+
+**Credentials issued inside the tab:** the answer of STS (`AssumeRole`, `GetSessionToken`, `GetFederationToken` and the like), of SSO's `GetRoleCredentials` or of Cognito's `GetCredentialsForIdentity` carries a real credential. The gateway swaps it for new fakes (`ASIASANDMUX…`), and the daemon keeps the real one only in memory, until it expires. Requests with those fakes are re-signed with the stored real one (`key: aws:dev+sts` in the log). An answer that cannot be swapped (compressed, too large, or with the vault locked) is refused with `502`. A `sandmux daemon restart` forgets those credentials.
+
+The real one is fetched again before it expires, with a 5-minute margin; without an expiry (a static key), every 10 minutes. When the real one is missing (`aws` is not on the host, SSO expired, the profile is gone), the gateway answers `403` with an error in the AWS format that says what to do on the host, and the daemon warns once. `sandmux doctor` warns about each reference without `aws` on the host.
+
+### What the agent can do
+
+Whatever the IAM of the profile allows: the gateway does not filter requests. Prefer a role of its own for the agent, with the minimum, and remove from the vault the production profiles it must not see. Two permissions hand out a real credential that the gateway does not swap, and should stay out:
+
+- creating access keys (`iam:CreateAccessKey`): the new key comes back in the answer;
+- reading secrets from Secrets Manager.
+
+### AWS limits
+
+- **SigV4a** (`AWS4-ECDSA-P256-SHA256`, from multi-region access points): the request passes unchanged and fails at AWS.
+- **Event streams signed in the request** (Transcribe streaming, over HTTP/2): the gateway only speaks HTTP/1.1. Streamed answers (Bedrock `InvokeModelWithResponseStream`) work.
+- **China** (`*.amazonaws.com.cn`) and the `*.api.aws` endpoints are not decrypted.
+- **`aws configure` or `aws sso login` inside the tab** write to the tab's folder, which goes away at the end. Log in on the host.

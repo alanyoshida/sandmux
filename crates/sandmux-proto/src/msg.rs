@@ -454,6 +454,15 @@ pub struct CloudInfo {
     /// No Kubernetes: o `KUBECONFIG` do host, numa referência.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kubeconfig: String,
+    /// Na AWS (protocolo 48): a região do perfil.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub region: String,
+    /// Na AWS: a chave secreta falsa (o ID falso é o falso da entrada).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub secret_fake: String,
+    /// Variáveis do host para a CLI da referência (`AWS_CONFIG_FILE`…).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<(String, String)>,
 }
 
 /// Uma identidade de cloud nova, do cliente ao daemon (protocolo 46). Numa
@@ -542,6 +551,33 @@ pub struct Injection {
     /// TLS até ele.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kube: Option<KubeTarget>,
+    /// Numa identidade da AWS (protocolo 48): a chave real, com que o
+    /// gateway refaz a assinatura.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws: Option<AwsCreds>,
+}
+
+/// A chave real de uma identidade da AWS, e o token de sessão falso de uma
+/// credencial capturada.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AwsCreds {
+    pub access_key_id: String,
+    pub secret: String,
+    #[serde(default)]
+    pub session_token: String,
+    /// O token de sessão falso que o sandbox manda (só numa credencial
+    /// capturada).
+    #[serde(default)]
+    pub session_fake: String,
+}
+
+impl std::fmt::Debug for AwsCreds {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsCreds")
+            .field("access_key_id", &self.access_key_id)
+            .field("session", &!self.session_token.is_empty())
+            .finish_non_exhaustive()
+    }
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -873,6 +909,15 @@ pub enum Msg {
         harness: String,
         items: Vec<(String, String)>,
     },
+    /// Uma credencial da AWS emitida dentro da aba (STS, SSO, Cognito), do
+    /// gateway ao daemon, que a guarda só na memória até `expires` e devolve
+    /// os falsos (protocolo 48). `parent` é a identidade que pediu.
+    CloudCapture {
+        tag: String,
+        parent: String,
+        creds: Box<AwsCreds>,
+        expires: u64,
+    },
 
     /// O cofre e a chave do host de um provedor, para o chat (protocolo 20).
     ChatCheck {
@@ -979,6 +1024,12 @@ pub enum Msg {
     /// Resposta ao `VaultCapture`: os falsos, na ordem dos itens.
     Captured {
         fakes: Vec<String>,
+    },
+    /// Resposta ao `CloudCapture`: o ID, a chave e o token falsos.
+    CloudCaptured {
+        id: String,
+        secret: String,
+        token: String,
     },
     /// Resposta ao `ListModels`: `provedor/modelo` e os avisos dos
     /// provedores que falharam.
@@ -1449,6 +1500,21 @@ mod tests {
             ..Default::default()
         };
         assert!(!format!("{:?}", i.kube).contains("CHAVE-REAL"));
+        let a = AwsCreds {
+            access_key_id: "AKIAREAL".into(),
+            secret: "SEGREDO-REAL".into(),
+            session_token: "TOKEN-REAL".into(),
+            ..Default::default()
+        };
+        assert!(!format!("{a:?}").contains("SEGREDO") && !format!("{a:?}").contains("TOKEN-REAL"));
+        let c = Msg::CloudCapture {
+            tag: "s1-1".into(),
+            parent: "aws:dev".into(),
+            creds: Box::new(a),
+            expires: 10,
+        };
+        let j = serde_json::to_string(&c).unwrap();
+        assert_eq!(serde_json::from_str::<Msg>(&j).unwrap(), c);
         let j = serde_json::to_string(&i).unwrap();
         assert_eq!(serde_json::from_str::<Injection>(&j).unwrap(), i);
     }

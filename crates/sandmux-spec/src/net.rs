@@ -598,6 +598,23 @@ pub fn gcp_domain() -> String {
         .unwrap_or_else(|| "*.googleapis.com".into())
 }
 
+/// Prefixos do ID falso de uma identidade da AWS e de uma credencial
+/// capturada dentro da aba (temporária, como os `ASIA…` da AWS).
+pub const AWS_ID_PREFIX: &str = "AKIASANDMUX";
+pub const AWS_CAPTURED_PREFIX: &str = "ASIASANDMUX";
+
+/// Variável só de teste que troca o domínio da AWS (por
+/// `host.sandmux.internal`, com um servidor local).
+pub const AWS_TEST_DOMAIN_ENV: &str = "SANDMUX_TEST_AWS_DOMAIN";
+
+/// O domínio dono de uma identidade da AWS.
+pub fn aws_domain() -> String {
+    std::env::var(AWS_TEST_DOMAIN_ENV)
+        .ok()
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "*.amazonaws.com".into())
+}
+
 /// O sufixo dos nomes sintéticos dos API servers do Kubernetes na aba.
 pub const KUBE_SUFFIX: &str = "kube.sandmux.internal";
 /// Prefixo do token falso de uma identidade de Kubernetes.
@@ -681,6 +698,44 @@ pub fn kube_server(server: &str) -> Option<KubeServer> {
         authority: authority.to_string(),
         prefix: path.trim_end_matches('/').to_string(),
     })
+}
+
+/// Segundos desde 1970 de um instante RFC 3339 (`AAAA-MM-DDTHH:MM:SS[.fff]`
+/// com `Z` ou um fuso `±HH:MM`).
+pub fn parse_rfc3339(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (s, offset) = if let Some(x) = s.strip_suffix('Z').or_else(|| s.strip_suffix('z')) {
+        (x, 0i64)
+    } else {
+        let i = s.len().checked_sub(6)?;
+        let (main, tz) = s.split_at(i);
+        let sign = match tz.as_bytes().first()? {
+            b'+' => 1,
+            b'-' => -1,
+            _ => return None,
+        };
+        let (h, m) = tz[1..].split_once(':')?;
+        (
+            main,
+            sign * (h.parse::<i64>().ok()? * 3600 + m.parse::<i64>().ok()? * 60),
+        )
+    };
+    let (date, time) = s.split_once('T').or_else(|| s.split_once(' '))?;
+    let mut d = date.split('-').map(|x| x.parse::<i64>().ok());
+    let (y, m, day) = (d.next()??, d.next()??, d.next()??);
+    let time = time.split('.').next()?;
+    let mut t = time.split(':').map(|x| x.parse::<i64>().ok());
+    let (hh, mm, ss) = (t.next()??, t.next()??, t.next()??);
+    // Dias desde 1970 (algoritmo de Howard Hinnant).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    let secs = days * 86400 + hh * 3600 + mm * 60 + ss - offset;
+    u64::try_from(secs).ok()
 }
 
 /// O harness dono de um segredo de login (`claude:access` é do `claude`).
@@ -1068,5 +1123,15 @@ mod tests {
         assert!(kube_server("http://h:80").is_none());
         assert!(kube_server("https://:80").is_none());
         assert!(kube_server("https://h:x").is_none());
+    }
+
+    #[test]
+    fn instante_rfc3339() {
+        let z = parse_rfc3339("2026-11-22T18:00:00Z").unwrap();
+        assert_eq!(parse_rfc3339("2026-11-22T18:00:00+00:00"), Some(z));
+        assert_eq!(parse_rfc3339("2026-11-22T15:00:00-03:00"), Some(z));
+        assert_eq!(parse_rfc3339("2026-11-22T18:00:00.123Z"), Some(z));
+        assert_eq!(parse_rfc3339("1970-01-01T00:00:00Z"), Some(0));
+        assert!(parse_rfc3339("ontem").is_none());
     }
 }

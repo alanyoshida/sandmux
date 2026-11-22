@@ -190,7 +190,7 @@ O gateway decifra o TLS só dos domínios da lista de decifração:
 O resto passa cifrado de ponta a ponta. A lista muda na hora, como as outras regras: desbloquear o cofre ou mudar a configuração vale na conexão seguinte.
 
 - **CA do lançamento:** cada lançamento gera uma CA própria. A chave fica só na memória e no memfd da especificação, nunca em disco, e um sandbox não confia na CA de outro.
-- **Confiança no sandbox:** o pacote de CAs do sistema (`/etc/ssl/certs/ca-certificates.crt` no Debian e no Ubuntu) é coberto por um com as CAs do sistema mais a do lançamento. `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` e `GIT_SSL_CAINFO` apontam para ele.
+- **Confiança no sandbox:** o pacote de CAs do sistema (`/etc/ssl/certs/ca-certificates.crt` no Debian e no Ubuntu) é coberto por um com as CAs do sistema mais a do lançamento. `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE` (o `gcloud`) e `AWS_CA_BUNDLE` (o `aws`) apontam para ele.
 - **No gateway:** a conexão do sandbox recebe um certificado do domínio assinado pela CA do lançamento, só com HTTP/1.1, e o gateway abre TLS até o destino real, verificando o certificado dele pelas CAs do sistema. Um certificado inválido do destino bloqueia a conexão, com o motivo `certificado inválido` no registro.
 - **Registro:** cada pedido decifrado vira uma linha `https` com o método, o caminho sem a query e o status. Os cabeçalhos e o corpo nunca são gravados. O `sandmux net` e o painel da TUI mostram `GET /v1/models 200`.
 - **Certificado:** o certificado do domínio leva o Authority Key Identifier e o uso `serverAuth`, que o Python 3.13+ exige na verificação estrita (`VERIFY_X509_STRICT`).

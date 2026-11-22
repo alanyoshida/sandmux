@@ -3161,6 +3161,7 @@ version = "0.1.39"
 dependencies = [
  "base64",
  "bytes",
+ "hmac 0.12.1",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -3174,6 +3175,7 @@ dependencies = [
  "sandmux-spec",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tokio-rustls",

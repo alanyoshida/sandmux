@@ -2058,6 +2058,7 @@ impl Effective {
             tool_secrets: Vec::new(),
             gcloud_dir: None,
             kube_dir: None,
+            aws_dir: None,
             ssh_agent_socket: None,
             ssh_servers: Vec::new(),
             window: None,

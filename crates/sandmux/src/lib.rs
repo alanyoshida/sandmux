@@ -1,5 +1,6 @@
 //! Biblioteca compartilhada pelo cliente `sandmux` e pelo daemon `sandmuxd`.
 
+pub mod aws;
 pub mod chat;
 
 /// Define o idioma do processo: `SANDMUX_LANG`, depois `language` do
