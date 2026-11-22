@@ -1,12 +1,16 @@
-sandmux 0.1.37, antes da v1: um lançamento logo depois de um reinício do auxiliar root não é mais recusado.
+sandmux 0.1.38, antes da v1: o agente usa o gcloud sem que uma credencial real do Google Cloud entre no sandbox.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
-## Correção
+## Novidade
 
-- **Lançamento durante a troca do auxiliar root:** num kernel com o Landlock abaixo do ABI 6 (como o 6.8 do Ubuntu 24.04), o lançamento verifica o [auxiliar root](https://github.com/alanyoshida/sandmux/blob/main/docs/helper.md) antes de subir o sandbox. Essa verificação fazia uma tentativa só. Ao sair (um `systemctl restart`, que o `sandmux setup` faz numa atualização), o auxiliar velho fecha as conexões novas sem responder por alguns segundos. Um lançamento nesse intervalo era recusado com "o auxiliar root não respondeu ao pedido". Agora a verificação tenta de novo, como o registro do escopo já fazia: por até 30 s sem resposta, e por 1 s sem o socket do auxiliar.
+- **Credenciais de cloud, começando pelo GCP:** `sandmux vault add-cloud gcp <nome>` guarda uma identidade no cofre. A fonte pode ser uma configuração do `gcloud` do host (`--configuration`) ou uma cópia cifrada do ADC (`--copy-adc`) ou da chave de uma conta de serviço (`--copy-key`).
+  - Cada aba recebe uma configuração do `gcloud` e um ADC só com tokens falsos.
+  - O gateway troca o falso pelo real nas APIs do Google e responde sozinho o pedido de token. O real fica só na memória do daemon e é renovado antes de vencer.
+  - O que o agente pode fazer é o que o IAM da identidade permitir. Use uma identidade sem permissão de criar chaves de conta de serviço nem de ler o Secret Manager.
+  - As bibliotecas por gRPC ainda não funcionam. Detalhes em [docs/cloud.md](https://github.com/alanyoshida/sandmux/blob/main/docs/cloud.md).
 
-Esta versão muda só o lançador (`sandmux-run`). O protocolo e o auxiliar root não mudam.
+O protocolo entre o cliente e o daemon passa a 46: depois de atualizar, rode `sandmux daemon restart`. O auxiliar root não muda.
 
 ## Instalar
 
