@@ -65,7 +65,7 @@ Quando o auxiliar reinicia (uma atualização, um travamento), o escopo volta no
 - **Numa sessão do daemon:** o lançador entrega ao daemon os parâmetros do escopo e o user namespace do sandbox, e o daemon vigia uma conexão com o auxiliar por aba. Na queda, ele congela a aba, registra de novo o escopo (e os [arquivos pelo kernel](files.md#pelo-kernel), quando a aba tem) e descongela. Nada da aba roda sem o escopo.
 - **No `run` sem o daemon:** o próprio lançador registra de novo assim que o auxiliar seguinte responde. Nesse intervalo, o sandbox roda sem o escopo.
 
-Sem o escopo de volta em 30 s, o sandbox termina. Um lançamento que encontra o auxiliar trocando tenta de novo por até 30 s. No 6.8, carregar e soltar os programas do escopo leva segundos; por isso, num kernel abaixo do ABI 6, o auxiliar os carrega ao subir, e eles ficam carregados por 60 s depois do último escopo.
+Sem o escopo de volta em 30 s, o sandbox termina. Um lançamento que encontra o auxiliar trocando tenta de novo por até 30 s. Sem o socket do auxiliar (o auxiliar não instalado), o lançamento desiste em 1 s e aponta o `sandmux doctor`. No 6.8, carregar e soltar os programas do escopo leva segundos; por isso, num kernel abaixo do ABI 6, o auxiliar os carrega ao subir, e eles ficam carregados por 60 s depois do último escopo.
 
 ## Quanto tempo as regras duram
 

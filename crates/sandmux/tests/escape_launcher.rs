@@ -117,6 +117,7 @@ fn landlock_insuficiente_recusa_sem_executar() {
 fn kernel_antigo_sem_o_auxiliar_recusa_sem_executar() {
     let dir = tempfile::tempdir().unwrap();
     let (mut cmd, _keep) = run_command(marker_spec(dir.path()).to_json().as_bytes());
+    let start = std::time::Instant::now();
     let out = cmd
         .env("SANDMUX_RUN_LANDLOCK_ABI", "4")
         .env(
@@ -134,6 +135,13 @@ fn kernel_antigo_sem_o_auxiliar_recusa_sem_executar() {
         "{err}"
     );
     assert!(!dir.path().join("executou").exists());
+    // Sem o socket do auxiliar, a recusa não espera os 30 s da troca de
+    // auxiliar.
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        start.elapsed()
+    );
 }
 
 #[test]
