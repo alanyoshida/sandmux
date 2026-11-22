@@ -1,0 +1,28 @@
+# cargo-nextest: cada teste num processo próprio, em paralelo entre todos os
+# arquivos de teste. Usado pelo scripts/check.sh quando instalado.
+
+[test-groups]
+# O Docker privado de cada teste sobe o dockerd, o rootlesskit e os
+# contêineres. Com o cargo test, os 15 testes do arquivo rodavam todos juntos;
+# aqui, no máximo 4, pelo pico de memória.
+docker = { max-threads = 4 }
+
+[profile.default]
+# Mostra todas as falhas da rodada, como no cargo test de cada arquivo.
+fail-fast = false
+# Teto de testes simultâneos; cada um sobe o próprio daemon e sandbox.
+test-threads = 16
+# Avisa de um teste lento a cada minuto, sem matar (há testes do Docker que
+# esperam até 3 min por um contêiner).
+slow-timeout = "60s"
+
+[[profile.default.overrides]]
+filter = "binary(docker) | binary(docker_ebpf)"
+test-group = "docker"
+priority = 40
+
+# Os testes mais longos começam primeiro: com tudo em paralelo, o tempo total
+# fica perto do mais longo deles, desde que ele não comece no fim.
+[[profile.default.overrides]]
+filter = "binary(escape_launcher) | binary(gateway) | binary(history) | binary(db_mcp)"
+priority = 50
