@@ -511,6 +511,8 @@ Release `v0.1.39` (2026-11-22), com o change 94 (identidades de Kubernetes sem o
 
 Release `v0.1.40` (2026-11-22), com o change 95 (identidades da AWS sem o real no sandbox; fim da etapa 19), pela ordem do usuário para cada change. O `check.sh` rodou verde no host (884 testes); sem `check-root`, porque o auxiliar root não muda; sem teste contra a AWS de verdade (o host não tem o `aws`). Protocolo 48.
 
+Release `v0.1.41` (2026-11-22), com o change 96 (HTTP/2 e gRPC no gateway, etapa 20), pela ordem do usuário para cada change. O `check.sh` rodou verde no host (893 testes); sem `check-root`, porque o auxiliar root não muda. O protocolo do daemon não muda (48).
+
 ### Etapa 14 - Confinamento do Docker privado
 
 Objetivo: o Docker privado sob as mesmas regras do sandbox do agente. Hoje o que limita o `dockerd` e os contêineres é só a visão de arquivos (achados de 2026-11-16, na seção 6). Decisões do usuário (2026-11-16), na exploração do backend eBPF: o eBPF entra para dar uma capacidade nova, o confinamento do Docker privado e de outros processos que rodam fora do Landlock; o confinamento cobre os arquivos e as chamadas de sistema; o trabalho se divide em dois changes, com o endurecimento sem privilégio primeiro.
