@@ -497,6 +497,8 @@ Release `v0.1.33` (2026-11-21), com os changes 86 e 87 (etapa 17), a pedido do u
 
 Release `v0.1.34` (2026-11-21), com os changes 85 (grafo do cofre) e 88 (reinício do auxiliar root antigo e o pai pelo `/proc` na árvore), a pedido do usuário ("Sim, corrigir tudo", que incluía a release). O change 85 teve a conferência à mão dada como feita pelo pedido de merge e release do usuário, e o usuário confirmou o grafo e a árvore na 0.1.34 instalada ("do item 1 eu ja testei"). Na instalação da 0.1.34 do usuário, o `install.sh` reiniciou o auxiliar root sozinho: o auxiliar passou a responder 0.1.34, sem o aviso no `doctor`. O `check.sh` rodou verde sob o vigia no código do change 88, que já tinha o 85 (814 testes); sem `check-root`, porque o auxiliar root e o protocolo não mudam.
 
+Release `v0.1.35` (2026-11-21), com o change 90 (recusa rápida do lançamento sem o auxiliar root) e o 89 (testes em paralelo pelo nextest, só para quem desenvolve), pela ordem do usuário para cada change (propor, implementar, PR, merge e release). O `check.sh` rodou verde pelo nextest no código do change 90 (814 testes); sem `check-root`, porque o auxiliar root e o protocolo não mudam.
+
 ### Etapa 14 - Confinamento do Docker privado
 
 Objetivo: o Docker privado sob as mesmas regras do sandbox do agente. Hoje o que limita o `dockerd` e os contêineres é só a visão de arquivos (achados de 2026-11-16, na seção 6). Decisões do usuário (2026-11-16), na exploração do backend eBPF: o eBPF entra para dar uma capacidade nova, o confinamento do Docker privado e de outros processos que rodam fora do Landlock; o confinamento cobre os arquivos e as chamadas de sistema; o trabalho se divide em dois changes, com o endurecimento sem privilégio primeiro.
