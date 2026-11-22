@@ -104,9 +104,9 @@ pub fn check_key(text: &str) -> Result<(String, String), String> {
     ))
 }
 
-/// Por que o `gcloud` do host falhou.
-enum GcloudErr {
-    /// Não está instalado.
+/// Por que uma CLI do host falhou.
+pub(crate) enum GcloudErr {
+    /// Não está instalada.
     Missing,
     /// Falhou, com a mensagem.
     Failed(String),
@@ -128,10 +128,26 @@ impl GcloudErr {
 /// Roda o `gcloud` do host com `args`, sem perguntas e com prazo. Devolve a
 /// saída padrão, ou o erro.
 fn gcloud(args: &[&str]) -> Result<String, GcloudErr> {
-    let bin = gcloud_bin();
-    let mut child = Command::new(&bin)
+    run_host(
+        &gcloud_bin(),
+        args,
+        &[("CLOUDSDK_CORE_DISABLE_PROMPTS".into(), "1".into())],
+        GCLOUD_TIMEOUT,
+    )
+}
+
+/// Roda uma CLI do host (`bin`), com o ambiente do daemon mais `env`, sem
+/// terminal nem entrada, e com prazo. Devolve a saída padrão; numa falha, o
+/// erro padrão.
+pub(crate) fn run_host(
+    bin: &str,
+    args: &[&str],
+    env: &[(String, String)],
+    timeout: Duration,
+) -> Result<String, GcloudErr> {
+    let mut child = Command::new(bin)
         .args(args)
-        .env("CLOUDSDK_CORE_DISABLE_PROMPTS", "1")
+        .envs(env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -141,8 +157,8 @@ fn gcloud(args: &[&str]) -> Result<String, GcloudErr> {
                 GcloudErr::Missing
             } else {
                 GcloudErr::Failed(trf!(
-                    "rodar o gcloud do host: {e}",
-                    "run the host gcloud: {e}"
+                    "rodar {bin} no host: {e}",
+                    "run {bin} on the host: {e}"
                 ))
             }
         })?;
@@ -162,16 +178,14 @@ fn gcloud(args: &[&str]) -> Result<String, GcloudErr> {
     let status = loop {
         match child.try_wait() {
             Ok(Some(s)) => break s,
-            Ok(None) if start.elapsed() >= GCLOUD_TIMEOUT => {
+            Ok(None) if start.elapsed() >= timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(GcloudErr::Failed(
-                    tr!(
-                        "o gcloud do host não respondeu em 30 s",
-                        "the host gcloud did not answer within 30 s"
-                    )
-                    .into(),
-                ));
+                let secs = timeout.as_secs();
+                return Err(GcloudErr::Failed(trf!(
+                    "{bin} não respondeu em {secs} s",
+                    "{bin} did not answer within {secs} s"
+                )));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
             Err(e) => return Err(GcloudErr::Failed(e.to_string())),
@@ -210,10 +224,13 @@ pub fn host_configuration(conf: &str) -> Result<(String, String), String> {
     ))
 }
 
-/// O token de acesso real e até quando vale (segundos desde 1970).
+/// O token de acesso real e até quando vale (segundos desde 1970). No
+/// Kubernetes, também o API server e o certificado de cliente.
+#[derive(Clone, Default)]
 pub struct Real {
     pub token: String,
     pub expires: u64,
+    pub kube: Option<sandmux_proto::msg::KubeTarget>,
 }
 
 impl std::fmt::Debug for Real {
@@ -266,6 +283,7 @@ pub fn parse_config_helper(out: &str) -> Result<Real, String> {
     }
     let expires = parse_rfc3339(field(&c, "token_expiry")).unwrap_or_else(|| now() + 3000);
     Ok(Real {
+        kube: None,
         token: token.to_string(),
         expires,
     })
@@ -296,8 +314,11 @@ fn gcloud_failure(conf: &str, e: &GcloudErr) -> String {
     )
 }
 
-/// Obtém o real de uma identidade de GCP, fora do sandbox.
+/// Obtém o real de uma identidade de cloud, fora do sandbox.
 pub fn resolve(id: &CloudAdd) -> Result<Real, String> {
+    if id.info.provider == "kubernetes" {
+        return crate::kube::resolve(id);
+    }
     match id.info.source.as_str() {
         "host" => {
             let conf = id.info.configuration.as_str();
@@ -422,6 +443,7 @@ pub fn parse_token_answer(status: u16, body: &str) -> Result<Real, String> {
     }
     let secs = v.get("expires_in").and_then(|x| x.as_u64()).unwrap_or(3599);
     Ok(Real {
+        kube: None,
         token: field(&v, "access_token").to_string(),
         expires: now() + secs,
     })

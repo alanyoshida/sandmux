@@ -2301,6 +2301,78 @@ fn grafo_do_cofre_com_identidade_de_cloud() {
 }
 
 #[test]
+fn grafo_do_cofre_com_identidade_de_kubernetes() {
+    use base64::Engine;
+    let e = Env::new();
+    vault_init(&e);
+    let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+    let view = serde_json::json!({
+        "current-context": "kind-dev",
+        "clusters": [{ "name": "dev", "cluster": { "server": "https://127.0.0.1:6443" } }],
+        "users": [{ "name": "dev", "user": {
+            "client-certificate-data": b64("CERT-DO-CLIENTE"),
+            "client-key-data": b64("CHAVE-REAL-TUI")
+        } }],
+        "contexts": [{ "name": "kind-dev", "context": { "cluster": "dev", "user": "dev", "namespace": "app" } }]
+    });
+    let view_file = e.dir.path().join("view.json");
+    std::fs::write(&view_file, view.to_string()).unwrap();
+    let kubectl = e.dir.path().join("kubectl");
+    std::fs::write(
+        &kubectl,
+        format!("#!/bin/sh\ncat {}\n", view_file.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &kubectl,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let out = e
+        .cmd(&e.work, &["vault", "add-cloud", "kubernetes", "--copy"])
+        .env("SANDMUX_KUBECTL", &kubectl)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    sessao(&e, &e.work);
+    let mut t = tui_cols(&e, 120);
+    t.wait_text(&tab(1, "shell:app"));
+    open_vault_section(&mut t);
+    t.wait_for("identidade na lista", |s| {
+        s.lines()
+            .any(|l| l.contains("kube:kind-dev") && l.contains("cloud"))
+    });
+    t.write(b"g");
+    t.wait_text("sandmux · cofre · grafo");
+    t.wait_text("kind-dev.kube.sandmux.internal");
+    t.wait_text("▲ kube:kind-dev");
+    t.write(b"\t");
+    // O painel tem largura fixa: os valores longos são cortados.
+    t.wait_text("cloud · kuber");
+    t.wait_text("cópia: contex");
+    t.wait_text("contexto    kind-dev");
+    t.wait_text("servidor    https://127.0");
+    t.wait_text("namespace   app");
+    t.wait_text("falso       sandmux-fak");
+    t.with_screen(|s| {
+        let c = s.contents();
+        assert!(
+            !c.contains("CHAVE-REAL") && !c.contains("CERT-DO-CLIENTE"),
+            "{c}"
+        );
+        assert!(!c.contains("d domínios"), "{c}");
+    });
+    t.write(b"x");
+    t.wait_text("Apagar kube:kind-dev do cofre?");
+    t.write(b"s");
+    t.wait_text("kube:kind-dev apagado do cofre");
+    t.write(b"\x1b\x1b");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
 fn grafo_do_cofre_sem_cofre_so_avisa() {
     let e = Env::new();
     sessao(&e, &e.work);

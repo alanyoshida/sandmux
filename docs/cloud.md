@@ -2,9 +2,9 @@
 
 > English: [en/cloud.md](en/cloud.md)
 
-O agente usa o `gcloud` e as bibliotecas do Google Cloud dentro do sandbox, mas nenhuma credencial real de cloud entra nele. Cada identidade de cloud do cofre vira, na aba, um token falso. O real fica fora do sandbox, com o daemon, e o gateway o põe no lugar do falso só nos pedidos às APIs do Google. Um falso copiado para fora não vale nada.
+O agente usa o `gcloud`, as bibliotecas do Google Cloud e o `kubectl` dentro do sandbox, mas nenhuma credencial real de cloud entra nele. Cada identidade de cloud do cofre vira, na aba, um token falso. O real fica fora do sandbox, com o daemon, e o gateway o põe no lugar do falso só nos pedidos à nuvem dela. Um falso copiado para fora não vale nada.
 
-Hoje o sandmux cobre o GCP. O Kubernetes e a AWS vêm depois.
+Hoje o sandmux cobre o GCP e o Kubernetes ([abaixo](#kubernetes)). A AWS vem depois.
 
 ## Guardar uma identidade
 
@@ -65,3 +65,57 @@ Como as chaves de API, a identidade vale em toda aba, em qualquer pasta.
 - **`gsutil` e `bq` antigos:** têm autenticação própria. Use `gcloud storage` e o `bq` pelo `gcloud`.
 - **Tokens de identidade:** `gcloud auth print-identity-token` e o Cloud Run autenticado não funcionam: o falso é um token de acesso.
 - **`gcloud auth login` dentro da aba:** grava um token real no HOME sintético, como hoje. Faça o login no host.
+
+## Kubernetes
+
+### Guardar os contextos
+
+Com o cofre desbloqueado, um comando guarda todos os contextos do kubeconfig do host (o de `KUBECONFIG`, ou `~/.kube/config`), cada um como uma identidade:
+
+```sh
+# Todos os contextos, por referência ao host (o padrão)
+sandmux vault add-cloud kubernetes
+
+# Só alguns contextos
+sandmux vault add-cloud kubernetes --context kind-dev --context gke_app_europe-west1_main
+
+# Cópia do servidor, da CA e da credencial de um contexto
+sandmux vault add-cloud kubernetes --context kind-dev --copy
+```
+
+O nome no cofre é `kube:<nome>`, com o nome do contexto em minúsculas e cada caractere fora de letras, números e `-` trocado por `-`: `arn:aws:eks:us-east-1:123:cluster/prod` vira `kube:arn-aws-eks-us-east-1-123-cluster-prod`. Um nome que já está no cofre é pulado, com o aviso. A identidade do contexto atual do host é a padrão.
+
+- **Referência ao host (o padrão):** o cofre guarda só o contexto, o caminho do kubeconfig, o servidor e o namespace. O daemon lê o contexto pelo `kubectl` do host (`kubectl config view --raw --flatten --minify`) e, quando o usuário dele usa um plugin `exec` (`aws eks get-token`, `gke-gcloud-auth-plugin`, `kubelogin`), roda o plugin no host, sem terminal, com o seu ambiente. Quando o plugin pede um login novo, faça o login no host (`aws sso login`, `gcloud auth login`).
+- **Cópia (`--copy`):** o servidor, a CA do cluster e a credencial (o token ou o certificado de cliente com a chave) ficam cifrados no cofre. Um contexto com plugin `exec` não pode ser copiado: o plugin só roda no host.
+
+O sandmux recusa o `auth-provider` antigo e o usuário com senha. Sem `--context`, um contexto recusado é pulado com o motivo, e os outros são guardados. `sandmux vault list` mostra cada identidade com a fonte, o servidor e o falso, nunca o token, o certificado ou a chave. Para tirar um contexto do agente, `sandmux vault remove kube:<nome>`.
+
+### Na aba
+
+Com ao menos uma identidade de Kubernetes, toda aba recebe, só durante a execução, uma pasta `~/.kube` com escrita e um kubeconfig só com falsos (`KUBECONFIG` aponta para ele):
+
+- um contexto por identidade, com o nome original e o namespace do host;
+- o servidor `https://<nome>.kube.sandmux.internal`, com a CA do lançamento (`~/.kube/sandmux-ca.crt`);
+- um token falso por identidade (`sandmux-fake-kube-…`);
+- o contexto atual na identidade padrão.
+
+`kubectl config use-context`, o cache de descoberta e o resto do que o `kubectl` grava ficam na pasta da aba, que some no fim.
+
+### No gateway
+
+O DNS da aba responde todo `*.kube.sandmux.internal` com `10.0.2.253`, e esse nome passa pela política de rede sem regra, em qualquer modo: guardar a identidade é o consentimento. O gateway decifra a conexão e conecta ele mesmo ao servidor guardado, nunca ao destino que o sandbox pediu, inclusive a um cluster no `127.0.0.1` do host (o kind e o minikube). O certificado do servidor é verificado pela CA do cluster, e o gateway apresenta o certificado de cliente quando há.
+
+Em cada pedido, o gateway troca o token falso pelo real (do kubeconfig, do `tokenFile` ou do plugin). Quando a credencial é só o certificado de cliente, o gateway tira o `Authorization`. O `Host` e o prefixo do caminho (o do Rancher, por exemplo) vêm do servidor real. O registro tem o nome da identidade e o servidor real, nunca a credencial. `kubectl exec`, `attach`, `cp`, `logs -f`, `port-forward` e `get -w` funcionam, pelo WebSocket ou pelo SPDY.
+
+O real é obtido de novo antes do fim da validade do plugin. Sem validade (um token ou um certificado do kubeconfig), ele é relido a cada 10 minutos, e uma troca no kubeconfig do host vale nesse prazo. Quando o real falta (o `kubectl` não está no host, o contexto sumiu, o plugin falha), o gateway responde `401` com um `Status` do Kubernetes que diz o motivo, e o daemon avisa uma vez, como no GCP. Um nome sem identidade recebe `404`. O `sandmux doctor` avisa de cada referência sem o `kubectl` no host.
+
+### O que o agente pode fazer
+
+O que o RBAC de cada contexto permitir: o gateway não filtra os pedidos ao API server. Um contexto de administrador dá administrador ao agente. Prefira um contexto com uma ServiceAccount própria e o mínimo de permissões, e tire do cofre os contextos de produção que o agente não deve ver. Ler `secrets` dá ao agente as credenciais reais que o cluster guarda.
+
+### Limites do Kubernetes
+
+- **HTTP/2:** o gateway oferece só HTTP/1.1, e o `client-go` passa a usá-lo sozinho.
+- **`proxy-url` do kubeconfig:** o gateway conecta direto ao servidor.
+- **`insecure-skip-tls-verify`:** quando o kubeconfig do host pede, o gateway também não verifica o servidor.
+- **Um certificado de cliente renovado** vale na conexão seguinte; uma conexão longa (`get -w`) segue com o anterior até o servidor fechá-la.

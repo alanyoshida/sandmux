@@ -212,6 +212,9 @@ pub struct RunOptions {
     /// A pasta do `gcloud` só desta execução, com as identidades de GCP do
     /// cofre (só falsos), por cima da guardada no HOME sintético.
     pub gcloud_dir: Option<PathBuf>,
+    /// A pasta do `kubectl` só desta execução, com o kubeconfig das
+    /// identidades de Kubernetes do cofre (só falsos).
+    pub kube_dir: Option<PathBuf>,
     /// Registro de rede deste lançamento (pasta e etiqueta). Sem ele, o
     /// sandbox usa a rede do host (testes da composição).
     pub net: Option<NetLaunch>,
@@ -269,6 +272,7 @@ impl RunOptions {
             fake_env: Vec::new(),
             tool_secrets: Vec::new(),
             gcloud_dir: None,
+            kube_dir: None,
             net: None,
         }
     }
@@ -880,6 +884,21 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
     if let Some(d) = &opts.gcloud_dir {
         b.bind(d, &host.home.join(crate::cloudtab::GCLOUD_DIR), true);
     }
+    // Identidades de Kubernetes: a pasta do `kubectl` desta execução, com
+    // escrita (`kubectl config use-context` e o cache de descoberta), e a CA
+    // do lançamento ao lado do kubeconfig, que aponta para ela.
+    let kube = gateway && opts.kube_dir.is_some();
+    if let Some(d) = opts.kube_dir.as_ref().filter(|_| gateway) {
+        let dest = host.home.join(crate::cloudtab::KUBE_DIR);
+        b.bind(d, &dest, true);
+        if let Some(t) = opts.net.as_ref().and_then(|n| n.tls.as_ref()) {
+            b.mounts.push(Mount::File {
+                dest: dest.join(crate::cloudtab::KUBE_CA_FILE),
+                contents: t.ca_cert_pem.clone(),
+                mode: 0o444,
+            });
+        }
+    }
     let inbox = layout.inbox();
     b.dirs.push(inbox.clone());
     b.bind(&inbox, &host.h("inbox"), false);
@@ -1127,6 +1146,16 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
         env.push(("SANDMUX_HOST".into(), HOST_NAME.into()));
     }
     env.extend(tls_env);
+    if kube {
+        env.push((
+            "KUBECONFIG".into(),
+            host.home
+                .join(crate::cloudtab::KUBE_DIR)
+                .join("config")
+                .display()
+                .to_string(),
+        ));
+    }
     env.extend(env_extra);
     env.extend(opts.fake_env.iter().cloned());
     env.extend(opts.chat_env.iter().cloned());

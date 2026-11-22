@@ -132,6 +132,108 @@ pub fn client_config(extra_pem: Option<&str>) -> Arc<rustls::ClientConfig> {
     }
 }
 
+/// O cliente TLS até o API server de uma identidade de Kubernetes: a CA do
+/// cluster (ou as raízes de sempre, sem ela), o certificado de cliente
+/// quando há, e nenhuma verificação só com `insecure`. Só HTTP/1.1.
+pub fn kube_client_config(
+    t: &sandmux_proto::msg::KubeTarget,
+    extra_pem: Option<&str>,
+) -> Result<Arc<rustls::ClientConfig>, String> {
+    let builder = rustls::ClientConfig::builder_with_provider(provider())
+        .with_safe_default_protocol_versions()
+        .map_err(|e| e.to_string())?;
+    let builder = if t.insecure {
+        builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoVerify(provider())))
+    } else if t.ca_pem.trim().is_empty() {
+        builder.with_root_certificates(roots(extra_pem))
+    } else {
+        let mut r = rustls::RootCertStore::empty();
+        for c in certs_of(&t.ca_pem) {
+            r.add(c).map_err(|e| e.to_string())?;
+        }
+        if r.is_empty() {
+            return Err(sandmux_spec::tr!(
+                "a CA do cluster não tem certificado",
+                "the cluster CA has no certificate"
+            )
+            .into());
+        }
+        builder.with_root_certificates(r)
+    };
+    let mut c = if t.cert_pem.is_empty() {
+        builder.with_no_client_auth()
+    } else {
+        let chain = certs_of(&t.cert_pem);
+        let key = rustls_pemfile::private_key(&mut t.key_pem.as_bytes())
+            .ok()
+            .flatten()
+            .ok_or_else(|| {
+                sandmux_spec::tr!(
+                    "a chave do certificado de cliente é inválida",
+                    "the client certificate key is invalid"
+                )
+                .to_string()
+            })?;
+        builder
+            .with_client_auth_cert(chain, key)
+            .map_err(|e| e.to_string())?
+    };
+    c.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(Arc::new(c))
+}
+
+/// Aceita qualquer certificado do destino (o `insecure-skip-tls-verify` do
+/// kubeconfig), conferindo só as assinaturas do handshake.
+#[derive(Debug)]
+struct NoVerify(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for NoVerify {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
 /// Os certificados de um PEM, para quem confia na CA (testes).
 pub fn certs_of(pem: &str) -> Vec<CertificateDer<'static>> {
     rustls_pemfile::certs(&mut pem.as_bytes())

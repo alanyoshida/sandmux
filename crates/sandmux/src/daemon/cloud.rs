@@ -18,14 +18,17 @@ const RETRY_AFTER: Duration = Duration::from_secs(20);
 
 /// Um real obtido, ou a falha, com quando.
 enum Entry {
-    Real { token: String, expires: u64 },
+    Real(crate::cloud::Real),
     Failed { why: String, at: Instant },
 }
 
 impl Drop for Entry {
     fn drop(&mut self) {
-        if let Entry::Real { token, .. } = self {
-            zeroize::Zeroize::zeroize(token);
+        if let Entry::Real(r) = self {
+            zeroize::Zeroize::zeroize(&mut r.token);
+            if let Some(k) = r.kube.as_mut() {
+                zeroize::Zeroize::zeroize(&mut k.key_pem);
+            }
         }
     }
 }
@@ -39,8 +42,8 @@ pub struct Cache {
     warned: Mutex<HashSet<String>>,
 }
 
-/// O resultado de uma identidade: o real e a validade, ou a falha.
-pub type Resolved = Result<(String, u64), String>;
+/// O resultado de uma identidade: o real (com a validade), ou a falha.
+pub type Resolved = Result<crate::cloud::Real, String>;
 
 impl Cache {
     /// O real de `id`, com pelo menos [`MARGIN`] de validade em `now`;
@@ -62,8 +65,8 @@ impl Cache {
         {
             let e = self.entries.lock().unwrap_or_else(|e| e.into_inner());
             match e.get(&id.name) {
-                Some(Entry::Real { token, expires }) if *expires >= now + MARGIN => {
-                    return Ok((token.clone(), *expires));
+                Some(Entry::Real(r)) if r.expires >= now + MARGIN => {
+                    return Ok(r.clone());
                 }
                 Some(Entry::Failed { why, at }) if at.elapsed() < RETRY_AFTER => {
                     return Err(why.clone());
@@ -75,15 +78,8 @@ impl Cache {
         let mut e = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         match got {
             Ok(r) => {
-                let out = (r.token.clone(), r.expires);
-                e.insert(
-                    id.name.clone(),
-                    Entry::Real {
-                        token: r.token,
-                        expires: r.expires,
-                    },
-                );
-                Ok(out)
+                e.insert(id.name.clone(), Entry::Real(r.clone()));
+                Ok(r)
             }
             Err(why) => {
                 e.insert(
@@ -154,10 +150,11 @@ pub fn injections(shared: &Arc<Shared>, host: &str) -> Vec<Injection> {
                 ..Default::default()
             };
             match r {
-                Ok((token, expires)) => {
+                Ok(mut real) => {
                     shared.cloud.recovered(&id.name);
-                    inj.value = token;
-                    inj.expires = expires;
+                    inj.value = std::mem::take(&mut real.token);
+                    inj.expires = real.expires;
+                    inj.kube = real.kube.take();
                 }
                 Err(why) => {
                     if shared.cloud.first_failure(&id.name) {
@@ -200,14 +197,15 @@ mod tests {
                 Ok(crate::cloud::Real {
                     token: format!("real-{n}"),
                     expires: exp,
+                    kube: None,
                 })
             }
         };
         // Vale até 1000 + 3600: o segundo pedido usa o mesmo.
-        assert_eq!(c.get(&id(), 1000, fetch(4600)).unwrap().0, "real-1");
-        assert_eq!(c.get(&id(), 2000, fetch(9999)).unwrap().0, "real-1");
+        assert_eq!(c.get(&id(), 1000, fetch(4600)).unwrap().token, "real-1");
+        assert_eq!(c.get(&id(), 2000, fetch(9999)).unwrap().token, "real-1");
         // A menos de 5 minutos do fim, pede um novo antes de seguir.
-        assert_eq!(c.get(&id(), 4400, fetch(8000)).unwrap().0, "real-2");
+        assert_eq!(c.get(&id(), 4400, fetch(8000)).unwrap().token, "real-2");
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
@@ -220,12 +218,34 @@ mod tests {
                 calls.fetch_add(1, Ordering::SeqCst);
                 Err("sem gcloud".into())
             });
-            assert_eq!(r, Err("sem gcloud".into()));
+            assert_eq!(r.err(), Some("sem gcloud".into()));
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert!(c.first_failure("gcp:trabalho"));
         assert!(!c.first_failure("gcp:trabalho"));
         c.recovered("gcp:trabalho");
         assert!(c.first_failure("gcp:trabalho"));
+    }
+
+    #[test]
+    fn real_sem_validade_relido_em_10_minutos() {
+        let c = Cache::default();
+        let calls = AtomicU32::new(0);
+        let fetch = |now: u64| {
+            let calls = &calls;
+            move |_: &CloudIdentity| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(crate::cloud::Real {
+                    token: String::new(),
+                    expires: now + crate::kube::NO_EXPIRY,
+                    kube: Some(Default::default()),
+                })
+            }
+        };
+        assert!(c.get(&id(), 1000, fetch(1000)).unwrap().kube.is_some());
+        c.get(&id(), 1000 + 599, fetch(1599)).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        c.get(&id(), 1000 + 601, fetch(1601)).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

@@ -450,7 +450,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     .vault
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .add_cloud(cloud);
+                    .add_cloud(*cloud);
                 if r.is_ok() {
                     let s = shared.clone();
                     std::thread::spawn(move || super::net::recompile_all(&s));

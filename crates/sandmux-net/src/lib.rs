@@ -45,6 +45,9 @@ pub const DNS: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 3);
 pub const HOST: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 254);
 /// Nome da máquina.
 pub const HOST_NAME: &str = "host.sandmux.internal";
+/// Os API servers do Kubernetes (`<nome>.kube.sandmux.internal`): o gateway
+/// conecta ao servidor guardado da identidade.
+pub const KUBE: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 253);
 
 /// Configuração de um gateway.
 pub struct Config {
@@ -80,6 +83,9 @@ struct State {
     log: Arc<log::Log>,
     /// CA do lançamento e o cliente TLS dos destinos, para decifrar.
     mitm: Option<(Arc<tls::Ca>, Arc<rustls::ClientConfig>)>,
+    /// A CA adicional dos destinos (`SANDMUX_UPSTREAM_CA`), para os API
+    /// servers sem CA própria.
+    upstream_ca: Option<String>,
     vault: Option<sandmux_spec::VaultAccess>,
     tag: String,
     harness: String,
@@ -231,6 +237,10 @@ async fn tcp(mut s: ipstack::IpStackTcpStream, st: Arc<State>) {
         _ => 0,
     };
     first.truncate(n);
+    if dst.ip() == IpAddr::V4(KUBE) {
+        kube_tcp(s, first, st, t0, dst.port()).await;
+        return;
+    }
     let (sni, names) = conn_names(&st.aliases, dst, &first, || st.names_of(dst.ip()));
     let domain = sni
         .clone()
@@ -416,6 +426,134 @@ async fn tcp(mut s: ipstack::IpStackTcpStream, st: Arc<State>) {
     }
 }
 
+/// Uma conexão a `KUBE`: só TLS com o nome sintético de uma identidade de
+/// Kubernetes. O gateway decifra e conecta ele mesmo ao servidor guardado,
+/// com a CA do cluster e o certificado de cliente; sem a identidade ou sem
+/// o real, responde ele mesmo com um `Status` do Kubernetes.
+async fn kube_tcp(
+    mut s: ipstack::IpStackTcpStream,
+    first: Vec<u8>,
+    st: Arc<State>,
+    t0: Instant,
+    port: u16,
+) {
+    let name = sniff::tls_sni(&first).filter(|n| sandmux_spec::net::kube_label(n).is_some());
+    let (Some(name), Some((ca, _))) = (name, st.mitm.as_ref()) else {
+        st.log.write(
+            "tcp",
+            log::NO_DOMAIN,
+            &KUBE.to_string(),
+            port,
+            0,
+            0,
+            t0.elapsed().as_millis() as u64,
+            Some(sandmux_spec::tr!(
+                "kubernetes: só TLS com o nome de uma identidade",
+                "kubernetes: only TLS with an identity name"
+            )),
+        );
+        close(&mut s).await;
+        return;
+    };
+    let Ok(server) = ca.server_config(&name) else {
+        close(&mut s).await;
+        return;
+    };
+    let list = match st.vault.clone() {
+        Some(access) => {
+            let (tag, harness, host) = (st.tag.clone(), st.harness.clone(), name.clone());
+            let all =
+                tokio::task::spawn_blocking(move || inject::fetch(&access, &tag, &harness, &host))
+                    .await
+                    .unwrap_or_default();
+            inject::for_host(all, &name)
+        }
+        None => Vec::new(),
+    };
+    let target = list
+        .iter()
+        .find(|i| i.error.is_empty())
+        .and_then(|i| i.kube.clone())
+        .and_then(|t| sandmux_spec::net::kube_server(&t.server).map(|k| (t, k)));
+    let (ip, rport) = target
+        .as_ref()
+        .map(|(_, k)| (k.host.clone(), k.port))
+        .unwrap_or_else(|| (KUBE.to_string(), port));
+    let ctx = Arc::new(mitm::Ctx {
+        log: st.log.clone(),
+        proto: "https",
+        domain: name.clone(),
+        ip: ip.clone(),
+        port: rport,
+        injections: list.clone(),
+        vault: st.vault.clone(),
+        tag: st.tag.clone(),
+        harness: st.harness.clone(),
+        refreshed: Default::default(),
+    });
+    let guest = mitm::Prefixed::new(first, s);
+    let (read, written) = (guest.read.clone(), guest.written.clone());
+    let mut why = None;
+    match target {
+        None => {
+            // Sem a identidade, ou sem o real: a mesma resposta que um
+            // pedido teria.
+            let mut probe = hyper::Request::new(());
+            let (code, msg) = mitm::kube_prepare(&mut probe, &list)
+                .err()
+                .unwrap_or((503, format!("sandmux: {name}")));
+            tokio::select! {
+                _ = mitm::answer_local(guest, server, ctx, code, msg) => {}
+                _ = stopped(st.stop.clone()) => {}
+            }
+        }
+        Some((t, k)) => {
+            let up = async {
+                let client = tls::kube_client_config(&t, st.upstream_ca.as_deref())
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+                let addr = tokio::net::lookup_host((k.host.as_str(), k.port))
+                    .await?
+                    .next()
+                    .ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::NotFound, k.host.clone())
+                    })?;
+                mitm::connect_upstream(addr, &t.server_name, client).await
+            };
+            match up.await {
+                Ok(up) => {
+                    tokio::select! {
+                        _ = mitm::serve(guest, server, up, ctx) => {}
+                        _ = stopped(st.stop.clone()) => {}
+                    }
+                }
+                Err(e) => {
+                    let msg = if e.kind() == std::io::ErrorKind::InvalidData {
+                        format!("certificado inválido: {e}")
+                    } else {
+                        e.to_string()
+                    };
+                    why = Some(msg.clone());
+                    let text = format!("sandmux: {}: {msg}", t.server);
+                    tokio::select! {
+                        _ = mitm::answer_local(guest, server, ctx, 503, text) => {}
+                        _ = stopped(st.stop.clone()) => {}
+                    }
+                }
+            }
+        }
+    }
+    st.log.write(
+        "tcp",
+        &name,
+        &ip,
+        rport,
+        read.load(Ordering::Relaxed),
+        written.load(Ordering::Relaxed),
+        t0.elapsed().as_millis() as u64,
+        why.as_deref(),
+    );
+}
+
 /// Copia nos dois sentidos, contando os bytes lidos de cada lado.
 async fn pump(
     s: &mut ipstack::IpStackTcpStream,
@@ -469,8 +607,24 @@ struct Answer {
 
 /// Resolve uma consulta: nega pela política (NXDOMAIN), responde o nome da
 /// máquina aqui e repassa o resto ao host.
+/// Os API servers do Kubernetes (`<nome>.kube.sandmux.internal`) vão a
+/// `KUBE`, em qualquer modo da política: a identidade guardada é o
+/// consentimento.
+fn kube_answer(q: &[u8], parsed: &dns::Query) -> Option<Answer> {
+    sandmux_spec::net::kube_label(&parsed.name)?;
+    Some(Answer {
+        bytes: dns::answer_a(q, parsed, KUBE),
+        name: parsed.name.clone(),
+        ip: KUBE.to_string(),
+        blocked: None,
+    })
+}
+
 async fn resolve(q: &[u8], st: &State) -> Option<Answer> {
     let parsed = dns::parse_query(q)?;
+    if let Some(a) = kube_answer(q, &parsed) {
+        return Some(a);
+    }
     if let Verdict::Block(why) = st.policy.get().decide_name(&parsed.name) {
         return Some(Answer {
             bytes: dns::nxdomain(q, &parsed),
@@ -727,6 +881,7 @@ async fn run(
                 tls::client_config(t.upstream_ca_pem.as_deref()),
             ))
         }),
+        upstream_ca: cfg.tls.as_ref().and_then(|t| t.upstream_ca_pem.clone()),
         names: policy::Names::default(),
         policy: policy::Policy::new(cfg.policy.clone(), cfg.policy_file.clone()),
         icmp: Mutex::new(HashMap::new()),
@@ -817,6 +972,23 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dns_do_api_server_do_kubernetes() {
+        let q = dns::build_query(9, "kind-dev.kube.sandmux.internal", 1);
+        let parsed = dns::parse_query(&q).unwrap();
+        let a = kube_answer(&q, &parsed).unwrap();
+        assert_eq!(a.ip, "10.0.2.253");
+        assert!(a.blocked.is_none());
+        assert_eq!(
+            dns::parse_a_answers(&a.bytes),
+            vec![("kind-dev.kube.sandmux.internal".into(), KUBE)]
+        );
+        let q = dns::build_query(9, "kube.sandmux.internal", 1);
+        assert!(kube_answer(&q, &dns::parse_query(&q).unwrap()).is_none());
+        let q = dns::build_query(9, "exemplo.com", 1);
+        assert!(kube_answer(&q, &dns::parse_query(&q).unwrap()).is_none());
+    }
 
     #[test]
     fn nome_fixo_vence_o_host() {

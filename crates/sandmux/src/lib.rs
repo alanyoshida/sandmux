@@ -21,6 +21,7 @@ pub mod discover;
 pub mod docker;
 pub mod helper;
 pub mod keyring;
+pub mod kube;
 pub mod launch;
 pub mod login;
 pub mod paths;

@@ -2376,15 +2376,23 @@ fn draw_vault_graph(
                                 &crate::vaultcmd::cloud_source(c),
                                 false,
                             ));
-                            l.push(kv(
-                                tr!("conta", "account"),
-                                if c.account.is_empty() {
-                                    "—"
-                                } else {
-                                    &c.account
-                                },
-                                c.account.is_empty(),
-                            ));
+                            if c.provider == "kubernetes" {
+                                l.push(kv(tr!("contexto", "context"), &c.configuration, false));
+                                l.push(kv(tr!("servidor", "server"), &c.server, false));
+                                if !c.namespace.is_empty() {
+                                    l.push(kv("namespace", &c.namespace, false));
+                                }
+                            } else {
+                                l.push(kv(
+                                    tr!("conta", "account"),
+                                    if c.account.is_empty() {
+                                        "—"
+                                    } else {
+                                        &c.account
+                                    },
+                                    c.account.is_empty(),
+                                ));
+                            }
                             if !c.project.is_empty() {
                                 l.push(kv(tr!("projeto", "project"), &c.project, false));
                             }

@@ -494,6 +494,7 @@ const VALUE_NAMES_EN: &[(&str, &str)] = &[
     ("CONFIGURAÇÃO", "CONFIGURATION"),
     ("ARQUIVO", "FILE"),
     ("PROVEDOR", "PROVIDER"),
+    ("CONTEXTO", "CONTEXT"),
 ];
 
 /// Ajuda da linha de comando, português (o doc comment) -> inglês. Cobre
@@ -992,7 +993,22 @@ const HELP_EN: &[(&str, &str)] = &[
         "Guarda uma identidade de cloud: o sandbox recebe um falso, e o real fica fora dele.",
         "Saves a cloud identity: the sandbox gets a fake, and the real one stays outside it.",
     ),
-    ("Provedor: gcp.", "Provider: gcp."),
+    (
+        "Provedor: gcp ou kubernetes.",
+        "Provider: gcp or kubernetes.",
+    ),
+    (
+        "Nome da identidade (no gcp); no kubernetes, o nome vem de cada contexto.",
+        "Name of the identity (for gcp); for kubernetes, the name comes from each context.",
+    ),
+    (
+        "Contexto do kubeconfig do host (repetível; sem ele, todos os contextos).",
+        "Context of the host kubeconfig (repeatable; without it, every context).",
+    ),
+    (
+        "Copia para o cofre o servidor, a CA e a credencial de cada contexto (sem plugin exec).",
+        "Copies the server, the CA and the credential of each context into the vault (no exec plugin).",
+    ),
     (
         "Configuração do gcloud do host (referência: o real vem do gcloud do host).",
         "Configuration of the host gcloud (reference: the real one comes from the host gcloud).",

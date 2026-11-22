@@ -47,9 +47,17 @@ pub enum VaultCmd {
     },
     /// Guarda uma identidade de cloud: o sandbox recebe um falso, e o real fica fora dele.
     AddCloud {
-        /// Provedor: gcp.
+        /// Provedor: gcp ou kubernetes.
+        #[arg(value_name = "PROVEDOR")]
         provedor: String,
-        nome: String,
+        /// Nome da identidade (no gcp); no kubernetes, o nome vem de cada contexto.
+        nome: Option<String>,
+        /// Contexto do kubeconfig do host (repetível; sem ele, todos os contextos).
+        #[arg(long, value_name = "CONTEXTO")]
+        context: Vec<String>,
+        /// Copia para o cofre o servidor, a CA e a credencial de cada contexto (sem plugin exec).
+        #[arg(long)]
+        copy: bool,
         /// Configuração do gcloud do host (referência: o real vem do gcloud do host).
         #[arg(long, value_name = "CONFIGURAÇÃO")]
         configuration: Option<String>,
@@ -378,11 +386,15 @@ pub(crate) fn store_agy_login(
 /// A fonte de uma identidade de cloud, para mostrar.
 pub(crate) fn cloud_source(c: &sandmux_proto::msg::CloudInfo) -> String {
     match c.source.as_str() {
+        "host" if c.provider == "kubernetes" => {
+            trf!("host: contexto {}", "host: context {}", c.configuration)
+        }
         "host" => trf!(
             "host: configuração {}",
             "host: configuration {}",
             c.configuration
         ),
+        "copy" => trf!("cópia: contexto {}", "copy: context {}", c.configuration),
         "adc" => tr!("cópia: ADC", "copy: ADC").into(),
         "key" => tr!("cópia: conta de serviço", "copy: service account").into(),
         other => other.to_string(),
@@ -391,6 +403,19 @@ pub(crate) fn cloud_source(c: &sandmux_proto::msg::CloudInfo) -> String {
 
 /// A linha de uma identidade de cloud em `vault list`, sem token nem chave.
 fn cloud_line(name: &str, fake: &str, c: &sandmux_proto::msg::CloudInfo) -> String {
+    if c.provider == "kubernetes" {
+        let default = if c.default {
+            tr!("  (padrão)", "  (default)")
+        } else {
+            ""
+        };
+        return trf!(
+            "{name}  cloud  kubernetes  {}  servidor: {}{default}  falso: {fake}",
+            "{name}  cloud  kubernetes  {}  server: {}{default}  fake: {fake}",
+            cloud_source(c),
+            c.server
+        );
+    }
     let account = if c.account.is_empty() {
         "-".to_string()
     } else {
@@ -482,17 +507,148 @@ fn add_cloud(
         *secret = text.to_string();
     }
     call(&Msg::VaultAddCloud {
-        cloud: sandmux_proto::msg::CloudAdd {
+        cloud: Box::new(sandmux_proto::msg::CloudAdd {
             name: nome.clone(),
             info,
             secret: secret.to_string(),
-        },
+        }),
     })?;
     eprintln!(
         "{}",
         trf!(
             "sandmux: identidade {provedor}:{nome} guardada no cofre; cada aba recebe um falso, e o real fica fora do sandbox.\nO agente pode fazer o que o IAM dessa identidade permite: use uma sem permissão de criar chaves de conta de serviço\nnem de ler o Secret Manager (veja docs/cloud.md).",
             "sandmux: identity {provedor}:{nome} stored in the vault; each tab gets a fake, and the real one stays outside the sandbox.\nThe agent can do what the IAM of this identity allows: use one without permission to create service account keys\nor to read Secret Manager (see docs/cloud.md)."
+        )
+    );
+    Ok(())
+}
+
+/// `sandmux vault add-cloud kubernetes`: uma identidade por contexto do
+/// kubeconfig do host (ou só os de `--context`), por referência ou cópia.
+fn add_kube(only: Vec<String>, copy: bool) -> Result<()> {
+    use sandmux::kube;
+    let kubeconfig = kube::host_kubeconfig();
+    let view = kube::view(&kubeconfig, None).map_err(|e| anyhow!(e))?;
+    let (all, current) = kube::contexts(&view);
+    if all.is_empty() {
+        bail!(trf!(
+            "o kubeconfig do host ({kubeconfig}) não tem contexto",
+            "the host kubeconfig ({kubeconfig}) has no context"
+        ));
+    }
+    for c in &only {
+        if !all.iter().any(|x| &x.name == c) {
+            bail!(trf!(
+                "o contexto {c} não existe no kubeconfig do host",
+                "context {c} does not exist in the host kubeconfig"
+            ));
+        }
+    }
+    let chosen: Vec<&kube::Context> = all
+        .iter()
+        .filter(|c| only.is_empty() || only.contains(&c.name))
+        .collect();
+    // Confere todos antes de guardar algum: com `--context`, uma recusa não
+    // deixa metade; com todos os contextos, o que não dá é pulado.
+    let mut ready = Vec::new();
+    for c in &chosen {
+        let checked = kube::material(&view, &c.name).and_then(|m| {
+            kube::check(&m, &c.name, copy)?;
+            Ok(m)
+        });
+        let m = match checked {
+            Ok(m) => m,
+            Err(e) if only.is_empty() => {
+                eprintln!(
+                    "{}",
+                    trf!(
+                        "sandmux: contexto {} pulado: {e}",
+                        "sandmux: context {} skipped: {e}",
+                        c.name
+                    )
+                );
+                continue;
+            }
+            Err(e) => bail!(e),
+        };
+        let Some(name) = sandmux_spec::net::kube_name(&c.name) else {
+            bail!(trf!(
+                "o contexto {:?} não dá um nome de identidade",
+                "context {:?} does not give an identity name",
+                c.name
+            ));
+        };
+        let secret = if copy {
+            Zeroizing::new(kube::copied(&m).map_err(|e| anyhow!(e))?)
+        } else {
+            Zeroizing::new(String::new())
+        };
+        ready.push((name, *c, secret));
+    }
+    let Msg::VaultEntries { entries } = call(&Msg::VaultList)? else {
+        bail!(tr!(
+            "resposta inesperada do daemon",
+            "unexpected answer from the daemon"
+        ));
+    };
+    let mut taken: Vec<String> = entries.into_iter().map(|e| e.name).collect();
+    let mut saved = Vec::new();
+    for (name, c, secret) in ready {
+        let full = format!("kube:{name}");
+        if taken.contains(&full) {
+            eprintln!(
+                "{}",
+                trf!(
+                    "sandmux: contexto {} pulado: o cofre já tem {full}",
+                    "sandmux: context {} skipped: the vault already has {full}",
+                    c.name
+                )
+            );
+            continue;
+        }
+        call(&Msg::VaultAddCloud {
+            cloud: Box::new(sandmux_proto::msg::CloudAdd {
+                name: name.clone(),
+                info: sandmux_proto::msg::CloudInfo {
+                    provider: "kubernetes".into(),
+                    source: if copy { "copy" } else { "host" }.into(),
+                    configuration: c.name.clone(),
+                    server: c.server.clone(),
+                    namespace: c.namespace.clone(),
+                    kubeconfig: if copy {
+                        String::new()
+                    } else {
+                        kubeconfig.clone()
+                    },
+                    default: c.name == current,
+                    ..Default::default()
+                },
+                secret: secret.to_string(),
+            }),
+        })?;
+        taken.push(full.clone());
+        saved.push(format!("  {full}  ({})", c.name));
+    }
+    if saved.is_empty() {
+        eprintln!(
+            "{}",
+            tr!(
+                "sandmux: nenhuma identidade nova de Kubernetes",
+                "sandmux: no new Kubernetes identity"
+            )
+        );
+        return Ok(());
+    }
+    eprintln!(
+        "{}\n{}\n{}",
+        tr!(
+            "sandmux: identidades de Kubernetes guardadas no cofre:",
+            "sandmux: Kubernetes identities stored in the vault:"
+        ),
+        saved.join("\n"),
+        tr!(
+            "Cada aba recebe um kubeconfig só com falsos, e o real fica fora do sandbox.\nO agente pode fazer o que o RBAC de cada contexto permite: prefira uma ServiceAccount com o mínimo,\ne apague os contextos de produção que o agente não deve ver (`sandmux vault remove kube:<nome>`).",
+            "Each tab gets a kubeconfig with fakes only, and the real one stays outside the sandbox.\nThe agent can do what the RBAC of each context allows: prefer a ServiceAccount with the minimum,\nand remove the production contexts the agent must not see (`sandmux vault remove kube:<name>`)."
         )
     );
     Ok(())
@@ -788,12 +944,41 @@ pub fn run(c: VaultCmd) -> Result<i32> {
         VaultCmd::AddCloud {
             provedor,
             nome,
+            context,
+            copy,
             configuration,
             copy_adc,
             copy_key,
             default,
         } => {
-            add_cloud(provedor, nome, configuration, copy_adc, copy_key, default)?;
+            if provedor == "kubernetes" {
+                if nome.is_some()
+                    || configuration.is_some()
+                    || copy_adc
+                    || copy_key.is_some()
+                    || default
+                {
+                    bail!(tr!(
+                        "no kubernetes, use só --context e --copy: o nome vem de cada contexto",
+                        "for kubernetes, use only --context and --copy: the name comes from each context"
+                    ));
+                }
+                add_kube(context, copy)?;
+            } else {
+                if !context.is_empty() || copy {
+                    bail!(tr!(
+                        "--context e --copy são do kubernetes; no gcp, use --configuration, --copy-adc ou --copy-key",
+                        "--context and --copy are for kubernetes; for gcp, use --configuration, --copy-adc or --copy-key"
+                    ));
+                }
+                let Some(nome) = nome else {
+                    bail!(tr!(
+                        "falta o nome da identidade",
+                        "the identity name is missing"
+                    ));
+                };
+                add_cloud(provedor, nome, configuration, copy_adc, copy_key, default)?;
+            }
         }
         VaultCmd::List => {
             let Msg::VaultEntries { entries } = call(&Msg::VaultList)? else {

@@ -598,6 +598,91 @@ pub fn gcp_domain() -> String {
         .unwrap_or_else(|| "*.googleapis.com".into())
 }
 
+/// O sufixo dos nomes sintéticos dos API servers do Kubernetes na aba.
+pub const KUBE_SUFFIX: &str = "kube.sandmux.internal";
+/// Prefixo do token falso de uma identidade de Kubernetes.
+pub const KUBE_FAKE_PREFIX: &str = "sandmux-fake-kube-";
+
+/// O nome de uma identidade de Kubernetes a partir do contexto: minúsculas,
+/// `[a-z0-9-]`, sem `-` repetido nem nas pontas, até 40 caracteres (cabe
+/// num rótulo de DNS). `None` quando não sobra nada.
+pub fn kube_name(context: &str) -> Option<String> {
+    let mut out = String::new();
+    for c in context.chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.truncate(40);
+    let out = out.trim_end_matches('-').to_string();
+    (!out.is_empty()).then_some(out)
+}
+
+/// O domínio sintético de uma identidade de Kubernetes.
+pub fn kube_domain(name: &str) -> String {
+    format!("{name}.{KUBE_SUFFIX}")
+}
+
+/// O nome da identidade de um domínio sintético (`kind-dev` de
+/// `kind-dev.kube.sandmux.internal`).
+pub fn kube_label(host: &str) -> Option<&str> {
+    let host = host.trim_end_matches('.');
+    let n = host.len().checked_sub(KUBE_SUFFIX.len())?;
+    if !host.is_char_boundary(n) || !host[n..].eq_ignore_ascii_case(KUBE_SUFFIX) {
+        return None;
+    }
+    let rest = host[..n].strip_suffix('.')?;
+    (!rest.is_empty() && !rest.contains('.')).then_some(rest)
+}
+
+/// O endereço de um API server `https://host[:porta][/prefixo]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KubeServer {
+    /// O host, sem colchetes num IPv6.
+    pub host: String,
+    pub port: u16,
+    /// `host:porta` como no URL (o cabeçalho `Host`).
+    pub authority: String,
+    /// O caminho antes da API (`/k8s/clusters/c-1` no Rancher), sem a `/`
+    /// final; vazio quase sempre.
+    pub prefix: String,
+}
+
+/// Lê o servidor de um cluster; `None` sem `https://` ou sem host.
+pub fn kube_server(server: &str) -> Option<KubeServer> {
+    let rest = server.trim().strip_prefix("https://")?;
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    let (host, port) = if let Some(v6) = authority.strip_prefix('[') {
+        let (h, after) = v6.split_once(']')?;
+        let port = match after.strip_prefix(':') {
+            Some(p) => p.parse().ok()?,
+            None if after.is_empty() => 443,
+            None => return None,
+        };
+        (h.to_string(), port)
+    } else {
+        match authority.rsplit_once(':') {
+            Some((h, p)) => (h.to_string(), p.parse().ok()?),
+            None => (authority.to_string(), 443),
+        }
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some(KubeServer {
+        host,
+        port,
+        authority: authority.to_string(),
+        prefix: path.trim_end_matches('/').to_string(),
+    })
+}
+
 /// O harness dono de um segredo de login (`claude:access` é do `claude`).
 pub fn login_owner(secret: &str) -> Option<&'static str> {
     let (h, _) = secret.split_once(':')?;
@@ -932,5 +1017,56 @@ mod tests {
         let p: NetPolicy =
             serde_json::from_str(r#"{"mode":"open","rules":[],"ports":["8443@0.0.0.0"]}"#).unwrap();
         assert_eq!(p.ports[0].port, 8443);
+    }
+
+    #[test]
+    fn nome_de_kubernetes_do_contexto() {
+        assert_eq!(kube_name("kind-dev").as_deref(), Some("kind-dev"));
+        assert_eq!(
+            kube_name("arn:aws:eks:us-east-1:123:cluster/prod").as_deref(),
+            Some("arn-aws-eks-us-east-1-123-cluster-prod")
+        );
+        assert_eq!(
+            kube_name("gke_app-dev_europe-west1_Main").as_deref(),
+            Some("gke-app-dev-europe-west1-main")
+        );
+        assert_eq!(kube_name("--Ünico__").as_deref(), Some("nico"));
+        assert_eq!(kube_name("::"), None);
+        let long = kube_name(&format!("{}-b", "a".repeat(39))).unwrap();
+        assert!(long.len() <= 40 && !long.ends_with('-'), "{long}");
+        let d = kube_domain("kind-dev");
+        assert_eq!(d, "kind-dev.kube.sandmux.internal");
+        assert!(d.parse::<Pattern>().is_ok());
+        assert_eq!(kube_label(&d), Some("kind-dev"));
+        assert_eq!(
+            kube_label("KIND-dev.Kube.Sandmux.Internal."),
+            Some("KIND-dev")
+        );
+        assert_eq!(kube_label("a.b.kube.sandmux.internal"), None);
+        assert_eq!(kube_label("kube.sandmux.internal"), None);
+        assert_eq!(kube_label("xkube.sandmux.internal"), None);
+    }
+
+    #[test]
+    fn servidor_do_cluster() {
+        let k = kube_server("https://h.example:6443/k8s/c-1/").unwrap();
+        assert_eq!(
+            (
+                k.host.as_str(),
+                k.port,
+                k.authority.as_str(),
+                k.prefix.as_str()
+            ),
+            ("h.example", 6443, "h.example:6443", "/k8s/c-1")
+        );
+        let k = kube_server("https://[::1]:6443").unwrap();
+        assert_eq!(
+            (k.host.as_str(), k.port, k.prefix.as_str()),
+            ("::1", 6443, "")
+        );
+        assert_eq!(kube_server("https://h").unwrap().port, 443);
+        assert!(kube_server("http://h:80").is_none());
+        assert!(kube_server("https://:80").is_none());
+        assert!(kube_server("https://h:x").is_none());
     }
 }

@@ -445,6 +445,15 @@ pub struct CloudInfo {
     /// O refresh token falso.
     #[serde(default)]
     pub refresh_fake: String,
+    /// No Kubernetes (protocolo 47): o servidor do cluster, para mostrar.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub server: String,
+    /// No Kubernetes: o namespace do contexto.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub namespace: String,
+    /// No Kubernetes: o `KUBECONFIG` do host, numa referência.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kubeconfig: String,
 }
 
 /// Uma identidade de cloud nova, do cliente ao daemon (protocolo 46). Numa
@@ -529,10 +538,47 @@ pub struct Injection {
     /// vazio, e nada é trocado).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub error: String,
+    /// Numa identidade de Kubernetes (protocolo 47): o API server real e o
+    /// TLS até ele.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kube: Option<KubeTarget>,
 }
 
 fn is_zero(n: &u64) -> bool {
     *n == 0
+}
+
+/// O API server de uma identidade de Kubernetes, como o gateway o alcança.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KubeTarget {
+    /// `https://host:porta`.
+    pub server: String,
+    /// A CA do cluster (PEM); vazia usa as CAs do sistema.
+    #[serde(default)]
+    pub ca_pem: String,
+    /// O nome verificado no certificado do servidor (o `tls-server-name`, ou
+    /// o host do servidor, que pode ser um IP).
+    #[serde(default)]
+    pub server_name: String,
+    /// `insecure-skip-tls-verify` do kubeconfig.
+    #[serde(default)]
+    pub insecure: bool,
+    /// O certificado de cliente (PEM) e a chave dele: reais.
+    #[serde(default)]
+    pub cert_pem: String,
+    #[serde(default)]
+    pub key_pem: String,
+}
+
+impl std::fmt::Debug for KubeTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KubeTarget")
+            .field("server", &self.server)
+            .field("server_name", &self.server_name)
+            .field("insecure", &self.insecure)
+            .field("cert", &!self.cert_pem.is_empty())
+            .finish_non_exhaustive()
+    }
 }
 
 impl std::fmt::Debug for Injection {
@@ -745,7 +791,7 @@ pub enum Msg {
     },
     /// Guarda uma identidade de cloud (protocolo 46).
     VaultAddCloud {
-        cloud: CloudAdd,
+        cloud: Box<CloudAdd>,
     },
     /// Troca os domínios (ou os servidores de uma chave SSH) de um segredo,
     /// sem o valor (protocolo 24).
@@ -1378,5 +1424,32 @@ mod tests {
             host: String::new(),
         };
         assert!(serde_json::to_string(&q).unwrap().contains("vault_inject"));
+    }
+
+    #[test]
+    fn destino_do_kubernetes_na_injecao() {
+        // Uma injeção e um CloudInfo do protocolo 46 ainda leem.
+        let old: Injection = serde_json::from_str(
+            r#"{"name":"gcp:a","domains":["*.googleapis.com"],"fake":"f","value":"v"}"#,
+        )
+        .unwrap();
+        assert!(old.kube.is_none());
+        let info: CloudInfo =
+            serde_json::from_str(r#"{"provider":"gcp","source":"host"}"#).unwrap();
+        assert!(info.server.is_empty() && info.kubeconfig.is_empty());
+        let i = Injection {
+            name: "kube:kind-dev".into(),
+            kube: Some(KubeTarget {
+                server: "https://127.0.0.1:6443".into(),
+                server_name: "127.0.0.1".into(),
+                cert_pem: "CERT".into(),
+                key_pem: "CHAVE-REAL".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(!format!("{:?}", i.kube).contains("CHAVE-REAL"));
+        let j = serde_json::to_string(&i).unwrap();
+        assert_eq!(serde_json::from_str::<Injection>(&j).unwrap(), i);
     }
 }

@@ -147,6 +147,13 @@ pub fn rewrite(
     h.or(p)
 }
 
+/// Um pedido de upgrade (WebSocket, SPDY…).
+pub fn is_upgrade(h: &hyper::HeaderMap) -> bool {
+    h.get(hyper::header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| !v.trim().is_empty())
+}
+
 /// Um pedido de upgrade para WebSocket.
 pub fn is_websocket(h: &hyper::HeaderMap) -> bool {
     h.get(hyper::header::UPGRADE)
@@ -362,6 +369,128 @@ fn full(b: impl Into<Bytes>) -> Boxed {
     http_body_util::Full::new(b.into())
         .map_err(|n| match n {})
         .boxed()
+}
+
+/// Um `Status` do Kubernetes, a resposta do gateway num API server sem a
+/// identidade ou sem o real.
+pub fn kube_status(code: u16, msg: &str) -> hyper::Response<Boxed> {
+    let reason = match code {
+        401 => "Unauthorized",
+        404 => "NotFound",
+        _ => "ServiceUnavailable",
+    };
+    let body = serde_json::json!({
+        "kind": "Status",
+        "apiVersion": "v1",
+        "metadata": {},
+        "status": "Failure",
+        "message": msg,
+        "reason": reason,
+        "code": code,
+    });
+    let mut r = hyper::Response::new(full(body.to_string()));
+    *r.status_mut() = hyper::StatusCode::from_u16(code).unwrap_or(hyper::StatusCode::BAD_GATEWAY);
+    r.headers_mut().insert(
+        hyper::header::CONTENT_TYPE,
+        hyper::header::HeaderValue::from_static("application/json"),
+    );
+    r
+}
+
+/// Um pedido ao API server de uma identidade de Kubernetes: o token falso
+/// vira o real (pela troca comum) ou sai, quando a credencial é só o
+/// certificado de cliente; o `Host` e o prefixo do caminho vêm do servidor
+/// real. Devolve o nome da identidade, ou a resposta local sem o real.
+pub fn kube_prepare<B>(
+    req: &mut hyper::Request<B>,
+    list: &[sandmux_proto::msg::Injection],
+) -> Result<String, (u16, String)> {
+    // A identidade do nome: com o destino, ou com a falha (sem o real, o
+    // daemon não manda o destino).
+    let Some(i) = list
+        .iter()
+        .find(|i| i.kube.is_some() || !i.error.is_empty())
+    else {
+        return Err((
+            404,
+            sandmux_spec::tr!(
+                "sandmux: nenhuma identidade de Kubernetes com este nome no cofre aberto",
+                "sandmux: no Kubernetes identity with this name in the open vault"
+            )
+            .into(),
+        ));
+    };
+    let Some(t) = i.kube.as_ref().filter(|_| i.error.is_empty()) else {
+        return Err((401, format!("sandmux: {}: {}", i.name, i.error)));
+    };
+    let Some(k) = sandmux_spec::net::kube_server(&t.server) else {
+        return Err((503, format!("sandmux: {}: {}", i.name, t.server)));
+    };
+    if i.value.is_empty() {
+        let fake = req
+            .headers()
+            .get(hyper::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains(&i.fake));
+        if fake {
+            req.headers_mut().remove(hyper::header::AUTHORIZATION);
+        }
+    }
+    if let Ok(h) = hyper::header::HeaderValue::from_str(&k.authority) {
+        req.headers_mut().insert(hyper::header::HOST, h);
+    }
+    if !k.prefix.is_empty() {
+        let pq = req
+            .uri()
+            .path_and_query()
+            .map(|p| p.as_str().to_string())
+            .unwrap_or_else(|| "/".into());
+        if let Ok(u) = format!("{}{pq}", k.prefix).parse() {
+            *req.uri_mut() = u;
+        }
+    }
+    Ok(i.name.clone())
+}
+
+/// Responde a conexão decifrada do sandbox sem ir a destino nenhum: todo
+/// pedido recebe o `Status` do Kubernetes com `code` e `msg`.
+pub async fn answer_local<S>(
+    guest: S,
+    server: Arc<rustls::ServerConfig>,
+    ctx: Arc<Ctx>,
+    code: u16,
+    msg: String,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let Ok(tls) = tokio_rustls::TlsAcceptor::from(server).accept(guest).await else {
+        return;
+    };
+    let msg = Arc::new(msg);
+    let service = hyper::service::service_fn(move |req: hyper::Request<Incoming>| {
+        let (ctx, msg) = (ctx.clone(), msg.clone());
+        async move {
+            ctx.log.write_http(
+                ctx.proto,
+                &ctx.domain,
+                &ctx.ip,
+                ctx.port,
+                0,
+                0,
+                0,
+                crate::log::Http {
+                    method: req.method().as_str(),
+                    path: &path_of(req.uri()),
+                    status: code,
+                    secret: None,
+                },
+            );
+            Ok::<_, hyper::Error>(kube_status(code, &msg))
+        }
+    });
+    let _ = hyper::server::conn::http1::Builder::new()
+        .serve_connection(TokioIo::new(tls), service)
+        .await;
 }
 
 /// Resposta do gateway ao sandbox.
@@ -626,8 +755,35 @@ where
             let t0 = Instant::now();
             let method = req.method().to_string();
             let path = path_of(req.uri());
-            // WebSocket: o lado do sandbox, promovido depois do `101`.
-            let guest_up = is_websocket(req.headers()).then(|| hyper::upgrade::on(&mut req));
+            // O API server de uma identidade de Kubernetes.
+            let mut kube = None;
+            if sandmux_spec::net::kube_label(&ctx.domain).is_some() {
+                match kube_prepare(&mut req, &list) {
+                    Ok(name) => kube = Some(name),
+                    Err((code, msg)) => {
+                        ctx.log.write_http(
+                            ctx.proto,
+                            &ctx.domain,
+                            &ctx.ip,
+                            ctx.port,
+                            0,
+                            0,
+                            t0.elapsed().as_millis() as u64,
+                            crate::log::Http {
+                                method: &method,
+                                path: &path,
+                                status: code,
+                                secret: None,
+                            },
+                        );
+                        return Ok(kube_status(code, &msg));
+                    }
+                }
+            }
+            // Upgrade (WebSocket, SPDY): o lado do sandbox, promovido depois
+            // do `101`.
+            let ws = is_websocket(req.headers());
+            let guest_up = is_upgrade(req.headers()).then(|| hyper::upgrade::on(&mut req));
             let up = Arc::new(AtomicU64::new(0));
             let up2 = up.clone();
             let (parts, body) = req.into_parts();
@@ -637,11 +793,11 @@ where
                 done: Some(Box::new(move |n| up2.store(n, Ordering::Relaxed))),
             };
             let mut out = hyper::Request::from_parts(parts, body.boxed());
-            if guest_up.is_some() {
+            if ws {
                 // Sem compressão, as mensagens de texto podem ser lidas.
                 out.headers_mut().remove("sec-websocket-extensions");
             }
-            let secret = rewrite(&mut out, &list);
+            let secret = rewrite(&mut out, &list).or(kube);
             let resp = {
                 let mut s = sender.lock().await;
                 match s.ready().await {
@@ -690,6 +846,7 @@ where
                     method,
                     path,
                     secret,
+                    ws,
                 ));
                 let (parts, _) = resp.into_parts();
                 let empty = http_body_util::Empty::<Bytes>::new()
@@ -729,9 +886,11 @@ where
         .await;
 }
 
-/// O WebSocket depois do `101`: o sandbox ao destino pelo leitor de quadros,
-/// que troca os falsos; o destino ao sandbox, cópia direta. Quando um lado
+/// A conexão depois do `101`. No WebSocket, o sandbox ao destino pelo
+/// leitor de quadros, que troca os falsos; nos outros upgrades (SPDY), uma
+/// cópia de bytes. O destino ao sandbox, cópia direta. Quando um lado
 /// termina, o outro tem 5 segundos para terminar. Registra no fim.
+#[allow(clippy::too_many_arguments)]
 async fn tunnel(
     guest: hyper::upgrade::OnUpgrade,
     dest: hyper::upgrade::OnUpgrade,
@@ -740,15 +899,26 @@ async fn tunnel(
     method: String,
     path: String,
     secret: Option<String>,
+    ws: bool,
 ) {
     use tokio::io::AsyncWriteExt;
     let (Ok(g), Ok(d)) = (guest.await, dest.await) else {
         return;
     };
-    let (gr, mut gw) = tokio::io::split(TokioIo::new(g));
-    let (mut dr, dw) = tokio::io::split(TokioIo::new(d));
+    let (mut gr, mut gw) = tokio::io::split(TokioIo::new(g));
+    let (mut dr, mut dw) = tokio::io::split(TokioIo::new(d));
     let list = ctx.list();
-    let up = crate::ws::pump_client(gr, dw, &list);
+    let up: std::pin::Pin<
+        Box<dyn std::future::Future<Output = (u64, Option<String>)> + Send + '_>,
+    > = if ws {
+        Box::pin(crate::ws::pump_client(gr, dw, &list))
+    } else {
+        Box::pin(async move {
+            let n = tokio::io::copy(&mut gr, &mut dw).await.unwrap_or(0);
+            let _ = dw.shutdown().await;
+            (n, None)
+        })
+    };
     let down = async {
         let n = tokio::io::copy(&mut dr, &mut gw).await.unwrap_or(0);
         // O ipstack só manda o FIN sem dados pendentes de ACK e não tenta de
@@ -975,7 +1145,200 @@ mod tests {
             refresh_fake: "1//sandmux-fake-R".into(),
             expires,
             error: error.into(),
+            kube: None,
         }
+    }
+
+    fn kinj(value: &str, error: &str) -> sandmux_proto::msg::Injection {
+        sandmux_proto::msg::Injection {
+            name: "kube:dev".into(),
+            domains: vec!["dev.kube.sandmux.internal".into()],
+            fake: "sandmux-fake-kube-A".into(),
+            value: value.into(),
+            error: error.into(),
+            kube: Some(sandmux_proto::msg::KubeTarget {
+                server: "https://10.0.0.1:6443/pre".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Um pedido do sandbox por `serve_http`, com o destino respondendo
+    /// `answer` (vazio: não responde). Devolve o que o sandbox recebeu e o
+    /// que chegou ao destino.
+    async fn kube_exchange(
+        list: Vec<sandmux_proto::msg::Injection>,
+        req: &str,
+        answer: &str,
+    ) -> (String, String) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut guest, guest_side) = tokio::io::duplex(1 << 16);
+        let (up_side, mut upstream) = tokio::io::duplex(1 << 16);
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(Ctx {
+            log: Arc::new(crate::log::Log::new(dir.path(), "t", dir.path())),
+            proto: "https",
+            domain: "dev.kube.sandmux.internal".into(),
+            ip: "10.0.0.1".into(),
+            port: 6443,
+            injections: list,
+            vault: None,
+            tag: "t".into(),
+            harness: "shell".into(),
+            refreshed: Default::default(),
+        });
+        tokio::spawn(serve_http(guest_side, up_side, ctx));
+        guest.write_all(req.as_bytes()).await.unwrap();
+        let mut seen = Vec::new();
+        let mut buf = vec![0u8; 4096];
+        if !answer.is_empty() {
+            while !String::from_utf8_lossy(&seen).contains("\r\n\r\n") {
+                let n = upstream.read(&mut buf).await.unwrap();
+                seen.extend_from_slice(&buf[..n]);
+            }
+            upstream.write_all(answer.as_bytes()).await.unwrap();
+        }
+        let mut out = Vec::new();
+        while !String::from_utf8_lossy(&out).contains("\r\n\r\n") {
+            let n = tokio::time::timeout(std::time::Duration::from_secs(5), guest.read(&mut buf))
+                .await
+                .unwrap()
+                .unwrap();
+            out.extend_from_slice(&buf[..n]);
+        }
+        // O corpo curto da resposta vem junto ou logo depois.
+        if let Ok(Ok(n)) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), guest.read(&mut buf)).await
+        {
+            out.extend_from_slice(&buf[..n]);
+        }
+        if answer.is_empty() {
+            let r = tokio::time::timeout(
+                std::time::Duration::from_millis(300),
+                upstream.read(&mut buf),
+            )
+            .await;
+            if let Ok(Ok(n)) = r {
+                seen.extend_from_slice(&buf[..n]);
+            }
+        }
+        (
+            String::from_utf8_lossy(&out).into_owned(),
+            String::from_utf8_lossy(&seen).into_owned(),
+        )
+    }
+
+    const OK: &str = "HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}";
+
+    #[tokio::test]
+    async fn kubernetes_com_token_real() {
+        let (resp, seen) = kube_exchange(
+            vec![kinj("k8s-REAL", "")],
+            "GET /api/v1/pods?watch=1 HTTP/1.1\r\nhost: dev.kube.sandmux.internal\r\nauthorization: Bearer sandmux-fake-kube-A\r\n\r\n",
+            OK,
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+        assert!(seen.starts_with("GET /pre/api/v1/pods?watch=1 "), "{seen}");
+        assert!(seen.contains("Bearer k8s-REAL"), "{seen}");
+        assert!(seen.contains("host: 10.0.0.1:6443"), "{seen}");
+        assert!(!seen.contains("sandmux-fake"), "{seen}");
+    }
+
+    #[tokio::test]
+    async fn kubernetes_so_com_certificado() {
+        let (resp, seen) = kube_exchange(
+            vec![kinj("", "")],
+            "GET /api HTTP/1.1\r\nhost: dev.kube.sandmux.internal\r\nauthorization: Bearer sandmux-fake-kube-A\r\n\r\n",
+            OK,
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+        assert!(
+            !seen.to_ascii_lowercase().contains("authorization"),
+            "{seen}"
+        );
+    }
+
+    #[tokio::test]
+    async fn kubernetes_sem_real_responde_401() {
+        let (resp, seen) = kube_exchange(
+            vec![sandmux_proto::msg::Injection {
+                kube: None,
+                ..kinj("", "rode `aws sso login` no host")
+            }],
+            "GET /api HTTP/1.1\r\nhost: dev.kube.sandmux.internal\r\nauthorization: Bearer sandmux-fake-kube-A\r\n\r\n",
+            "",
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 401"), "{resp}");
+        assert!(
+            resp.contains(r#""kind":"Status""#) && resp.contains("aws sso login"),
+            "{resp}"
+        );
+        assert!(seen.is_empty(), "o destino recebeu: {seen}");
+        let (resp, _) = kube_exchange(Vec::new(), "GET /api HTTP/1.1\r\nhost: x\r\n\r\n", "").await;
+        assert!(resp.starts_with("HTTP/1.1 404"), "{resp}");
+    }
+
+    #[tokio::test]
+    async fn upgrade_spdy_vira_tunel() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut guest, guest_side) = tokio::io::duplex(1 << 16);
+        let (up_side, mut upstream) = tokio::io::duplex(1 << 16);
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(Ctx {
+            log: Arc::new(crate::log::Log::new(dir.path(), "t", dir.path())),
+            proto: "https",
+            domain: "a.test".into(),
+            ip: "1.2.3.4".into(),
+            port: 443,
+            injections: Vec::new(),
+            vault: None,
+            tag: "t".into(),
+            harness: "shell".into(),
+            refreshed: Default::default(),
+        });
+        tokio::spawn(serve_http(guest_side, up_side, ctx));
+        guest
+            .write_all(b"POST /exec HTTP/1.1\r\nhost: a.test\r\nconnection: Upgrade\r\nupgrade: SPDY/3.1\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = vec![0u8; 4096];
+        let mut seen = Vec::new();
+        while !String::from_utf8_lossy(&seen).contains("\r\n\r\n") {
+            let n = upstream.read(&mut buf).await.unwrap();
+            seen.extend_from_slice(&buf[..n]);
+        }
+        assert!(
+            String::from_utf8_lossy(&seen)
+                .to_ascii_lowercase()
+                .contains("upgrade: spdy/3.1")
+        );
+        upstream
+            .write_all(b"HTTP/1.1 101 Switching Protocols\r\nconnection: Upgrade\r\nupgrade: SPDY/3.1\r\n\r\n")
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        while !String::from_utf8_lossy(&out).contains("\r\n\r\n") {
+            let n = guest.read(&mut buf).await.unwrap();
+            out.extend_from_slice(&buf[..n]);
+        }
+        assert!(String::from_utf8_lossy(&out).starts_with("HTTP/1.1 101"));
+        // Bytes crus nos dois sentidos.
+        guest.write_all(b"\x80\x03ping").await.unwrap();
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), upstream.read(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&buf[..n], b"\x80\x03ping");
+        upstream.write_all(b"pong").await.unwrap();
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), guest.read(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&buf[..n], b"pong");
     }
 
     #[test]
