@@ -1576,6 +1576,39 @@ fn processos_na_pagina_sem_o_auxiliar() {
 }
 
 #[test]
+fn processos_avisa_do_auxiliar_root_antigo() {
+    let e = Env::new();
+    sessao(&e, &e.work);
+    let own = env!("CARGO_PKG_VERSION");
+    let h = common::fakehelper::FakeHelper::start(&e.runtime, "0.0.1");
+    let mut cmd = e.cmd(&e.work, &[]);
+    cmd.env("SHELL", "/bin/bash")
+        .env("SANDMUX_HELPER_SOCKET", &h.socket);
+    let mut t = Term::spawn_answering(cmd, 120, 30);
+    t.wait_text(&tab(1, "shell:app"));
+    t.write(b"\x02e");
+    t.wait_text("sandmux · configurações");
+    for _ in 0..20 {
+        t.write(DOWN);
+    }
+    // O auxiliar em execução é de antes da atualização: o aviso no topo.
+    t.wait_text(&format!(
+        "auxiliar root 0.0.1 mais antigo que o sandmux {own}"
+    ));
+    t.wait_text("rode `sandmux setup` para reiniciar o auxiliar");
+    // Com o auxiliar em dia, `r` confere de novo e o aviso some.
+    h.set_version(own);
+    t.write(b"\t");
+    t.wait_text("r relê");
+    t.write(b"r");
+    t.wait_for("o aviso some", |s| !s.contains("mais antigo que o sandmux"));
+    t.write(b"\x1b");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
 fn diagnostico_na_pagina_e_chaves_ao_cofre() {
     use std::io::Write;
     let e = Env::new();

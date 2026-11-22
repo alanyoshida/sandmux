@@ -1432,6 +1432,11 @@ impl App {
 impl App {
     /// Pede ao daemon a árvore de processos da aba ativa.
     pub(super) fn procs_refresh(&mut self, s: &mut Settings) {
+        // A versão do auxiliar é conferida ao abrir a seção; `r` confere de
+        // novo.
+        if !s.procs.loaded {
+            s.procs.old_helper = sandmux::helper::outdated();
+        }
         let Some(id) = self.tabs.get(self.active).map(|t| t.id) else {
             s.procs.set(
                 Vec::new(),
@@ -1486,7 +1491,10 @@ impl App {
             }
             Key::Char('+') | Key::Char('=') => v.zoom_in(),
             Key::Char('-') => v.zoom_out(),
-            Key::Char('r') => self.procs_refresh(s),
+            Key::Char('r') => {
+                s.procs.old_helper = sandmux::helper::outdated();
+                self.procs_refresh(s)
+            }
             _ => return false,
         }
         true

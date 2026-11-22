@@ -1747,6 +1747,34 @@ pub fn availability_with(lsm: Result<bool, String>, socket: &Path) -> Result<Str
     ))
 }
 
+/// `true` quando a versão `helper` é anterior a `own`. As versões são
+/// números separados por ponto (`0.1.9` vem antes de `0.1.10`); uma versão
+/// que não se lê assim não conta como antiga.
+pub fn older(helper: &str, own: &str) -> bool {
+    let parse =
+        |v: &str| -> Option<Vec<u64>> { v.trim().split('.').map(|p| p.parse().ok()).collect() };
+    let (Some(mut a), Some(mut b)) = (parse(helper), parse(own)) else {
+        return false;
+    };
+    let n = a.len().max(b.len());
+    a.resize(n, 0);
+    b.resize(n, 0);
+    a < b
+}
+
+/// A versão do auxiliar root em execução, quando ela é anterior à deste
+/// sandmux. O auxiliar só troca ao ser reiniciado: depois de uma atualização
+/// dos binários, o antigo continua de pé, sem o que a versão nova espera
+/// dele. `None` sem auxiliar, ou com ele na mesma versão ou numa mais nova.
+pub fn outdated() -> Option<String> {
+    outdated_at(&socket_path(), env!("CARGO_PKG_VERSION"))
+}
+
+pub fn outdated_at(socket: &Path, own: &str) -> Option<String> {
+    let v = Client::connect(socket).ok()?.status().ok()?.version;
+    older(&v, own).then_some(v)
+}
+
 /// Os arquivos das abas podem ir ao kernel (o BPF LSM e um auxiliar que
 /// confina abas); `Err` com o motivo de ficarem com o supervisor.
 pub fn tab_availability() -> Result<String, String> {
@@ -2427,6 +2455,30 @@ mod tests {
                 assert!(e.contains("pertence ao uid 0"), "{e}");
             }
         }
+    }
+
+    #[test]
+    fn versao_antiga_do_auxiliar() {
+        assert!(older("0.1.30", "0.1.32"));
+        assert!(older("0.1.9", "0.1.10"));
+        assert!(older("0.1", "0.1.1"));
+        assert!(older("0.9.9", "1.0.0"));
+        assert!(!older("0.1.32", "0.1.32"));
+        assert!(!older("0.1.32", "0.1.30"));
+        assert!(!older("0.2.0", "0.1.99"));
+        assert!(!older("0.1.0", "0.1"));
+        // Uma versão que não se lê não conta como antiga.
+        assert!(!older("", "0.1.32"));
+        assert!(!older("0.1.32-dev", "0.2.0"));
+        assert!(!older("0.1.30", "desconhecida"));
+
+        let own = env!("CARGO_PKG_VERSION");
+        assert_eq!(outdated_at(Path::new("/nonexistent/h.sock"), own), None);
+        let (_d, p, _, _) = start(true);
+        // O auxiliar de teste responde a versão deste pacote.
+        assert_eq!(outdated_at(&p, own), None);
+        assert_eq!(outdated_at(&p, "0.0.1"), None);
+        assert_eq!(outdated_at(&p, "999.0.0"), Some(own.to_string()));
     }
 
     #[test]
