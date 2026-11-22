@@ -1,16 +1,16 @@
-sandmux 0.1.38, antes da v1: o agente usa o gcloud sem que uma credencial real do Google Cloud entre no sandbox.
+sandmux 0.1.39, antes da v1: o agente usa o kubectl sem que uma credencial real do Kubernetes entre no sandbox.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Novidade
 
-- **Credenciais de cloud, começando pelo GCP:** `sandmux vault add-cloud gcp <nome>` guarda uma identidade no cofre. A fonte pode ser uma configuração do `gcloud` do host (`--configuration`) ou uma cópia cifrada do ADC (`--copy-adc`) ou da chave de uma conta de serviço (`--copy-key`).
-  - Cada aba recebe uma configuração do `gcloud` e um ADC só com tokens falsos.
-  - O gateway troca o falso pelo real nas APIs do Google e responde sozinho o pedido de token. O real fica só na memória do daemon e é renovado antes de vencer.
-  - O que o agente pode fazer é o que o IAM da identidade permitir. Use uma identidade sem permissão de criar chaves de conta de serviço nem de ler o Secret Manager.
-  - As bibliotecas por gRPC ainda não funcionam. Detalhes em [docs/cloud.md](https://github.com/alanyoshida/sandmux/blob/main/docs/cloud.md).
+- **Credenciais do Kubernetes:** `sandmux vault add-cloud kubernetes` guarda todos os contextos do kubeconfig do host (ou só os de `--context`), cada um como uma identidade `kube:<nome>`.
+  - Por referência (o padrão), o daemon lê o contexto pelo `kubectl` do host e roda fora do sandbox os plugins `exec` (EKS, GKE, kubelogin). Com `--copy`, o servidor, a CA e o token ou o certificado de cliente ficam cifrados no cofre.
+  - Cada aba recebe um kubeconfig só com falsos, com o servidor `https://<nome>.kube.sandmux.internal`. O gateway conecta ele mesmo ao API server guardado, inclusive o `127.0.0.1` do host (kind, minikube), com a CA do cluster e o certificado de cliente.
+  - `kubectl get` e `kubectl exec` foram verificados contra um cluster kind; `logs -f` e `port-forward` passam pelo mesmo caminho. Sem o real, o `kubectl` recebe `401` com o motivo.
+  - O que o agente pode fazer é o que o RBAC do contexto permitir. Tire do cofre os contextos de produção que o agente não deve ver. Detalhes em [docs/cloud.md](https://github.com/alanyoshida/sandmux/blob/main/docs/cloud.md).
 
-O protocolo entre o cliente e o daemon passa a 46: depois de atualizar, rode `sandmux daemon restart`. O auxiliar root não muda.
+O protocolo entre o cliente e o daemon passa a 47: depois de atualizar, rode `sandmux daemon restart`. O auxiliar root não muda.
 
 ## Instalar
 
