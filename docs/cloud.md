@@ -46,6 +46,8 @@ Com uma identidade de GCP no cofre, toda aba decifra `*.googleapis.com`, e o gat
 - responde ele mesmo o `POST /token` de `oauth2.googleapis.com` que leva o refresh falso, com o token de acesso falso, sem ir ao Google;
 - registra cada pedido com o nome da identidade (`chave: gcp:trabalho` em `sandmux net`), nunca o token.
 
+As bibliotecas do Google por gRPC (Pub/Sub, Firestore, Spanner) também funcionam: o gateway fala HTTP/2 com elas e com o Google, e troca o token em cada pedido (veja [network.md](network.md#decifração-do-tls)).
+
 O real fica só na memória do daemon, com a validade, e é renovado antes de vencer: o gateway sempre recebe um real com pelo menos 5 minutos de folga, também numa conexão reaproveitada. Com o cofre trancado, nada é trocado.
 
 Quando o real falta (o `gcloud` não está no host, pede um login novo, ou o Google recusa a cópia), o gateway deixa o falso seguir, e o pedido de token da aba recebe `invalid_grant` com o que fazer no host. O daemon avisa uma vez por identidade, pela notificação do desktop e no registro dele, até o real voltar. O `sandmux doctor` avisa de cada referência sem o `gcloud` no host.
@@ -61,7 +63,6 @@ Como as chaves de API, a identidade vale em toda aba, em qualquer pasta.
 
 ## Limites
 
-- **gRPC:** o gateway decifra só HTTP/1.1. As bibliotecas do Google que usam gRPC (Pub/Sub, Firestore, Spanner) falham com `*.googleapis.com` decifrado. O `gcloud` e as APIs REST (Storage, BigQuery, Compute) funcionam.
 - **`gsutil` e `bq` antigos:** têm autenticação própria. Use `gcloud storage` e o `bq` pelo `gcloud`.
 - **Tokens de identidade:** `gcloud auth print-identity-token` e o Cloud Run autenticado não funcionam: o falso é um token de acesso.
 - **`gcloud auth login` dentro da aba:** grava um token real no HOME sintético, como hoje. Faça o login no host.
@@ -115,7 +116,6 @@ O que o RBAC de cada contexto permitir: o gateway não filtra os pedidos ao API 
 
 ### Limites do Kubernetes
 
-- **HTTP/2:** o gateway oferece só HTTP/1.1, e o `client-go` passa a usá-lo sozinho.
 - **`proxy-url` do kubeconfig:** o gateway conecta direto ao servidor.
 - **`insecure-skip-tls-verify`:** quando o kubeconfig do host pede, o gateway também não verifica o servidor.
 - **Um certificado de cliente renovado** vale na conexão seguinte; uma conexão longa (`get -w`) segue com o anterior até o servidor fechá-la.
@@ -178,6 +178,6 @@ O que o IAM do perfil permitir: o gateway não filtra os pedidos. Prefira um pap
 ### Limites da AWS
 
 - **SigV4a** (`AWS4-ECDSA-P256-SHA256`, dos multi-region access points): o pedido passa sem mudar e falha na AWS.
-- **Event streams assinados no pedido** (Transcribe streaming, por HTTP/2): o gateway só fala HTTP/1.1. As respostas em stream (Bedrock `InvokeModelWithResponseStream`) funcionam.
+- **Event streams assinados no pedido** (Transcribe streaming): o gateway refaz a assinatura do pedido, mas não a de cada evento do fluxo. As respostas em stream (Bedrock `InvokeModelWithResponseStream`) funcionam.
 - **A China** (`*.amazonaws.com.cn`) e os endpoints `*.api.aws` não são decifrados.
 - **`aws configure` ou `aws sso login` dentro da aba** gravam na pasta da aba, que some no fim. Faça o login no host.

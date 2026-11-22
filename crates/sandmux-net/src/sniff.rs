@@ -3,6 +3,36 @@
 
 /// SNI de um ClientHello do TLS.
 pub fn tls_sni(b: &[u8]) -> Option<String> {
+    let data = extension(b, 0)?;
+    // server_name: lista (2), tipo (1), tamanho (2), nome.
+    let n = u16::from_be_bytes([*data.get(3)?, *data.get(4)?]) as usize;
+    let name = data.get(5..5 + n)?;
+    std::str::from_utf8(name)
+        .ok()
+        .map(|s| s.to_ascii_lowercase())
+}
+
+/// Os protocolos que o ClientHello oferece (ALPN: `h2`, `http/1.1`), na
+/// ordem do cliente; vazio sem a extensão.
+pub fn tls_alpn(b: &[u8]) -> Vec<String> {
+    let Some(data) = extension(b, 16) else {
+        return Vec::new();
+    };
+    // Lista (2) e, em cada item, tamanho (1) e nome.
+    let mut out = Vec::new();
+    let mut p = 2;
+    while let Some(&n) = data.get(p) {
+        let Some(name) = data.get(p + 1..p + 1 + n as usize) else {
+            break;
+        };
+        out.push(String::from_utf8_lossy(name).into_owned());
+        p += 1 + n as usize;
+    }
+    out
+}
+
+/// Os dados de uma extensão do ClientHello.
+fn extension(b: &[u8], kind: u16) -> Option<&[u8]> {
     // Registro TLS: tipo 22 (handshake), versão, tamanho.
     if b.len() < 5 || b[0] != 22 {
         return None;
@@ -26,13 +56,8 @@ pub fn tls_sni(b: &[u8]) -> Option<String> {
         let et = u16::from_be_bytes([rec[p], rec[p + 1]]);
         let el = u16::from_be_bytes([rec[p + 2], rec[p + 3]]) as usize;
         let data = rec.get(p + 4..p + 4 + el)?;
-        if et == 0 {
-            // server_name: lista (2), tipo (1), tamanho (2), nome.
-            let n = u16::from_be_bytes([*data.get(3)?, *data.get(4)?]) as usize;
-            let name = data.get(5..5 + n)?;
-            return std::str::from_utf8(name)
-                .ok()
-                .map(|s| s.to_ascii_lowercase());
+        if et == kind {
+            return Some(data);
         }
         p += 4 + el;
     }
@@ -105,5 +130,35 @@ mod tests {
         );
         assert_eq!(http_host(b"\x16\x03\x01"), None);
         assert_eq!(http_host(b"GET / HTTP/1.1\r\n\r\n"), None);
+    }
+
+    /// Um ClientHello de verdade, do `rustls`, com o ALPN dado.
+    fn rustls_hello(alpn: &[&str]) -> Vec<u8> {
+        let mut cfg = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(rustls::RootCertStore::empty())
+        .with_no_client_auth();
+        cfg.alpn_protocols = alpn.iter().map(|a| a.as_bytes().to_vec()).collect();
+        let mut c = rustls::ClientConnection::new(
+            std::sync::Arc::new(cfg),
+            "api.exemplo.test".try_into().unwrap(),
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        c.write_tls(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn alpn_do_client_hello() {
+        let h = rustls_hello(&["h2", "http/1.1"]);
+        assert_eq!(tls_alpn(&h), vec!["h2", "http/1.1"]);
+        assert_eq!(tls_sni(&h).as_deref(), Some("api.exemplo.test"));
+        assert!(tls_alpn(&rustls_hello(&[])).is_empty());
+        assert!(tls_alpn(&client_hello("a.test")).is_empty());
+        assert!(tls_alpn(b"GET / HTTP/1.1\r\n").is_empty());
     }
 }

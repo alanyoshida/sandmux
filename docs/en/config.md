@@ -38,6 +38,7 @@ pass-env = ["OPENROUTER_API_KEY"]
 | `harness-asks` | true or false | (configuration only; see below) |
 | `window` | true, false or `"direct"` | `--window` / `--window-direct` / `--no-window` (see [window.md](window.md)) |
 | `portal` | true or false (default true) | `--portal` / `--no-portal` (see [window.md](window.md#desktop-portal)) |
+| `http2` | true or false (default true): HTTP/2 and gRPC on decrypted connections | — (see [network.md](network.md#tls-decryption)) |
 | `memory` | text: `"50%"`, `"16G"` or `"max"` | `--memory` (see [limits.md](limits.md)) |
 | `processes` | number or `"max"` | `--processes` |
 | `network` | `"aberta"`, `"inferencia"`, `"custom"` or `"sem-rede"` | `--network` (see [network.md](network.md)) |
@@ -100,7 +101,7 @@ The policy of each launch adds up layers, from the least to the most specific:
 5. project profile;
 6. `run` options.
 
-- **On and off switches, caps and network** (`repo`, `kvm`, `gpu`, `clipboard`, `portal`, `memory`, `processes`, `network`): the most specific layer that set the key wins. A `gpu = false` in global is undone by `gpu = true` in the project, and the project is undone by `--no-gpu` in `run`.
+- **On and off switches, caps and network** (`repo`, `kvm`, `gpu`, `clipboard`, `portal`, `http2`, `memory`, `processes`, `network`): the most specific layer that set the key wins. A `gpu = false` in global is undone by `gpu = true` in the project, and the project is undone by `--no-gpu` in `run`.
 - **Lists** (`ro`, `rw`, `pass-env`, `deny`, `allow`, `allow-off`, `catalog`, `catalog-off`, `decrypt`, `ssh-keys`, `file-deny`, `file-allow`, `secret-files`, `secret-files-off`, `mcp-deny`, `mcp-allow`, `db`, `ports`): the items of all layers add up; for a port that appears in two layers, the address from the most specific one applies. In the network, deny always wins ([network.md](network.md)). If the same path is in `ro` in one layer and in `rw` in another, the most specific one applies.
 - **Fixed baseline:** profiles only add or adjust these keys. The baseline items (covered `/etc` files, toolchains, caches, known credentials) cannot be turned off by a profile.
 

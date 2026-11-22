@@ -36,6 +36,7 @@ pass-env = ["OPENROUTER_API_KEY"]
 | `harness-asks` | true ou false | (só na configuração; veja abaixo) |
 | `window` | true, false ou `"direct"` | `--window` / `--window-direct` / `--no-window` (veja [window.md](window.md)) |
 | `portal` | true ou false (padrão true) | `--portal` / `--no-portal` (veja [window.md](window.md#portal-do-desktop)) |
+| `http2` | true ou false (padrão true): HTTP/2 e gRPC nas conexões decifradas | — (veja [network.md](network.md#decifração-do-tls)) |
 | `memory` | texto: `"50%"`, `"16G"` ou `"max"` | `--memory` (veja [limits.md](limits.md)) |
 | `processes` | número ou `"max"` | `--processes` |
 | `network` | `"aberta"`, `"inferencia"`, `"custom"` ou `"sem-rede"` | `--network` (veja [network.md](network.md)) |
@@ -98,7 +99,7 @@ A política de cada lançamento soma camadas, da menos para a mais específica:
 5. perfil do projeto;
 6. opções do `run`.
 
-- **Liga e desliga, tetos e rede** (`repo`, `kvm`, `gpu`, `clipboard`, `portal`, `memory`, `processes`, `network`): vence a camada mais específica que definiu a chave. Um `gpu = false` no global é desfeito por `gpu = true` no projeto, e o projeto é desfeito por `--no-gpu` no `run`.
+- **Liga e desliga, tetos e rede** (`repo`, `kvm`, `gpu`, `clipboard`, `portal`, `http2`, `memory`, `processes`, `network`): vence a camada mais específica que definiu a chave. Um `gpu = false` no global é desfeito por `gpu = true` no projeto, e o projeto é desfeito por `--no-gpu` no `run`.
 - **Listas** (`ro`, `rw`, `pass-env`, `deny`, `allow`, `allow-off`, `catalog`, `catalog-off`, `decrypt`, `ssh-keys`, `file-deny`, `file-allow`, `secret-files`, `secret-files-off`, `mcp-deny`, `mcp-allow`, `db`, `ports`): os itens de todas as camadas se somam; numa porta que aparece em duas camadas, vale o endereço da mais específica. Na rede, negar sempre vence ([network.md](network.md)). Se o mesmo caminho está em `ro` numa camada e em `rw` noutra, vale a mais específica.
 - **Baseline fixa:** os perfis só acrescentam ou ajustam essas chaves. Os itens da baseline (arquivos de `/etc` cobertos, toolchains, caches, credenciais conhecidas) não podem ser desligados por perfil.
 

@@ -35,7 +35,7 @@ pub fn generate_ca() -> Result<(String, String), String> {
 pub struct Ca {
     cert: rcgen::Certificate,
     key: KeyPair,
-    cache: Mutex<HashMap<String, Arc<rustls::ServerConfig>>>,
+    cache: Mutex<HashMap<(String, bool), Arc<rustls::ServerConfig>>>,
 }
 
 impl Ca {
@@ -55,12 +55,21 @@ impl Ca {
     /// Configuração do servidor TLS para `host`: certificado do domínio
     /// assinado pela CA, só HTTP/1.1.
     pub fn server_config(&self, host: &str) -> Result<Arc<rustls::ServerConfig>, String> {
+        self.server_config_alpn(host, false)
+    }
+
+    /// Como [`Ca::server_config`], oferecendo também `h2` quando `h2`.
+    pub fn server_config_alpn(
+        &self,
+        host: &str,
+        h2: bool,
+    ) -> Result<Arc<rustls::ServerConfig>, String> {
         let host = host.to_ascii_lowercase();
         if let Some(c) = self
             .cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .get(&host)
+            .get(&(host.clone(), h2))
         {
             return Ok(c.clone());
         }
@@ -88,13 +97,13 @@ impl Ca {
             .with_no_client_auth()
             .with_single_cert(chain, pk)
             .map_err(|e| e.to_string())?;
-        cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+        cfg.alpn_protocols = alpn(h2);
         let cfg = Arc::new(cfg);
         let mut g = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         if g.len() > 1000 {
             g.clear();
         }
-        g.insert(host, cfg.clone());
+        g.insert((host, h2), cfg.clone());
         Ok(cfg)
     }
 }
@@ -114,21 +123,43 @@ fn roots(extra_pem: Option<&str>) -> rustls::RootCertStore {
     r
 }
 
+/// O ALPN oferecido: `h2` antes de `http/1.1` quando `h2`.
+pub fn alpn(h2: bool) -> Vec<Vec<u8>> {
+    if h2 {
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+    } else {
+        vec![b"http/1.1".to_vec()]
+    }
+}
+
+/// O protocolo que uma conexão TLS negociou é o HTTP/2.
+pub fn negotiated_h2(alpn: Option<&[u8]>) -> bool {
+    alpn == Some(b"h2".as_slice())
+}
+
 /// Configuração do cliente TLS até os destinos, só HTTP/1.1.
 pub fn client_config(extra_pem: Option<&str>) -> Arc<rustls::ClientConfig> {
+    client_config_alpn(extra_pem, false)
+}
+
+/// Configuração do cliente TLS até os destinos, oferecendo também `h2`
+/// quando `h2`.
+pub fn client_config_alpn(extra_pem: Option<&str>, h2: bool) -> Arc<rustls::ClientConfig> {
     static PLAIN: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    static PLAIN_H2: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
     let build = |extra: Option<&str>| {
         let mut c = rustls::ClientConfig::builder_with_provider(provider())
             .with_safe_default_protocol_versions()
             .expect("versões do TLS")
             .with_root_certificates(roots(extra))
             .with_no_client_auth();
-        c.alpn_protocols = vec![b"http/1.1".to_vec()];
+        c.alpn_protocols = alpn(h2);
         Arc::new(c)
     };
-    match extra_pem {
-        None => PLAIN.get_or_init(|| build(None)).clone(),
-        Some(_) => build(extra_pem),
+    match (extra_pem, h2) {
+        (None, false) => PLAIN.get_or_init(|| build(None)).clone(),
+        (None, true) => PLAIN_H2.get_or_init(|| build(None)).clone(),
+        (Some(_), _) => build(extra_pem),
     }
 }
 
@@ -138,6 +169,7 @@ pub fn client_config(extra_pem: Option<&str>) -> Arc<rustls::ClientConfig> {
 pub fn kube_client_config(
     t: &sandmux_proto::msg::KubeTarget,
     extra_pem: Option<&str>,
+    h2: bool,
 ) -> Result<Arc<rustls::ClientConfig>, String> {
     let builder = rustls::ClientConfig::builder_with_provider(provider())
         .with_safe_default_protocol_versions()
@@ -180,7 +212,7 @@ pub fn kube_client_config(
             .with_client_auth_cert(chain, key)
             .map_err(|e| e.to_string())?
     };
-    c.alpn_protocols = vec![b"http/1.1".to_vec()];
+    c.alpn_protocols = alpn(h2);
     Ok(Arc::new(c))
 }
 

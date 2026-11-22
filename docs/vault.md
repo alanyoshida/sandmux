@@ -236,7 +236,7 @@ Com o cofre ausente ou trancado no `run`, nada é guardado: o `run` avisa, e num
 
 ## Limites
 
-- A troca é só nos cabeçalhos dos pedidos HTTP/1.1 decifrados, inclusive dentro do `Authorization: Basic`. Provedores que pedem a chave no corpo, ou programas que fixam o certificado do servidor, não são atendidos.
+- A troca é só nos cabeçalhos dos pedidos decifrados (HTTP/1.1 ou HTTP/2), inclusive dentro do `Authorization: Basic`. Provedores que pedem a chave no corpo, ou programas que fixam o certificado do servidor, não são atendidos.
 - O `--pass-env` de uma variável sem segredo no cofre continua pondo o valor real dentro do sandbox.
 - Um processo do mesmo usuário, fora do sandbox, com privilégio para ler a memória de outros processos (como um depurador com `CAP_SYS_PTRACE`), alcança o cofre aberto. A ameaça alvo do sandmux é o agente dentro do sandbox.
 - O keyring do sistema fica para depois da v1.

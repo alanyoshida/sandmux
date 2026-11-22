@@ -80,11 +80,26 @@ pub struct Config {
     pub sock_diag: Option<std::os::fd::OwnedFd>,
 }
 
+/// A CA do lançamento e os clientes TLS até os destinos: só HTTP/1.1, e
+/// também com `h2`.
+struct Mitm {
+    ca: Arc<tls::Ca>,
+    h1: Arc<rustls::ClientConfig>,
+    h2: Arc<rustls::ClientConfig>,
+}
+
+impl State {
+    /// Oferecer `h2` ao destino: o cliente o oferece, e a política deixa.
+    fn offer_h2(&self, first: &[u8]) -> bool {
+        self.policy.get().http2 && sniff::tls_alpn(first).iter().any(|a| a == "h2")
+    }
+}
+
 struct State {
     aliases: Vec<(SocketAddr, String)>,
     log: Arc<log::Log>,
     /// CA do lançamento e o cliente TLS dos destinos, para decifrar.
-    mitm: Option<(Arc<tls::Ca>, Arc<rustls::ClientConfig>)>,
+    mitm: Option<Mitm>,
     /// A CA adicional dos destinos (`SANDMUX_UPSTREAM_CA`), para os API
     /// servers sem CA própria.
     upstream_ca: Option<String>,
@@ -282,12 +297,19 @@ async fn tcp(mut s: ipstack::IpStackTcpStream, st: Arc<State>) {
         }
     }
     // TLS para um domínio da lista de decifração: o proxy do `mitm`.
-    if let (Some(name), Some((ca, client))) = (sniff::tls_sni(&first), st.mitm.as_ref())
+    if let (Some(name), Some(m)) = (sniff::tls_sni(&first), st.mitm.as_ref())
         && !st.aliases.iter().any(|(a, _)| *a == dst)
         && st.policy.get().decrypts(&name)
     {
         let ip = dst.ip().to_string();
-        let up = match mitm::connect_upstream(target(dst), &name, client.clone()).await {
+        // O protocolo segue o cliente: `h2` ao destino só quando o sandbox o
+        // oferece, e ao sandbox só quando o destino o negociou.
+        let client = if st.offer_h2(&first) {
+            m.h2.clone()
+        } else {
+            m.h1.clone()
+        };
+        let up = match mitm::connect_upstream(target(dst), &name, client).await {
             Ok(u) => u,
             Err(e) => {
                 let why = if e.kind() == std::io::ErrorKind::InvalidData {
@@ -309,7 +331,8 @@ async fn tcp(mut s: ipstack::IpStackTcpStream, st: Arc<State>) {
                 return;
             }
         };
-        let Ok(server) = ca.server_config(&name) else {
+        let up_h2 = tls::negotiated_h2(up.get_ref().1.alpn_protocol());
+        let Ok(server) = m.ca.server_config_alpn(&name, up_h2) else {
             close(&mut s).await;
             return;
         };
@@ -440,7 +463,7 @@ async fn kube_tcp(
     port: u16,
 ) {
     let name = sniff::tls_sni(&first).filter(|n| sandmux_spec::net::kube_label(n).is_some());
-    let (Some(name), Some((ca, _))) = (name, st.mitm.as_ref()) else {
+    let (Some(name), Some(m)) = (name, st.mitm.as_ref()) else {
         st.log.write(
             "tcp",
             log::NO_DOMAIN,
@@ -457,6 +480,8 @@ async fn kube_tcp(
         close(&mut s).await;
         return;
     };
+    let ca = m.ca.clone();
+    let offer_h2 = st.offer_h2(&first);
     let Ok(server) = ca.server_config(&name) else {
         close(&mut s).await;
         return;
@@ -511,7 +536,7 @@ async fn kube_tcp(
         }
         Some((t, k)) => {
             let up = async {
-                let client = tls::kube_client_config(&t, st.upstream_ca.as_deref())
+                let client = tls::kube_client_config(&t, st.upstream_ca.as_deref(), offer_h2)
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
                 let addr = tokio::net::lookup_host((k.host.as_str(), k.port))
                     .await?
@@ -523,6 +548,12 @@ async fn kube_tcp(
             };
             match up.await {
                 Ok(up) => {
+                    let up_h2 = tls::negotiated_h2(up.get_ref().1.alpn_protocol());
+                    let server = if up_h2 {
+                        ca.server_config_alpn(&name, true).unwrap_or(server)
+                    } else {
+                        server
+                    };
                     tokio::select! {
                         _ = mitm::serve(guest, server, up, ctx) => {}
                         _ = stopped(st.stop.clone()) => {}
@@ -878,10 +909,11 @@ async fn run(
         harness: cfg.harness.clone(),
         mitm: cfg.tls.as_ref().and_then(|t| {
             let ca = tls::Ca::from_pem(&t.ca_cert_pem, &t.ca_key_pem).ok()?;
-            Some((
-                Arc::new(ca),
-                tls::client_config(t.upstream_ca_pem.as_deref()),
-            ))
+            Some(Mitm {
+                ca: Arc::new(ca),
+                h1: tls::client_config_alpn(t.upstream_ca_pem.as_deref(), false),
+                h2: tls::client_config_alpn(t.upstream_ca_pem.as_deref(), true),
+            })
         }),
         upstream_ca: cfg.tls.as_ref().and_then(|t| t.upstream_ca_pem.clone()),
         names: policy::Names::default(),
@@ -1025,6 +1057,7 @@ mod tests {
             ssh: Vec::new(),
             ports: Vec::new(),
             host_ports: Vec::new(),
+            http2: true,
         };
         let (sni, names) = conn_names(&aliases, mirror, get, Vec::new);
         assert_eq!(

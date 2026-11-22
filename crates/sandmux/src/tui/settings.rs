@@ -459,6 +459,17 @@ pub const ITEMS: &[Item] = &[
         ]
     ),
     item!(
+        4,
+        "http2",
+        ["HTTP/2 decifrado", "Decrypted HTTP/2"],
+        Kind::Toggle,
+        At::Layer,
+        [
+            "HTTP/2 e gRPC nas conexões decifradas, quando o cliente e o destino falam h2. Desligado, o gateway fala só HTTP/1.1 nas conexões seguintes.",
+            "HTTP/2 and gRPC on decrypted connections, when the client and the destination speak h2. Off, the gateway speaks only HTTP/1.1 on the following connections."
+        ]
+    ),
+    item!(
         5,
         "file-deny",
         ["Arquivos negados", "Denied files"],
@@ -595,7 +606,7 @@ pub fn is_model_item(key: &str) -> bool {
 
 /// Valor padrão de uma chave de liga e desliga.
 pub fn default_bool(key: &str) -> bool {
-    matches!(key, "gpu" | "panel" | "notify" | "portal")
+    matches!(key, "gpu" | "panel" | "notify" | "portal" | "http2")
 }
 
 /// De onde vem o valor mostrado.
@@ -2474,6 +2485,10 @@ mod tests {
                 "{k}"
             );
         }
+        // O HTTP/2 do gateway fica na seção de rede, ligado por padrão.
+        let h = ITEMS.iter().find(|i| i.key == "http2").unwrap();
+        assert!(items_of(4).iter().any(|&i| ITEMS[i].key == "http2"));
+        assert!(matches!(h.kind, Kind::Toggle) && default_bool("http2"));
     }
 
     #[test]

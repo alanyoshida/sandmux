@@ -191,7 +191,8 @@ O resto passa cifrado de ponta a ponta. A lista muda na hora, como as outras reg
 
 - **CA do lançamento:** cada lançamento gera uma CA própria. A chave fica só na memória e no memfd da especificação, nunca em disco, e um sandbox não confia na CA de outro.
 - **Confiança no sandbox:** o pacote de CAs do sistema (`/etc/ssl/certs/ca-certificates.crt` no Debian e no Ubuntu) é coberto por um com as CAs do sistema mais a do lançamento. `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE` (o `gcloud`) e `AWS_CA_BUNDLE` (o `aws`) apontam para ele.
-- **No gateway:** a conexão do sandbox recebe um certificado do domínio assinado pela CA do lançamento, só com HTTP/1.1, e o gateway abre TLS até o destino real, verificando o certificado dele pelas CAs do sistema. Um certificado inválido do destino bloqueia a conexão, com o motivo `certificado inválido` no registro.
+- **No gateway:** a conexão do sandbox recebe um certificado do domínio assinado pela CA do lançamento, e o gateway abre TLS até o destino real, verificando o certificado dele pelas CAs do sistema. Um certificado inválido do destino bloqueia a conexão, com o motivo `certificado inválido` no registro.
+- **HTTP/2 e gRPC:** o protocolo segue o cliente. O gateway oferece ao destino o que o ClientHello do sandbox oferece (o ALPN `h2` e `http/1.1`), e só oferece `h2` ao sandbox quando o destino o negociou. Um cliente que só oferece `http/1.1` (um WebSocket, o `kubectl exec`) fica em HTTP/1.1 nas duas pontas, e um destino sem `h2` recebe HTTP/1.1. Numa conexão HTTP/2, cada pedido passa pela mesma troca de chaves e pelo mesmo registro, os pedidos andam em paralelo, e os corpos em fluxo e os trailers do gRPC (`grpc-status`) passam sem mudar: as bibliotecas gRPC funcionam num domínio decifrado. `http2 = false` na configuração ([config.md](config.md)) volta ao HTTP/1.1 nas conexões seguintes.
 - **Registro:** cada pedido decifrado vira uma linha `https` com o método, o caminho sem a query e o status. Os cabeçalhos e o corpo nunca são gravados. O `sandmux net` e o painel da TUI mostram `GET /v1/models 200`.
 - **Certificado:** o certificado do domínio leva o Authority Key Identifier e o uso `serverAuth`, que o Python 3.13+ exige na verificação estrita (`VERIFY_X509_STRICT`).
 - **WebSocket:** um upgrade para WebSocket passa sem o cabeçalho `Sec-WebSocket-Extensions`, para que as mensagens não venham comprimidas, e as mensagens seguem nos dois sentidos até uma ponta fechar. Nas mensagens de texto do sandbox ao dono de um segredo, o falso vira o real ([hermes.md](hermes.md)). A conexão vira uma linha `https` com o status `101`, gravada no fim, com os bytes dos dois sentidos.
@@ -298,7 +299,7 @@ Uma pilha TCP/IP em espaço de usuário é mais lenta que a do kernel, como no `
 
 - **CDN compartilhada no modo aberta.** Um destino da denylist atrás da mesma CDN de um site liberado só é pego pelo SNI ou pelo `Host`. Quem precisa de garantia usa o modo `custom`.
 - **Conexões já abertas** não são cortadas por uma regra nova; a regra vale nas conexões seguintes.
-- **Decifração só com HTTP/1.1:** nos domínios decifrados, o gateway oferece só HTTP/1.1; programas que fixam o certificado do servidor falham nesses domínios.
+- **Certificado fixado:** programas que fixam o certificado do servidor falham nos domínios decifrados. O HTTP/3 (QUIC) segue bloqueado, e os clientes caem para o TCP.
 - **Conexões longas** só aparecem no registro quando terminam.
 - **Processo sem o auxiliar:** um processo que fecha a conexão sem esperar resposta pode terminar antes da busca pelo `/proc`, e a linha fica sem processo.
 - **Sem IPv6 e sem ICMP** dentro do sandbox.

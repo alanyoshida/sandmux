@@ -554,6 +554,21 @@ fn documentacao_das_credenciais_de_cloud_acompanha_o_codigo() {
     }
     let en = std::fs::read_to_string(format!("{root}/docs/en/cloud.md")).unwrap();
     assert!(en.contains("sandmux vault add-cloud aws") && en.contains("SigV4a"));
+    // O HTTP/2 do gateway (change 96).
+    let net = std::fs::read_to_string(format!("{root}/docs/network.md")).unwrap();
+    for c in [
+        "`h2`",
+        "`http/1.1`",
+        "grpc-status",
+        "http2 = false",
+        "ClientHello",
+    ] {
+        assert!(net.contains(c), "docs/network.md não cita {c}");
+    }
+    assert!(sandmux_policy::config::BOOL_KEYS.contains(&"http2"));
+    assert!(!doc.contains("o gateway decifra só HTTP/1.1"));
+    let en_net = std::fs::read_to_string(format!("{root}/docs/en/network.md")).unwrap();
+    assert!(en_net.contains("grpc-status") && en_net.contains("http2 = false"));
     assert!(en.contains("sandmux vault add-cloud kubernetes") && en.contains("10 minutes"));
 }
 
