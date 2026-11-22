@@ -770,8 +770,8 @@ fn sandbox_group(r: &support::SupportReport, host: Option<&Host>) -> Group {
             env!("CARGO_PKG_VERSION")
         );
         let hint = tr!(
-            "  O auxiliar root em execução ainda é o da versão anterior: ele só troca ao\n  ser reiniciado. O que depende dele pode faltar ou sair incompleto (a árvore\n  de processos, por exemplo, sai sem os pais). Rode `sandmux setup`, que o\n  reinicia com sudo.",
-            "  The running root helper is still the previous version's: it only changes\n  when restarted. What depends on it may be missing or incomplete (the\n  process tree, for example, comes without parents). Run `sandmux setup`,\n  which restarts it with sudo."
+            "  O auxiliar root em execução ainda é o da versão anterior: ele só troca ao\n  ser reiniciado, e atualizar os binários não basta. O que depende da versão\n  nova pode faltar ou sair incompleto. Rode `sandmux setup`, que o reinicia\n  com sudo, ou:\n\n  sudo systemctl restart sandmux-helper.service",
+            "  The running root helper is still the previous version's: it only changes\n  when restarted, and updating the binaries is not enough. What depends on\n  the new version may be missing or incomplete. Run `sandmux setup`, which\n  restarts it with sudo, or:\n\n  sudo systemctl restart sandmux-helper.service"
         );
         let mark = tr!("aviso", "warn");
         checks.push(

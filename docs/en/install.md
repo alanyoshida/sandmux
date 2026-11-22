@@ -34,7 +34,8 @@ The script:
    - **With privilege** (or running as root): installs into `/usr/local/bin`.
    - **Without privilege** (`sudo` refused, missing or `--no-sudo`): installs into `~/.local/bin` and warns when that folder is not in `PATH`.
 2. Downloads `sandmux-x86_64-linux.tar.gz` and its `.sha256` from the release and checks the sum. A wrong sum stops everything before installing.
-3. Runs `sandmux setup` as your user (see below). When `sudo` was refused, setup runs with `--no-sudo`.
+3. With privilege and the [root helper](helper.md) already installed, restarts its service, so the running helper becomes the new one. Without this, on an update, the old helper would stay up.
+4. Runs `sandmux setup` as your user (see below). When `sudo` was refused, setup runs with `--no-sudo`.
 
 | Option | What it does |
 |---|---|
@@ -60,6 +61,8 @@ It is the configuration step for every channel: script, packages, Homebrew and `
 
    With `--no-sudo`, without `sudo` or without a terminal, it shows the two commands to run as root. The profile applies to one path: if the binaries move, run `sandmux setup` again.
 2. **Root helper.** When `sandmux-helper` sits next to `sandmux`, in a root-owned folder, it writes the `sandmux-helper.socket` and `sandmux-helper.service` units to `/etc/systemd/system` and enables the socket, with the same `sudo`. This is what turns on the private Docker's eBPF confinement ([helper.md](helper.md)). For a binary the user can change, as in `~/.local/bin`, it refuses and says why. With `--no-sudo`, it shows the commands.
+
+   With the units already installed and the running helper older than sandmux, setup restarts its service (`systemctl try-restart`), with the same `sudo`, after asking. With `--no-sudo`, without `sudo` or without a terminal, it shows the command `sudo systemctl restart sandmux-helper.service`.
 3. **Daemon.** Installs and enables the systemd user unit `sandmuxd.service`, which starts the daemon at login ([sessions.md](sessions.md)). To have it start at boot, without a login, run `sandmux daemon boot on` ([sessions.md](sessions.md#start-at-boot)). `--no-daemon` skips this step, and as root it never runs, because the daemon is per user.
 4. **Diagnostics.** Ends with `sandmux doctor`.
 

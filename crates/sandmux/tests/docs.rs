@@ -830,6 +830,7 @@ fn auxiliar_root_documentado() {
         "lsm=",
         "sudo systemctl disable --now sandmux-helper.socket",
         "[aviso] versão do auxiliar root",
+        "sudo systemctl restart sandmux-helper.service",
     ] {
         assert!(doc.contains(c), "docs/helper.md não cita {c}");
     }
