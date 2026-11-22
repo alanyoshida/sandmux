@@ -7,6 +7,7 @@
 //! à thread que cria o filho); uma espera os sinais de término. O estado
 //! fica sob um único mutex, nunca segurado durante I/O bloqueante.
 
+pub mod cloud;
 mod conn;
 mod db;
 mod docker;
@@ -69,6 +70,8 @@ pub struct Shared {
     pub keyring_note: Mutex<Option<String>>,
     /// Notificações do desktop.
     pub notify: notify::Notifier,
+    /// O real das identidades de cloud, só na memória.
+    pub cloud: cloud::Cache,
     /// Histórico de tela em disco.
     pub disk_history: history::History,
 }
@@ -478,6 +481,7 @@ fn run(history: usize) -> Result<()> {
         keyring_last: Mutex::new(None),
         keyring_note: Mutex::new(None),
         notify: notify::Notifier::default(),
+        cloud: cloud::Cache::default(),
         disk_history: history::History::default(),
     });
     eprintln!(

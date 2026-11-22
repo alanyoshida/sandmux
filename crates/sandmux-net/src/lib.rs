@@ -305,11 +305,12 @@ async fn tcp(mut s: ipstack::IpStackTcpStream, st: Arc<State>) {
         // sido trancado ou mudado desde a última conexão).
         let injections = match st.vault.clone() {
             Some(access) => {
-                let (tag, harness) = (st.tag.clone(), st.harness.clone());
-                let all =
-                    tokio::task::spawn_blocking(move || inject::fetch(&access, &tag, &harness))
-                        .await
-                        .unwrap_or_default();
+                let (tag, harness, host) = (st.tag.clone(), st.harness.clone(), name.clone());
+                let all = tokio::task::spawn_blocking(move || {
+                    inject::fetch(&access, &tag, &harness, &host)
+                })
+                .await
+                .unwrap_or_default();
                 inject::for_host(all, &name)
             }
             None => Vec::new(),
@@ -324,6 +325,7 @@ async fn tcp(mut s: ipstack::IpStackTcpStream, st: Arc<State>) {
             vault: st.vault.clone(),
             tag: st.tag.clone(),
             harness: st.harness.clone(),
+            refreshed: Default::default(),
         });
         let guest = mitm::Prefixed::new(first, s);
         let (read, written) = (guest.read.clone(), guest.written.clone());

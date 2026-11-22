@@ -18,6 +18,17 @@ pub struct VaultState {
     open: Option<Unlocked>,
 }
 
+/// Uma identidade de cloud do cofre aberto.
+#[derive(Clone)]
+pub struct CloudIdentity {
+    /// `gcp:<nome>`.
+    pub name: String,
+    /// O falso do token de acesso.
+    pub fake: String,
+    pub domains: Vec<String>,
+    pub data: sandmux_proto::msg::CloudAdd,
+}
+
 fn err(e: VaultError) -> String {
     e.to_string()
 }
@@ -345,6 +356,102 @@ impl VaultState {
         self.save()
     }
 
+    /// Guarda uma identidade de cloud (`gcp:<nome>`), com os falsos novos.
+    /// A primeira do provedor, ou uma com `default`, vira a padrão.
+    pub fn add_cloud(&mut self, mut c: sandmux_proto::msg::CloudAdd) -> Result<String, String> {
+        if c.info.provider != "gcp" {
+            return Err(trf!(
+                "provedor de cloud desconhecido: {}; use gcp",
+                "unknown cloud provider: {}; use gcp",
+                c.info.provider
+            ));
+        }
+        if !crate::cloud::valid_name(&c.name) {
+            return Err(trf!(
+                "nome de identidade inválido: {:?}; use letras, números, - e _",
+                "invalid identity name: {:?}; use letters, digits, - and _",
+                c.name
+            ));
+        }
+        match c.info.source.as_str() {
+            "host" if !c.info.configuration.is_empty() => {}
+            "adc" => {
+                crate::cloud::check_adc(&c.secret)?;
+            }
+            "key" => {
+                crate::cloud::check_key(&c.secret)?;
+            }
+            _ => {
+                return Err(tr!(
+                    "use exatamente uma fonte: --configuration, --copy-adc ou --copy-key",
+                    "use exactly one source: --configuration, --copy-adc or --copy-key"
+                )
+                .into());
+            }
+        }
+        let name = format!("{}:{}", c.info.provider, c.name);
+        let o = self.opened()?;
+        if o.contents.secrets.iter().any(|s| s.name == name) {
+            return Err(trf!(
+                "o cofre já tem {name}; apague antes com `sandmux vault remove {name}`",
+                "the vault already has {name}; remove it first with `sandmux vault remove {name}`"
+            ));
+        }
+        let others: Vec<&mut Secret> = o
+            .contents
+            .secrets
+            .iter_mut()
+            .filter(|s| s.is_cloud() && s.name.starts_with("gcp:"))
+            .collect();
+        let first = others.is_empty();
+        c.info.default = c.info.default || first;
+        if c.info.default {
+            for s in others {
+                if let Ok(mut x) = serde_json::from_str::<sandmux_proto::msg::CloudAdd>(&s.value)
+                    && x.info.default
+                {
+                    x.info.default = false;
+                    s.value = serde_json::to_string(&x).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        c.info.refresh_fake = sandmux_vault::new_fake_with(sandmux_spec::net::GCP_REFRESH_PREFIX);
+        let value = serde_json::to_string(&c).map_err(|e| e.to_string())?;
+        o.put(Secret {
+            name: name.clone(),
+            value,
+            domains: vec![sandmux_spec::net::gcp_domain()],
+            fake: Some(sandmux_vault::new_fake_with(
+                sandmux_spec::net::GCP_ACCESS_PREFIX,
+            )),
+            tools: Vec::new(),
+            kind: sandmux_vault::KIND_CLOUD.into(),
+        });
+        self.save()?;
+        Ok(name)
+    }
+
+    /// As identidades de cloud do cofre aberto: o nome, o falso de acesso,
+    /// os domínios e os dados (com a credencial de uma cópia).
+    pub fn cloud_identities(&self) -> Vec<CloudIdentity> {
+        let Some(o) = self.open.as_ref() else {
+            return Vec::new();
+        };
+        o.contents
+            .secrets
+            .iter()
+            .filter(|s| s.is_cloud())
+            .filter_map(|s| {
+                Some(CloudIdentity {
+                    name: s.name.clone(),
+                    fake: s.fake.clone()?,
+                    domains: s.domains.clone(),
+                    data: serde_json::from_str(&s.value).ok()?,
+                })
+            })
+            .collect()
+    }
+
     /// As conexões de banco, sem as senhas.
     pub fn db_list(&mut self) -> Result<Vec<sandmux_proto::msg::DbEntry>, String> {
         Ok(self
@@ -380,11 +487,32 @@ impl VaultState {
     }
 
     pub fn remove(&mut self, name: &str) -> Result<(), String> {
-        if !self.opened()?.remove(name) {
+        let o = self.opened()?;
+        let was_default = o.contents.secrets.iter().any(|s| {
+            s.name == name
+                && s.is_cloud()
+                && serde_json::from_str::<sandmux_proto::msg::CloudAdd>(&s.value)
+                    .is_ok_and(|c| c.info.default)
+        });
+        if !o.remove(name) {
             return Err(trf!(
                 "não existe o segredo {name:?} no cofre",
                 "secret {name:?} is not in the vault"
             ));
+        }
+        // Sem a padrão, a primeira identidade do mesmo provedor vira a padrão.
+        if was_default {
+            let provider = name.split(':').next().unwrap_or_default().to_string();
+            if let Some(s) = o
+                .contents
+                .secrets
+                .iter_mut()
+                .find(|s| s.is_cloud() && s.name.starts_with(&format!("{provider}:")))
+                && let Ok(mut c) = serde_json::from_str::<sandmux_proto::msg::CloudAdd>(&s.value)
+            {
+                c.info.default = true;
+                s.value = serde_json::to_string(&c).map_err(|e| e.to_string())?;
+            }
         }
         self.save()
     }
@@ -408,6 +536,12 @@ impl VaultState {
             return Err(trf!(
                 "{name} é uma chave SSH: grave a chave nova com `sandmux vault add-ssh`",
                 "{name} is an SSH key: store the new key with `sandmux vault add-ssh`"
+            ));
+        }
+        if s.is_cloud() {
+            return Err(trf!(
+                "{name} é uma identidade de cloud: apague com `sandmux vault remove {name}` e guarde de novo com `sandmux vault add-cloud`",
+                "{name} is a cloud identity: remove it with `sandmux vault remove {name}` and store it again with `sandmux vault add-cloud`"
             ));
         }
         if !s.is_token() {
@@ -455,6 +589,11 @@ impl VaultState {
                     return Err(trf!("domínio inválido {d}: {e}", "invalid domain {d}: {e}"));
                 }
             }
+        } else if s.is_cloud() {
+            return Err(trf!(
+                "os domínios de {name} são os do provedor de cloud e não mudam",
+                "the domains of {name} are the cloud provider's and do not change"
+            ));
         } else {
             return Err(tr!(
                 "use `sandmux db` para as conexões de banco",
@@ -526,6 +665,11 @@ impl VaultState {
                 } else {
                     String::new()
                 },
+                cloud: s
+                    .is_cloud()
+                    .then(|| serde_json::from_str::<sandmux_proto::msg::CloudAdd>(&s.value).ok())
+                    .flatten()
+                    .map(|c| c.info),
             })
             .collect())
     }
@@ -546,6 +690,7 @@ impl VaultState {
                     domains: s.domains.clone(),
                     fake: s.fake.clone()?,
                     value: s.value.clone(),
+                    ..Default::default()
                 })
             })
             .collect()
@@ -631,7 +776,7 @@ impl VaultState {
                 o.contents
                     .secrets
                     .iter()
-                    .filter(|s| s.is_token() && keep(&s.name))
+                    .filter(|s| (s.is_token() || s.is_cloud()) && keep(&s.name))
                     .flat_map(|s| s.domains.iter().cloned())
                     .collect()
             })
@@ -688,6 +833,83 @@ mod tests {
             .success();
         assert!(ok);
         std::fs::read_to_string(f).unwrap()
+    }
+
+    fn gcp(name: &str, source: &str, secret: &str, default: bool) -> sandmux_proto::msg::CloudAdd {
+        sandmux_proto::msg::CloudAdd {
+            name: name.into(),
+            info: sandmux_proto::msg::CloudInfo {
+                provider: "gcp".into(),
+                source: source.into(),
+                configuration: if source == "host" {
+                    name.into()
+                } else {
+                    String::new()
+                },
+                account: format!("{name}@exemplo.com"),
+                default,
+                ..Default::default()
+            },
+            secret: secret.into(),
+        }
+    }
+
+    fn default_of(v: &mut VaultState) -> Vec<String> {
+        v.list()
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.cloud.as_ref().is_some_and(|c| c.default))
+            .map(|e| e.name)
+            .collect()
+    }
+
+    #[test]
+    fn identidades_de_gcp_no_cofre() {
+        let d = tempfile::tempdir().unwrap();
+        let mut v = VaultState::new(d.path());
+        v.init("s").unwrap();
+        assert_eq!(
+            v.add_cloud(gcp("trabalho", "host", "", false)).unwrap(),
+            "gcp:trabalho"
+        );
+        let adc = r#"{"type":"authorized_user","client_id":"c","client_secret":"s","refresh_token":"1//REAL-R"}"#;
+        v.add_cloud(gcp("pessoal", "adc", adc, false)).unwrap();
+        // A primeira é a padrão; `default` passa a padrão para a nova.
+        assert_eq!(default_of(&mut v), vec!["gcp:trabalho".to_string()]);
+        v.add_cloud(gcp("deploy", "adc", adc, true)).unwrap();
+        assert_eq!(default_of(&mut v), vec!["gcp:deploy".to_string()]);
+        // Repetir o nome, um nome inválido, uma fonte faltando ou errada.
+        assert!(v.add_cloud(gcp("trabalho", "host", "", false)).is_err());
+        assert!(v.add_cloud(gcp("a b", "host", "", false)).is_err());
+        assert!(v.add_cloud(gcp("x", "adc", "{}", false)).is_err());
+        assert!(v.add_cloud(gcp("y", "key", adc, false)).is_err());
+        let mut nada = gcp("z", "host", "", false);
+        nada.info.configuration.clear();
+        assert!(v.add_cloud(nada).is_err());
+        // A lista mostra os dados públicos e os falsos, nunca o refresh real.
+        let list = v.list().unwrap();
+        let e = list.iter().find(|e| e.name == "gcp:pessoal").unwrap();
+        assert_eq!(e.kind, "cloud");
+        assert!(e.fake.as_deref().unwrap().starts_with("ya29.sandmux-fake-"));
+        let c = e.cloud.as_ref().unwrap();
+        assert!(c.refresh_fake.starts_with("1//sandmux-fake-"));
+        assert_eq!(e.domains, vec!["*.googleapis.com".to_string()]);
+        assert!(!format!("{list:?}").contains("REAL-R"));
+        // Fora dos tokens comuns, mas o domínio entra na decifração.
+        assert!(v.injections().is_empty());
+        assert!(
+            v.domains_for("shell")
+                .iter()
+                .any(|d| d == "*.googleapis.com")
+        );
+        assert!(v.set_value("gcp:pessoal", "x".into()).is_err());
+        assert!(v.set_domains("gcp:pessoal", vec!["a.com".into()]).is_err());
+        // Sem a padrão, a primeira que resta vira a padrão.
+        v.remove("gcp:deploy").unwrap();
+        assert_eq!(default_of(&mut v), vec!["gcp:trabalho".to_string()]);
+        assert_eq!(v.cloud_identities().len(), 2);
+        v.lock();
+        assert!(v.cloud_identities().is_empty());
     }
 
     #[test]

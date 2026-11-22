@@ -419,6 +419,52 @@ pub struct VaultEntry {
     /// Impressão digital `SHA256:...` de uma chave SSH.
     #[serde(default)]
     pub fingerprint: String,
+    /// Os dados públicos de uma identidade de cloud (protocolo 46).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud: Option<CloudInfo>,
+}
+
+/// O que se pode mostrar de uma identidade de cloud: nunca um token ou uma
+/// chave.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudInfo {
+    /// `gcp`.
+    pub provider: String,
+    /// `host` (referência a uma configuração), `adc` ou `key` (cópias).
+    pub source: String,
+    /// A configuração do host, numa referência.
+    #[serde(default)]
+    pub configuration: String,
+    #[serde(default)]
+    pub account: String,
+    #[serde(default)]
+    pub project: String,
+    /// A identidade padrão do provedor.
+    #[serde(default)]
+    pub default: bool,
+    /// O refresh token falso.
+    #[serde(default)]
+    pub refresh_fake: String,
+}
+
+/// Uma identidade de cloud nova, do cliente ao daemon (protocolo 46). Numa
+/// cópia, `secret` leva o JSON do ADC ou da chave da conta de serviço.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudAdd {
+    /// O nome sem o prefixo do provedor.
+    pub name: String,
+    pub info: CloudInfo,
+    #[serde(default)]
+    pub secret: String,
+}
+
+impl std::fmt::Debug for CloudAdd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CloudAdd")
+            .field("name", &self.name)
+            .field("info", &self.info)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Uma conexão de banco, com a senha (só entre o cliente e o daemon).
@@ -466,12 +512,27 @@ pub struct McpEntry {
 }
 
 /// Um segredo com o valor real, para o gateway trocar no tráfego.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Injection {
     pub name: String,
     pub domains: Vec<String>,
     pub fake: String,
     pub value: String,
+    /// Numa identidade de cloud (protocolo 46): o refresh token falso, que o
+    /// gateway responde sozinho.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub refresh_fake: String,
+    /// Até quando o real vale (segundos desde 1970); 0 sem prazo.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub expires: u64,
+    /// Por que o real de uma identidade de cloud falta (então `value` vem
+    /// vazio, e nada é trocado).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl std::fmt::Debug for Injection {
@@ -682,6 +743,10 @@ pub enum Msg {
     VaultRemove {
         name: String,
     },
+    /// Guarda uma identidade de cloud (protocolo 46).
+    VaultAddCloud {
+        cloud: CloudAdd,
+    },
     /// Troca os domínios (ou os servidores de uma chave SSH) de um segredo,
     /// sem o valor (protocolo 24).
     VaultSetDomains {
@@ -719,9 +784,12 @@ pub enum Msg {
         id: u32,
     },
     /// Os segredos com domínio, com os valores reais, para o gateway de um
-    /// lançamento (protocolo 11).
+    /// lançamento (protocolo 11). Com `host` (protocolo 46), também as
+    /// identidades de cloud desse host, com o real atual.
     VaultInject {
         tag: String,
+        #[serde(default)]
+        host: String,
     },
     /// O processo de uma conexão TCP do lançamento `tag`, pela porta de
     /// origem e pelo destino, do gateway ao daemon (protocolo 42).
@@ -1299,12 +1367,16 @@ mod tests {
             domains: vec!["openrouter.ai".into()],
             fake: "sandmux-fake-x".into(),
             value: "sk-real".into(),
+            ..Default::default()
         };
         assert!(!format!("{i:?}").contains("sk-real"));
         let m = Msg::Injections { secrets: vec![i] };
         let j = serde_json::to_string(&m).unwrap();
         assert_eq!(serde_json::from_str::<Msg>(&j).unwrap(), m);
-        let q = Msg::VaultInject { tag: "s1-1".into() };
+        let q = Msg::VaultInject {
+            tag: "s1-1".into(),
+            host: String::new(),
+        };
         assert!(serde_json::to_string(&q).unwrap().contains("vault_inject"));
     }
 }

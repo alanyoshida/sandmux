@@ -209,6 +209,9 @@ pub struct RunOptions {
     pub fake_env: Vec<(String, String)>,
     /// Segredos do cofre para as ferramentas (valor falso por domínio).
     pub tool_secrets: Vec<crate::toolsecrets::ToolSecret>,
+    /// A pasta do `gcloud` só desta execução, com as identidades de GCP do
+    /// cofre (só falsos), por cima da guardada no HOME sintético.
+    pub gcloud_dir: Option<PathBuf>,
     /// Registro de rede deste lançamento (pasta e etiqueta). Sem ele, o
     /// sandbox usa a rede do host (testes da composição).
     pub net: Option<NetLaunch>,
@@ -265,6 +268,7 @@ impl RunOptions {
             net_policy: Some(sandmux_spec::net::NetPolicy::default()),
             fake_env: Vec::new(),
             tool_secrets: Vec::new(),
+            gcloud_dir: None,
             net: None,
         }
     }
@@ -870,6 +874,12 @@ pub fn compose(host: &Host, opts: &RunOptions) -> Result<Composed, PolicyError> 
             mode: 0o600,
         });
     }
+    // Identidades de GCP: a pasta do `gcloud` desta execução, com escrita (o
+    // `gcloud config configurations activate` grava nela), sem mudar a
+    // guardada.
+    if let Some(d) = &opts.gcloud_dir {
+        b.bind(d, &host.home.join(crate::cloudtab::GCLOUD_DIR), true);
+    }
     let inbox = layout.inbox();
     b.dirs.push(inbox.clone());
     b.bind(&inbox, &host.h("inbox"), false);
@@ -1306,6 +1316,7 @@ pub const CA_VARS: &[&str] = &[
     "REQUESTS_CA_BUNDLE",
     "CURL_CA_BUNDLE",
     "GIT_SSL_CAINFO",
+    "CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE",
 ];
 
 /// Pacotes de CAs do sistema, na ordem de procura.

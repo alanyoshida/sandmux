@@ -176,6 +176,97 @@ pub struct Ctx {
     pub tag: String,
     /// Harness da aba: só os endpoints de login dele são capturados.
     pub harness: String,
+    /// Os segredos pedidos de novo durante a conexão (o real de uma
+    /// identidade de cloud perto do fim da validade).
+    pub refreshed: std::sync::Mutex<Option<Vec<sandmux_proto::msg::Injection>>>,
+}
+
+/// A folga mínima do real de uma identidade de cloud antes de um pedido.
+const CLOUD_MARGIN: u64 = 300;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+impl Ctx {
+    /// Os segredos atuais da conexão.
+    pub fn list(&self) -> Vec<sandmux_proto::msg::Injection> {
+        self.refreshed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| self.injections.clone())
+    }
+
+    /// Os segredos para o próximo pedido: pede de novo ao daemon quando o
+    /// real de uma identidade de cloud está a menos de 5 minutos do fim.
+    pub async fn fresh(self: &Arc<Self>) -> Vec<sandmux_proto::msg::Injection> {
+        let list = self.list();
+        let stale = list
+            .iter()
+            .any(|i| i.expires > 0 && i.expires < now_secs() + CLOUD_MARGIN);
+        let Some(access) = self.vault.clone().filter(|_| stale) else {
+            return list;
+        };
+        let (tag, harness, host) = (self.tag.clone(), self.harness.clone(), self.domain.clone());
+        let got = tokio::task::spawn_blocking(move || {
+            crate::inject::for_host(crate::inject::fetch(&access, &tag, &harness, &host), &host)
+        })
+        .await
+        .unwrap_or_default();
+        *self.refreshed.lock().unwrap_or_else(|e| e.into_inner()) = Some(got.clone());
+        got
+    }
+}
+
+/// A identidade de cloud cujo refresh token falso está no corpo de um
+/// pedido de token (cru ou num formulário).
+pub fn cloud_refresh<'a>(
+    body: &[u8],
+    list: &'a [sandmux_proto::msg::Injection],
+) -> Option<&'a sandmux_proto::msg::Injection> {
+    let text = std::str::from_utf8(body).ok()?;
+    list.iter().find(|i| {
+        !i.refresh_fake.is_empty() && {
+            let enc = percent(&i.refresh_fake);
+            text.contains(&i.refresh_fake)
+                || text.contains(&enc)
+                || text.contains(&lower_escapes(&enc))
+        }
+    })
+}
+
+/// A resposta do gateway a um pedido de token com o refresh falso de uma
+/// identidade: o token de acesso falso, ou `invalid_grant` sem o real.
+pub fn cloud_token_answer(i: &sandmux_proto::msg::Injection, now: u64) -> (u16, String) {
+    if i.value.is_empty() {
+        let why = if i.error.is_empty() {
+            sandmux_spec::tr!(
+                "sandmux: o real desta identidade falta",
+                "sandmux: this identity's real token is missing"
+            )
+            .to_string()
+        } else {
+            format!("sandmux: {}", i.error)
+        };
+        let body = serde_json::json!({"error": "invalid_grant", "error_description": why});
+        return (400, body.to_string());
+    }
+    let left = if i.expires == 0 {
+        3599
+    } else {
+        i.expires.saturating_sub(now).min(3599)
+    };
+    let body = serde_json::json!({
+        "access_token": i.fake,
+        "expires_in": left,
+        "token_type": "Bearer",
+        "scope": "https://www.googleapis.com/auth/cloud-platform",
+    });
+    (200, body.to_string())
 }
 
 /// Os tokens reais de uma resposta de login: (papel, valor) dos campos de
@@ -216,7 +307,7 @@ pub fn body_with_reals(
     let mut out = text.to_string();
     let mut used = None;
     for i in list {
-        if i.fake.is_empty() {
+        if !crate::inject::usable(i) {
             continue;
         }
         if out.contains(&i.fake) {
@@ -283,15 +374,20 @@ fn refuse(status: u16, msg: &str) -> hyper::Response<Boxed> {
 /// Um pedido a um endpoint de login: o corpo vai com os reais, e a resposta
 /// volta com os tokens trocados pelos falsos, guardados no cofre. Sem cofre
 /// que aceite, a resposta é recusada: o token real nunca chega ao sandbox.
+/// Sem `capture` (um pedido de token que não é de uma identidade de cloud,
+/// fora de um endpoint de login), só repassa o pedido já lido.
 async fn capture_exchange(
-    req: hyper::Request<Incoming>,
+    parts: hyper::http::request::Parts,
+    raw: Bytes,
     sender: Arc<tokio::sync::Mutex<hyper::client::conn::http1::SendRequest<Boxed>>>,
     ctx: Arc<Ctx>,
+    list: Vec<sandmux_proto::msg::Injection>,
+    capture: bool,
 ) -> Result<hyper::Response<Boxed>, hyper::Error> {
     use hyper::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, TRANSFER_ENCODING};
     let t0 = Instant::now();
-    let method = req.method().to_string();
-    let path = path_of(req.uri());
+    let method = parts.method.to_string();
+    let path = path_of(&parts.uri);
     let log = |status: u16, up: u64, down: u64, secret: Option<&str>| {
         ctx.log.write_http(
             ctx.proto,
@@ -309,28 +405,14 @@ async fn capture_exchange(
             },
         );
     };
-    let (mut parts, body) = req.into_parts();
-    let Ok(collected) = http_body_util::Limited::new(body, 64 * 1024)
-        .collect()
-        .await
-    else {
-        log(413, 0, 0, None);
-        return Ok(refuse(
-            413,
-            sandmux_spec::tr!(
-                "sandmux: pedido de login grande demais",
-                "sandmux: login request too large"
-            ),
-        ));
-    };
-    let raw = collected.to_bytes();
-    let (sent, body_secret) = body_with_reals(&raw, &ctx.injections);
+    let mut parts = parts;
+    let (sent, body_secret) = body_with_reals(&raw, &list);
     parts.headers.remove(ACCEPT_ENCODING);
     parts.headers.remove(TRANSFER_ENCODING);
     parts.headers.insert(CONTENT_LENGTH, sent.len().into());
     let up = sent.len() as u64;
     let mut out = hyper::Request::from_parts(parts, full(sent));
-    let secret = rewrite(&mut out, &ctx.injections).or(body_secret);
+    let secret = rewrite(&mut out, &list).or(body_secret);
     let resp = {
         let mut s = sender.lock().await;
         match s.ready().await {
@@ -359,7 +441,7 @@ async fn capture_exchange(
         .headers
         .get(CONTENT_ENCODING)
         .is_some_and(|v| !v.as_bytes().eq_ignore_ascii_case(b"identity"));
-    let body = if !status.is_success() {
+    let body = if !capture || !status.is_success() {
         rbytes.to_vec()
     } else if encoded {
         // Sem ler, não dá para tirar os tokens: não passa nada.
@@ -472,10 +554,74 @@ where
         let sender = sender.clone();
         let ctx = ctx.clone();
         async move {
-            if req.method() == hyper::Method::POST
-                && sandmux_spec::net::is_capture(&ctx.harness, &ctx.domain, &path_of(req.uri()))
-            {
-                return capture_exchange(req, sender, ctx).await;
+            let list = ctx.fresh().await;
+            let capture = req.method() == hyper::Method::POST
+                && sandmux_spec::net::is_capture(&ctx.harness, &ctx.domain, &path_of(req.uri()));
+            // O pedido de token com o refresh falso de uma identidade de cloud
+            // é respondido aqui; o de login, capturado.
+            let token = req.method() == hyper::Method::POST
+                && path_of(req.uri()) == "/token"
+                && list.iter().any(|i| !i.refresh_fake.is_empty());
+            if capture || token {
+                let t0 = Instant::now();
+                let method = req.method().to_string();
+                let path = path_of(req.uri());
+                let (parts, body) = req.into_parts();
+                let Ok(collected) = http_body_util::Limited::new(body, 64 * 1024)
+                    .collect()
+                    .await
+                else {
+                    ctx.log.write_http(
+                        ctx.proto,
+                        &ctx.domain,
+                        &ctx.ip,
+                        ctx.port,
+                        0,
+                        0,
+                        t0.elapsed().as_millis() as u64,
+                        crate::log::Http {
+                            method: &method,
+                            path: &path,
+                            status: 413,
+                            secret: None,
+                        },
+                    );
+                    return Ok(refuse(
+                        413,
+                        sandmux_spec::tr!(
+                            "sandmux: pedido de token grande demais",
+                            "sandmux: token request too large"
+                        ),
+                    ));
+                };
+                let raw = collected.to_bytes();
+                if token && let Some(i) = cloud_refresh(&raw, &list) {
+                    let (status, body) = cloud_token_answer(i, now_secs());
+                    ctx.log.write_http(
+                        ctx.proto,
+                        &ctx.domain,
+                        &ctx.ip,
+                        ctx.port,
+                        raw.len() as u64,
+                        body.len() as u64,
+                        t0.elapsed().as_millis() as u64,
+                        crate::log::Http {
+                            method: &method,
+                            path: &path,
+                            status,
+                            secret: Some(&i.name),
+                        },
+                    );
+                    let mut r = hyper::Response::new(full(body));
+                    *r.status_mut() = hyper::StatusCode::from_u16(status)
+                        .unwrap_or(hyper::StatusCode::BAD_REQUEST);
+                    r.headers_mut().insert(
+                        hyper::header::CONTENT_TYPE,
+                        hyper::header::HeaderValue::from_static("application/json"),
+                    );
+                    return Ok(r);
+                }
+                return capture_exchange(parts, raw, sender, ctx, list, capture).await;
             }
             let t0 = Instant::now();
             let method = req.method().to_string();
@@ -495,7 +641,7 @@ where
                 // Sem compressão, as mensagens de texto podem ser lidas.
                 out.headers_mut().remove("sec-websocket-extensions");
             }
-            let secret = rewrite(&mut out, &ctx.injections);
+            let secret = rewrite(&mut out, &list);
             let resp = {
                 let mut s = sender.lock().await;
                 match s.ready().await {
@@ -601,7 +747,7 @@ async fn tunnel(
     };
     let (gr, mut gw) = tokio::io::split(TokioIo::new(g));
     let (mut dr, dw) = tokio::io::split(TokioIo::new(d));
-    let list = ctx.injections.clone();
+    let list = ctx.list();
     let up = crate::ws::pump_client(gr, dw, &list);
     let down = async {
         let n = tokio::io::copy(&mut dr, &mut gw).await.unwrap_or(0);
@@ -676,6 +822,7 @@ mod tests {
             domains: vec!["platform.claude.com".into()],
             fake: fake.into(),
             value: value.into(),
+            ..Default::default()
         }
     }
 
@@ -750,6 +897,7 @@ mod tests {
             vault,
             tag: "t".into(),
             harness: l.harness.into(),
+            refreshed: Default::default(),
         });
         tokio::spawn(serve_http(guest_side, up_side, ctx));
         // O "destino": lê o pedido e responde com tokens novos.
@@ -816,6 +964,183 @@ mod tests {
         }
         let seen = server.await.unwrap();
         (String::from_utf8_lossy(&out).to_string(), seen)
+    }
+
+    fn cloud(value: &str, expires: u64, error: &str) -> sandmux_proto::msg::Injection {
+        sandmux_proto::msg::Injection {
+            name: "gcp:trabalho".into(),
+            domains: vec!["*.googleapis.com".into()],
+            fake: "ya29.sandmux-fake-A".into(),
+            value: value.into(),
+            refresh_fake: "1//sandmux-fake-R".into(),
+            expires,
+            error: error.into(),
+        }
+    }
+
+    #[test]
+    fn refresh_falso_no_pedido_de_token() {
+        let list = vec![cloud("ya29.REAL", 0, "")];
+        assert!(cloud_refresh(b"refresh_token=1%2F%2Fsandmux-fake-R&x=1", &list).is_some());
+        assert!(cloud_refresh(b"refresh_token=1%2f%2fsandmux-fake-R", &list).is_some());
+        assert!(cloud_refresh(br#"{"refresh_token":"1//sandmux-fake-R"}"#, &list).is_some());
+        assert!(cloud_refresh(b"refresh_token=1%2F%2Foutro", &list).is_none());
+        // A resposta: o falso de acesso, com a validade do real.
+        let (st, body) = cloud_token_answer(&cloud("ya29.REAL", 1000 + 600, ""), 1000);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(st, 200);
+        assert_eq!(v["access_token"], "ya29.sandmux-fake-A");
+        assert_eq!(v["expires_in"], 600);
+        assert!(!body.contains("REAL"), "{body}");
+        // Sem o real: invalid_grant com o que fazer no host.
+        let (st, body) = cloud_token_answer(&cloud("", 0, "rode `gcloud auth login` no host"), 0);
+        assert_eq!(st, 400);
+        assert!(
+            body.contains("invalid_grant") && body.contains("gcloud auth login"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn identidade_sem_real_fica_com_o_falso() {
+        let list = vec![cloud("", 0, "sem gcloud")];
+        let mut h = hyper::HeaderMap::new();
+        h.insert(
+            "authorization",
+            "Bearer ya29.sandmux-fake-A".parse().unwrap(),
+        );
+        assert_eq!(crate::inject::rewrite_headers(&mut h, &list), None);
+        assert_eq!(h["authorization"], "Bearer ya29.sandmux-fake-A");
+        let mut h = hyper::HeaderMap::new();
+        h.insert(
+            "authorization",
+            "Bearer ya29.sandmux-fake-A".parse().unwrap(),
+        );
+        let list = vec![cloud("ya29.REAL", 0, "")];
+        assert_eq!(
+            crate::inject::rewrite_headers(&mut h, &list).as_deref(),
+            Some("gcp:trabalho")
+        );
+        assert_eq!(h["authorization"], "Bearer ya29.REAL");
+    }
+
+    #[tokio::test]
+    async fn pedido_de_token_respondido_sem_ir_ao_destino() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut guest, guest_side) = tokio::io::duplex(1 << 16);
+        let (up_side, mut upstream) = tokio::io::duplex(1 << 16);
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(Ctx {
+            log: Arc::new(crate::log::Log::new(dir.path(), "t", dir.path())),
+            proto: "https",
+            domain: "oauth2.googleapis.com".into(),
+            ip: "1.2.3.4".into(),
+            port: 443,
+            injections: vec![cloud("ya29.REAL", 0, "")],
+            vault: None,
+            tag: "t".into(),
+            harness: "shell".into(),
+            refreshed: Default::default(),
+        });
+        tokio::spawn(serve_http(guest_side, up_side, ctx));
+        let body = "grant_type=refresh_token&client_id=c&refresh_token=1%2F%2Fsandmux-fake-R";
+        let req = format!(
+            "POST /token HTTP/1.1\r\nhost: oauth2.googleapis.com\r\ncontent-type: application/x-www-form-urlencoded\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        guest.write_all(req.as_bytes()).await.unwrap();
+        let mut out = Vec::new();
+        let mut buf = vec![0u8; 4096];
+        while !String::from_utf8_lossy(&out).contains("Bearer") {
+            let n = tokio::time::timeout(std::time::Duration::from_secs(5), guest.read(&mut buf))
+                .await
+                .unwrap()
+                .unwrap();
+            out.extend_from_slice(&buf[..n]);
+        }
+        let resp = String::from_utf8_lossy(&out);
+        assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+        assert!(
+            resp.contains("ya29.sandmux-fake-A") && !resp.contains("REAL"),
+            "{resp}"
+        );
+        // Nada foi ao destino.
+        let r = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            upstream.read(&mut buf),
+        )
+        .await;
+        assert!(r.is_err(), "o destino recebeu algo");
+    }
+
+    #[tokio::test]
+    async fn pedido_de_token_de_outro_passa_sem_captura() {
+        let (resp, seen) = exchange_with(
+            Login {
+                harness: "shell",
+                domain: "oauth2.googleapis.com",
+                path: "/token",
+                ctype: "application/x-www-form-urlencoded",
+                req_body: "grant_type=refresh_token&refresh_token=1%2F%2Fdo-usuario",
+                resp_body: r#"{"access_token":"ya29.DO-USUARIO","expires_in":3599}"#,
+                injection: cloud("ya29.REAL", 0, ""),
+            },
+            None,
+        )
+        .await;
+        assert!(seen.contains("1%2F%2Fdo-usuario"), "{seen}");
+        assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+        assert!(resp.contains("ya29.DO-USUARIO"), "{resp}");
+    }
+
+    #[tokio::test]
+    async fn real_perto_do_fim_pedido_de_novo() {
+        use sandmux_proto::{Frame, Msg, read_frame, write_control};
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("d.sock");
+        let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let daemon = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let _ = read_frame(&mut s).unwrap();
+            write_control(
+                &mut s,
+                &Msg::Welcome {
+                    protocol: sandmux_proto::PROTOCOL,
+                    version: "t".into(),
+                    pid: 1,
+                    start_mode: "t".into(),
+                },
+            )
+            .unwrap();
+            let Some(Frame::Control(Msg::VaultInject { host, .. })) = read_frame(&mut s).unwrap()
+            else {
+                panic!("sem pedido de injeção");
+            };
+            let secrets = vec![cloud("ya29.NOVO", super::now_secs() + 3600, "")];
+            write_control(&mut s, &Msg::Injections { secrets }).unwrap();
+            host
+        });
+        let ctx = Arc::new(Ctx {
+            log: Arc::new(crate::log::Log::new(dir.path(), "t", dir.path())),
+            proto: "https",
+            domain: "storage.googleapis.com".into(),
+            ip: "1.2.3.4".into(),
+            port: 443,
+            injections: vec![cloud("ya29.VELHO", super::now_secs() + 60, "")],
+            vault: Some(sandmux_spec::VaultAccess {
+                socket: sock,
+                data_dir: dir.path().into(),
+                config_dir: dir.path().into(),
+            }),
+            tag: "t".into(),
+            harness: "shell".into(),
+            refreshed: Default::default(),
+        });
+        let list = ctx.fresh().await;
+        assert_eq!(list[0].value, "ya29.NOVO");
+        assert_eq!(daemon.join().unwrap(), "storage.googleapis.com");
+        // Com folga, não pede de novo.
+        assert_eq!(ctx.fresh().await[0].value, "ya29.NOVO");
     }
 
     #[tokio::test]

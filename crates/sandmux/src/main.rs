@@ -491,6 +491,9 @@ const VALUE_NAMES_EN: &[(&str, &str)] = &[
     ("VALOR", "VALUE"),
     ("FERRAMENTA", "TOOL"),
     ("DOMÍNIO", "DOMAIN"),
+    ("CONFIGURAÇÃO", "CONFIGURATION"),
+    ("ARQUIVO", "FILE"),
+    ("PROVEDOR", "PROVIDER"),
 ];
 
 /// Ajuda da linha de comando, português (o doc comment) -> inglês. Cobre
@@ -984,6 +987,27 @@ const HELP_EN: &[(&str, &str)] = &[
     (
         "Servidor git da chave (domínio exato). Repetível; ao menos um.",
         "The key's git server (exact domain). Repeatable; at least one.",
+    ),
+    (
+        "Guarda uma identidade de cloud: o sandbox recebe um falso, e o real fica fora dele.",
+        "Saves a cloud identity: the sandbox gets a fake, and the real one stays outside it.",
+    ),
+    ("Provedor: gcp.", "Provider: gcp."),
+    (
+        "Configuração do gcloud do host (referência: o real vem do gcloud do host).",
+        "Configuration of the host gcloud (reference: the real one comes from the host gcloud).",
+    ),
+    (
+        "Copia para o cofre o ADC do gcloud do host (application_default_credentials.json).",
+        "Copies the host gcloud's ADC (application_default_credentials.json) into the vault.",
+    ),
+    (
+        "Copia para o cofre a chave JSON de uma conta de serviço.",
+        "Copies a service account JSON key into the vault.",
+    ),
+    (
+        "Torna a identidade a padrão do provedor.",
+        "Makes the identity the provider's default.",
     ),
     (
         "Lista os segredos (só os nomes e os domínios).",

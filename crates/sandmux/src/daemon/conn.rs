@@ -348,6 +348,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .lock();
+                shared.cloud.clear();
                 let s = shared.clone();
                 std::thread::spawn(move || super::net::recompile_all(&s));
                 write_control(&mut stream, &Msg::Ok)?;
@@ -417,6 +418,7 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     .unwrap_or_else(|e| e.into_inner())
                     .remove(&name);
                 if r.is_ok() {
+                    shared.cloud.clear();
                     let s = shared.clone();
                     std::thread::spawn(move || super::net::recompile_all(&s));
                 }
@@ -442,6 +444,18 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     std::thread::spawn(move || super::net::recompile_all(&s));
                 }
                 reply_unit(&mut stream, r)?;
+            }
+            Msg::VaultAddCloud { cloud } => {
+                let r = shared
+                    .vault
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .add_cloud(cloud);
+                if r.is_ok() {
+                    let s = shared.clone();
+                    std::thread::spawn(move || super::net::recompile_all(&s));
+                }
+                reply_unit(&mut stream, r.map(|_| ()))?;
             }
             Msg::VaultAddSsh { name, key, servers } => {
                 let r = shared
@@ -564,13 +578,16 @@ fn serve(shared: &Arc<Shared>, mut stream: UnixStream) -> Result<()> {
                     },
                 )?;
             }
-            Msg::VaultInject { tag } => {
+            Msg::VaultInject { tag, host } => {
                 let _ = tag;
-                let secrets = shared
+                let mut secrets = shared
                     .vault
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .injections();
+                // As identidades de cloud do host, com o real atual (fora da
+                // trava do cofre: o real pode vir da CLI do host).
+                secrets.extend(super::cloud::injections(shared, &host));
                 write_control(&mut stream, &Msg::Injections { secrets })?;
             }
             Msg::FolderEdit {

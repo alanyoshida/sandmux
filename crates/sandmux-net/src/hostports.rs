@@ -83,7 +83,7 @@ fn serve(
                 let injections = match vault {
                     Some(v) => tokio::task::spawn_blocking(move || {
                         crate::inject::for_host(
-                            crate::inject::fetch(&v.access, &v.tag, &v.harness),
+                            crate::inject::fetch(&v.access, &v.tag, &v.harness, NAME),
                             NAME,
                         )
                     })
@@ -110,6 +110,7 @@ fn serve(
                             vault: None,
                             tag: String::new(),
                             harness: String::new(),
+                            refreshed: Default::default(),
                         });
                         crate::mitm::serve_http(c, up, ctx).await;
                         let ms = t0.elapsed().as_millis() as u64;

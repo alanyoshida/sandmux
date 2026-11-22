@@ -13,11 +13,15 @@ Cada lançamento com rede MUST gerar uma CA própria, cuja chave MUST ficar só 
 - **THEN** cada um confia numa CA diferente, e nenhum arquivo em disco tem a chave de uma delas
 
 ### Requirement: Confiança no sandbox
-O sandbox MUST confiar na CA do lançamento além das CAs do sistema: o pacote de CAs do sistema MUST ser coberto por um arquivo com as duas, e as variáveis `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` e `GIT_SSL_CAINFO` MUST apontar para ele.
+O sandbox MUST confiar na CA do lançamento além das CAs do sistema: o pacote de CAs do sistema MUST ser coberto por um arquivo com as duas, e as variáveis `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO` e `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE` MUST apontar para ele.
 
 #### Scenario: curl confia no gateway
 - **WHEN** um domínio está na lista de decifração e o agente roda `curl https://<domínio>/`
 - **THEN** o `curl` aceita o certificado apresentado pelo gateway, sem opção extra
+
+#### Scenario: gcloud confia no gateway
+- **WHEN** `*.googleapis.com` está na lista de decifração e o agente roda um comando do `gcloud`
+- **THEN** o `gcloud` aceita o certificado apresentado pelo gateway, sem opção extra
 
 ### Requirement: Lista de decifração
 O gateway MUST decifrar uma conexão TLS só quando o SNI casa com a lista de decifração: os domínios donos dos segredos do cofre desbloqueado e os padrões da chave `decrypt` da configuração e da opção `--decrypt` do `run`, somados entre as camadas. As demais conexões MUST passar cifradas de ponta a ponta. Uma mudança na lista MUST valer na conexão seguinte de uma sessão viva.
