@@ -1,14 +1,12 @@
-sandmux 0.1.35, antes da v1: num kernel antigo sem o auxiliar root, o lançamento é recusado na hora, sem esperar 30 s.
+sandmux 0.1.36, antes da v1: corrige a recusa rápida da 0.1.35 durante a troca do auxiliar root.
 
 The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
 
 ## Correção
 
-- **Recusa rápida sem o auxiliar root:** num kernel com o Landlock abaixo do ABI 6 (como o 6.8 do Ubuntu 24.04), o sandbox depende do [auxiliar root](https://github.com/alanyoshida/sandmux/blob/main/docs/helper.md). Sem ele instalado, o lançamento tentava falar com o auxiliar por 30 s antes de recusar e apontar o `sandmux doctor`. Agora, sem o socket do auxiliar, a recusa sai em 1 s. A espera de até 30 s continua valendo para a troca do auxiliar numa atualização.
+- **Troca do auxiliar root:** a 0.1.35 fez o lançamento desistir em 1 s quando o socket do [auxiliar root](https://github.com/alanyoshida/sandmux/blob/main/docs/helper.md) não existe, num kernel com o Landlock abaixo do ABI 6. Mas o prazo contava desde a primeira tentativa. Numa troca do auxiliar (uma atualização), o auxiliar velho fica alguns segundos sem responder e o socket some por um instante depois; um lançamento nesse instante era recusado, quando deveria esperar o auxiliar novo. Agora o prazo de 1 s conta só a falta seguida do socket.
 
 Esta versão muda só o lançador (`sandmux-run`). O protocolo e o auxiliar root não mudam.
-
-Para quem desenvolve: o `./scripts/check.sh` roda os testes em paralelo pelo [cargo-nextest](https://nexte.st), quando ele está instalado.
 
 ## Instalar
 
