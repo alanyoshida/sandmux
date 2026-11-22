@@ -65,7 +65,7 @@ When the helper restarts (an upgrade, a crash), the scope comes back on the next
 - **In a daemon session:** the launcher hands the scope parameters and the sandbox's user namespace to the daemon, and the daemon watches one connection to the helper per tab. On a drop, it freezes the tab, registers the scope again (and the [files by the kernel](files.md#by-the-kernel), when the tab has them) and thaws it. Nothing in the tab runs without the scope.
 - **In `run` without the daemon:** the launcher itself registers again as soon as the next helper answers. In that interval, the sandbox runs without the scope.
 
-Without the scope back within 30 s, the sandbox ends. A launch that finds the helper being swapped tries again for up to 30 s. On 6.8, loading and dropping the scope programs takes seconds; so, on a kernel below ABI 6, the helper loads them when it starts, and they stay loaded for 60 s after the last scope.
+Without the scope back within 30 s, the sandbox ends. A launch that finds the helper being swapped tries again for up to 30 s. Without the helper's socket (the helper not installed), the launch gives up within 1 s and points to `sandmux doctor`. On 6.8, loading and dropping the scope programs takes seconds; so, on a kernel below ABI 6, the helper loads them when it starts, and they stay loaded for 60 s after the last scope.
 
 ## How long the rules last
 

@@ -107,15 +107,26 @@ fn seqpacket() -> std::io::Result<OwnedFd> {
 
 /// Conecta ao auxiliar root.
 fn connect() -> Result<OwnedFd, String> {
+    connect_fail().map_err(Fail::message)
+}
+
+/// Como [`connect`], separando o socket que não existe (o auxiliar não está
+/// instalado) do auxiliar que não atende (a troca de auxiliar).
+fn connect_fail() -> Result<OwnedFd, Fail> {
     let path = socket_path();
-    let sock = seqpacket().map_err(|e| e.to_string())?;
-    let addr = nix::sys::socket::UnixAddr::new(&path).map_err(|e| e.to_string())?;
+    let sock = seqpacket().map_err(|e| Fail::NoAnswer(e.to_string()))?;
+    let addr = nix::sys::socket::UnixAddr::new(&path).map_err(|e| Fail::NoAnswer(e.to_string()))?;
     nix::sys::socket::connect(sock.as_raw_fd(), &addr).map_err(|e| {
-        sandmux_spec::trf!(
+        let m = sandmux_spec::trf!(
             "o auxiliar root não responde em {} ({e})",
             "the root helper does not answer at {} ({e})",
             path.display()
-        )
+        );
+        if e == nix::errno::Errno::ENOENT {
+            Fail::Missing(m)
+        } else {
+            Fail::NoAnswer(m)
+        }
     })?;
     Ok(sock)
 }
@@ -126,6 +137,10 @@ enum Fail {
     /// Sem resposta: o auxiliar não está lá, ou caiu no meio (a troca de
     /// auxiliar). Vale tentar de novo.
     NoAnswer(String),
+    /// O socket do auxiliar não existe. Numa troca, ele some só entre o
+    /// auxiliar velho sair e o novo criar o socket; por mais que isso, o
+    /// auxiliar não está instalado.
+    Missing(String),
     /// O auxiliar recusou, com o motivo.
     Refused(String),
 }
@@ -133,7 +148,7 @@ enum Fail {
 impl Fail {
     fn message(self) -> String {
         match self {
-            Fail::NoAnswer(m) | Fail::Refused(m) => m,
+            Fail::NoAnswer(m) | Fail::Missing(m) | Fail::Refused(m) => m,
         }
     }
 }
@@ -221,6 +236,10 @@ pub struct Registered {
 /// Quanto o registro espera o auxiliar (a troca de auxiliar).
 const RETRY_FOR: Duration = Duration::from_secs(30);
 const RETRY_EVERY: Duration = Duration::from_millis(300);
+/// No lançamento, quanto o registro espera um socket que não existe: o
+/// bastante para a troca recriar o socket, sem fazer quem não tem o
+/// auxiliar esperar os 30 s.
+const MISSING_FOR: Duration = Duration::from_secs(1);
 
 /// Registra o sandbox do filho no auxiliar. Precisa ser chamado antes da
 /// liberação do filho.
@@ -232,35 +251,45 @@ pub fn register(child: Pid, abi: i32, spec: &LaunchSpec) -> Result<Registered, S
         ioctl: abi < 5,
         devs: devices(&spec.mounts),
     };
-    let conn = register_ns(&ns, &params)?;
+    let conn = retry(RETRY_FOR, MISSING_FOR, RETRY_EVERY, || {
+        try_register(&ns, &params)
+    })?;
     Ok(Registered { conn, ns, params })
 }
 
-/// O pedido `scope`, de novo enquanto o auxiliar não responde, por até
-/// [`RETRY_FOR`]. Uma recusa com motivo não se repete.
+/// O pedido `scope` de novo, depois de uma queda do auxiliar, enquanto ele
+/// não responde, por até [`RETRY_FOR`], também sem o socket (o socket do
+/// systemd pode ser recriado). Uma recusa com motivo não se repete.
 fn register_ns(ns: &OwnedFd, params: &TabScope) -> Result<OwnedFd, String> {
-    retry(RETRY_FOR, RETRY_EVERY, || try_register(ns, params))
+    retry(RETRY_FOR, RETRY_FOR, RETRY_EVERY, || {
+        try_register(ns, params)
+    })
 }
 
-/// Tenta `f` enquanto ele não tem resposta, até `total`.
+/// Tenta `f` enquanto ele não tem resposta, até `total`; sem o socket do
+/// auxiliar, só até `missing`.
 fn retry<T>(
     total: Duration,
+    missing: Duration,
     every: Duration,
     mut f: impl FnMut() -> Result<T, Fail>,
 ) -> Result<T, String> {
-    let deadline = Instant::now() + total;
+    let start = Instant::now();
     loop {
         match f() {
             Ok(v) => return Ok(v),
             Err(Fail::Refused(m)) => return Err(m),
-            Err(Fail::NoAnswer(m)) if Instant::now() >= deadline => return Err(m),
-            Err(Fail::NoAnswer(_)) => std::thread::sleep(every),
+            Err(Fail::Missing(m)) if start.elapsed() >= missing.min(total) => return Err(m),
+            Err(Fail::NoAnswer(m)) if start.elapsed() >= total => return Err(m),
+            Err(Fail::Missing(_) | Fail::NoAnswer(_)) => {
+                std::thread::sleep(every.min(missing.min(total)))
+            }
         }
     }
 }
 
 fn try_register(ns: &OwnedFd, params: &TabScope) -> Result<OwnedFd, Fail> {
-    let sock = connect().map_err(Fail::NoAnswer)?;
+    let sock = connect_fail()?;
     let req = serde_json::json!({
         "op": "scope",
         "ioctl": params.ioctl,
@@ -368,7 +397,8 @@ mod tests {
     fn tenta_de_novo_so_sem_resposta() {
         let ms = Duration::from_millis(1);
         let mut n = 0;
-        let r = retry(Duration::from_secs(5), ms, || {
+        let s5 = Duration::from_secs(5);
+        let r = retry(s5, s5, ms, || {
             n += 1;
             if n < 3 {
                 Err(Fail::NoAnswer("caiu".into()))
@@ -378,15 +408,56 @@ mod tests {
         });
         assert_eq!(r, Ok(3));
         let mut n = 0;
-        let r: Result<(), String> = retry(Duration::from_secs(5), ms, || {
+        let r: Result<(), String> = retry(s5, s5, ms, || {
             n += 1;
             Err(Fail::Refused("não".into()))
         });
         assert_eq!((r, n), (Err("não".into()), 1));
-        let r: Result<(), String> = retry(Duration::from_millis(20), ms, || {
+        let r: Result<(), String> = retry(Duration::from_millis(20), s5, ms, || {
             Err(Fail::NoAnswer("ninguém".into()))
         });
         assert_eq!(r, Err("ninguém".into()));
+        // Sem o socket, desiste no prazo curto, mesmo com o longo sobrando.
+        let t = Instant::now();
+        let r: Result<(), String> = retry(s5, Duration::from_millis(50), ms, || {
+            Err(Fail::Missing("sem socket".into()))
+        });
+        assert_eq!(r, Err("sem socket".into()));
+        assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+        // O socket que volta dentro do prazo curto (a troca) passa.
+        let mut n = 0;
+        let r = retry(s5, Duration::from_millis(500), ms, || {
+            n += 1;
+            if n < 3 {
+                Err(Fail::Missing("trocando".into()))
+            } else {
+                Ok(n)
+            }
+        });
+        assert_eq!(r, Ok(3));
+        // Um socket que deixa de faltar e passa a não responder segue até o
+        // prazo longo.
+        let t = Instant::now();
+        let mut n = 0;
+        let r: Result<(), String> = retry(
+            Duration::from_millis(300),
+            Duration::from_millis(20),
+            ms,
+            || {
+                n += 1;
+                if n < 2 {
+                    Err(Fail::Missing("trocando".into()))
+                } else {
+                    Err(Fail::NoAnswer("subindo".into()))
+                }
+            },
+        );
+        assert_eq!(r, Err("subindo".into()));
+        assert!(
+            t.elapsed() >= Duration::from_millis(300),
+            "{:?}",
+            t.elapsed()
+        );
     }
 
     #[test]
