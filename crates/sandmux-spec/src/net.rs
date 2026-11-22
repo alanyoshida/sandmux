@@ -580,6 +580,24 @@ pub fn login_fake_prefix(harness: &str, role: &str) -> Option<&'static str> {
     }
 }
 
+/// Prefixos dos falsos de uma identidade de GCP: o do token de acesso e o do
+/// refresh token, no formato do Google.
+pub const GCP_ACCESS_PREFIX: &str = "ya29.";
+pub const GCP_REFRESH_PREFIX: &str = "1//";
+
+/// Variável só de teste que troca o domínio das APIs do Google (por
+/// `host.sandmux.internal`, com um servidor local).
+pub const GCP_TEST_DOMAIN_ENV: &str = "SANDMUX_TEST_GCP_DOMAIN";
+
+/// O domínio dono de uma identidade de GCP: as APIs do Google, que incluem o
+/// endpoint de token (`oauth2.googleapis.com`).
+pub fn gcp_domain() -> String {
+    std::env::var(GCP_TEST_DOMAIN_ENV)
+        .ok()
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "*.googleapis.com".into())
+}
+
 /// O harness dono de um segredo de login (`claude:access` é do `claude`).
 pub fn login_owner(secret: &str) -> Option<&'static str> {
     let (h, _) = secret.split_once(':')?;

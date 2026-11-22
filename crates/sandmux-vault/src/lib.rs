@@ -45,11 +45,19 @@ pub struct Secret {
 pub const KIND_SSH: &str = "ssh";
 /// Tipo de uma conexão de banco (o valor é um JSON com a senha).
 pub const KIND_DB: &str = "db";
+/// Tipo de uma identidade de cloud: o valor é um JSON com a fonte (e, numa
+/// cópia, a credencial), e o falso é o do token de acesso.
+pub const KIND_CLOUD: &str = "cloud";
 
 impl Secret {
     /// Uma chave SSH (fora da troca de tokens).
     pub fn is_ssh(&self) -> bool {
         self.kind == KIND_SSH
+    }
+
+    /// Uma identidade de cloud.
+    pub fn is_cloud(&self) -> bool {
+        self.kind == KIND_CLOUD
     }
 
     /// Um token (o tipo comum): só eles têm valor falso, ferramentas e
@@ -204,9 +212,15 @@ pub const FAKE_PREFIX: &str = "sandmux-fake-";
 
 /// Um valor falso novo: o prefixo e 32 caracteres hexadecimais aleatórios.
 pub fn new_fake() -> String {
+    new_fake_with("")
+}
+
+/// Um valor falso com um prefixo de formato antes do do sandmux
+/// (`ya29.sandmux-fake-…`).
+pub fn new_fake_with(format_prefix: &str) -> String {
     let b = random::<16>();
     let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    format!("{FAKE_PREFIX}{hex}")
+    format!("{format_prefix}{FAKE_PREFIX}{hex}")
 }
 
 /// Parâmetros do Argon2id: 64 MiB, 3 passadas, 1 via.
@@ -458,6 +472,32 @@ mod tests {
             kind: String::new(),
             tools: Vec::new(),
         }
+    }
+
+    #[test]
+    fn identidade_de_cloud_fora_dos_tokens() {
+        let mut v = Unlocked::create("s").unwrap();
+        let f = new_fake_with("ya29.");
+        assert!(
+            f.starts_with("ya29.sandmux-fake-") && f.len() == 18 + 32,
+            "{f}"
+        );
+        assert!(new_fake_with("1//").starts_with("1//sandmux-fake-"));
+        v.put(Secret {
+            name: "gcp:trabalho".into(),
+            value: "{\"name\":\"trabalho\"}".into(),
+            domains: vec!["*.googleapis.com".into()],
+            fake: Some(f.clone()),
+            tools: Vec::new(),
+            kind: KIND_CLOUD.into(),
+        });
+        // Não é token: não ganha outro falso nem entra na troca comum.
+        assert!(!v.fill_fakes());
+        let bytes = v.seal().unwrap();
+        let back = Unlocked::open(&bytes, "s").unwrap();
+        let s = &back.contents.secrets[0];
+        assert!(s.is_cloud() && !s.is_token());
+        assert_eq!(s.fake.as_deref(), Some(f.as_str()));
     }
 
     #[test]

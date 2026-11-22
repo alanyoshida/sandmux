@@ -45,6 +45,24 @@ pub enum VaultCmd {
         #[arg(long = "server", value_name = "DOMÍNIO", required = true)]
         servers: Vec<String>,
     },
+    /// Guarda uma identidade de cloud: o sandbox recebe um falso, e o real fica fora dele.
+    AddCloud {
+        /// Provedor: gcp.
+        provedor: String,
+        nome: String,
+        /// Configuração do gcloud do host (referência: o real vem do gcloud do host).
+        #[arg(long, value_name = "CONFIGURAÇÃO")]
+        configuration: Option<String>,
+        /// Copia para o cofre o ADC do gcloud do host (application_default_credentials.json).
+        #[arg(long)]
+        copy_adc: bool,
+        /// Copia para o cofre a chave JSON de uma conta de serviço.
+        #[arg(long, value_name = "ARQUIVO")]
+        copy_key: Option<std::path::PathBuf>,
+        /// Torna a identidade a padrão do provedor.
+        #[arg(long)]
+        default: bool,
+    },
     /// Lista os segredos (só os nomes e os domínios).
     List,
     /// Apaga um segredo.
@@ -357,6 +375,141 @@ pub(crate) fn store_agy_login(
     Ok(())
 }
 
+/// A fonte de uma identidade de cloud, para mostrar.
+pub(crate) fn cloud_source(c: &sandmux_proto::msg::CloudInfo) -> String {
+    match c.source.as_str() {
+        "host" => trf!(
+            "host: configuração {}",
+            "host: configuration {}",
+            c.configuration
+        ),
+        "adc" => tr!("cópia: ADC", "copy: ADC").into(),
+        "key" => tr!("cópia: conta de serviço", "copy: service account").into(),
+        other => other.to_string(),
+    }
+}
+
+/// A linha de uma identidade de cloud em `vault list`, sem token nem chave.
+fn cloud_line(name: &str, fake: &str, c: &sandmux_proto::msg::CloudInfo) -> String {
+    let account = if c.account.is_empty() {
+        "-".to_string()
+    } else {
+        c.account.clone()
+    };
+    let project = if c.project.is_empty() {
+        String::new()
+    } else {
+        trf!("  projeto: {}", "  project: {}", c.project)
+    };
+    let default = if c.default {
+        tr!("  (padrão)", "  (default)")
+    } else {
+        ""
+    };
+    trf!(
+        "{name}  cloud  {}  {}  conta: {account}{project}{default}  falso: {fake}",
+        "{name}  cloud  {}  {}  account: {account}{project}{default}  fake: {fake}",
+        c.provider,
+        cloud_source(c)
+    )
+}
+
+/// `sandmux vault add-cloud`: confere a fonte no host e manda ao daemon.
+fn add_cloud(
+    provedor: String,
+    nome: String,
+    configuration: Option<String>,
+    copy_adc: bool,
+    copy_key: Option<std::path::PathBuf>,
+    default: bool,
+) -> Result<()> {
+    if provedor != "gcp" {
+        bail!(trf!(
+            "provedor de cloud desconhecido: {provedor}; use gcp",
+            "unknown cloud provider: {provedor}; use gcp"
+        ));
+    }
+    let n = usize::from(configuration.is_some())
+        + usize::from(copy_adc)
+        + usize::from(copy_key.is_some());
+    if n != 1 {
+        bail!(tr!(
+            "use exatamente uma fonte: --configuration, --copy-adc ou --copy-key",
+            "use exactly one source: --configuration, --copy-adc or --copy-key"
+        ));
+    }
+    if !sandmux::cloud::valid_name(&nome) {
+        bail!(trf!(
+            "nome de identidade inválido: {nome:?}; use letras, números, - e _",
+            "invalid identity name: {nome:?}; use letters, digits, - and _"
+        ));
+    }
+    let mut info = sandmux_proto::msg::CloudInfo {
+        provider: provedor.clone(),
+        default,
+        ..Default::default()
+    };
+    let mut secret = Zeroizing::new(String::new());
+    if let Some(conf) = configuration {
+        let (account, project) =
+            sandmux::cloud::host_configuration(&conf).map_err(|e| anyhow!(e))?;
+        info.source = "host".into();
+        info.configuration = conf;
+        info.account = account;
+        info.project = project;
+    } else if copy_adc {
+        let path = gcloud_config_dir().join("application_default_credentials.json");
+        let text = Zeroizing::new(
+            std::fs::read_to_string(&path)
+                .with_context(|| trf!("ler {}", "read {}", path.display()))?,
+        );
+        info.account = sandmux::cloud::check_adc(&text).map_err(|e| anyhow!(e))?;
+        info.project = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v["quota_project_id"].as_str().map(str::to_string))
+            .unwrap_or_default();
+        info.source = "adc".into();
+        *secret = text.to_string();
+    } else if let Some(file) = copy_key {
+        let text = Zeroizing::new(
+            std::fs::read_to_string(&file)
+                .with_context(|| trf!("ler {}", "read {}", file.display()))?,
+        );
+        let (account, project) = sandmux::cloud::check_key(&text).map_err(|e| anyhow!(e))?;
+        info.source = "key".into();
+        info.account = account;
+        info.project = project;
+        *secret = text.to_string();
+    }
+    call(&Msg::VaultAddCloud {
+        cloud: sandmux_proto::msg::CloudAdd {
+            name: nome.clone(),
+            info,
+            secret: secret.to_string(),
+        },
+    })?;
+    eprintln!(
+        "{}",
+        trf!(
+            "sandmux: identidade {provedor}:{nome} guardada no cofre; cada aba recebe um falso, e o real fica fora do sandbox.\nO agente pode fazer o que o IAM dessa identidade permite: use uma sem permissão de criar chaves de conta de serviço\nnem de ler o Secret Manager (veja docs/cloud.md).",
+            "sandmux: identity {provedor}:{nome} stored in the vault; each tab gets a fake, and the real one stays outside the sandbox.\nThe agent can do what the IAM of this identity allows: use one without permission to create service account keys\nor to read Secret Manager (see docs/cloud.md)."
+        )
+    );
+    Ok(())
+}
+
+/// A pasta de configuração do `gcloud` do host (`CLOUDSDK_CONFIG`, ou a
+/// padrão).
+fn gcloud_config_dir() -> std::path::PathBuf {
+    if let Some(d) = std::env::var_os("CLOUDSDK_CONFIG").filter(|d| !d.is_empty()) {
+        return d.into();
+    }
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default()
+        .join(".config/gcloud")
+}
+
 pub(crate) fn call(msg: &Msg) -> Result<Msg> {
     let mut conn = client::connect_or_start()?;
     conn.call(msg)
@@ -632,6 +785,16 @@ pub fn run(c: VaultCmd) -> Result<i32> {
                 )
             );
         }
+        VaultCmd::AddCloud {
+            provedor,
+            nome,
+            configuration,
+            copy_adc,
+            copy_key,
+            default,
+        } => {
+            add_cloud(provedor, nome, configuration, copy_adc, copy_key, default)?;
+        }
         VaultCmd::List => {
             let Msg::VaultEntries { entries } = call(&Msg::VaultList)? else {
                 bail!(tr!(
@@ -646,6 +809,13 @@ pub fn run(c: VaultCmd) -> Result<i32> {
                 );
             }
             for e in entries {
+                if let Some(c) = &e.cloud {
+                    println!(
+                        "{}",
+                        cloud_line(&e.name, e.fake.as_deref().unwrap_or("-"), c)
+                    );
+                    continue;
+                }
                 if e.kind == "db" {
                     println!("{}  db  (sandmux db list)", e.name);
                     continue;

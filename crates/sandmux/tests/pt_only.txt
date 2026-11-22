@@ -169,6 +169,7 @@ crates/sandmux/src/tui/settings.rs	Variáveis passadas
 crates/sandmux/src/tui/settings.rs	aberta registra tudo; inferencia só deixa os provedores de modelo; custom usa a allowlist; sem-rede corta a rede.
 crates/sandmux/src/tui/settings.rs	blocos funciona em qualquer fonte; powerline precisa de uma Nerd Font; simples é só texto.
 crates/sandmux/src/tui/settings.rs	bottom põe a barra na última linha; top, na primeira.
+crates/sandmux/src/vaultcmd.rs	CONFIGURAÇÃO
 crates/sandmux/src/vaultcmd.rs	DOMÍNIO
 crates/sandmux/src/vaultcmd.rs	PADRÃO
 crates/sandmux/src/tui/mod.rs	{question}\n\nÚltimas linhas do terminal da aba, como contexto:\n```\n{shown}\n```

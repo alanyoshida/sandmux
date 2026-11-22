@@ -79,7 +79,7 @@ Senhas e valores aparecem como `•` e são apagados da memória da TUI depois d
 Na seção Cofre, `g` abre o grafo do cofre em tela cheia. Ele mostra, a partir de um domínio, os segredos que podem ir para ele, e a partir de um segredo, todos os domínios donos. Os valores nunca aparecem.
 
 - **À esquerda, a lista:** um item para cada domínio dono, com o número de segredos. Cada texto de domínio é um item: `github.com` e `*.github.com` ficam separados, porque casam com pedidos diferentes. No fim vêm "Sem domínio", com os segredos sem dono (o valor deles não é trocado no tráfego), e "Bancos", com as [conexões de banco](#conexões-de-banco). Cada um desses grupos só aparece quando tem algum item.
-- **No meio, o grafo:** o domínio escolhido no centro e os segredos dele em volta, cada um ligado por uma aresta. A marca diz o tipo: `●` token, `◆` chave SSH, `■` conexão de banco. Um segredo com outros donos leva `+N` depois do nome (N é o número dos outros donos) e aparece também no grafo de cada um deles. Com mais de 8 segredos, eles se dividem em anéis: 8 no primeiro, 12 no segundo, 16 no terceiro.
+- **No meio, o grafo:** o domínio escolhido no centro e os segredos dele em volta, cada um ligado por uma aresta. A marca diz o tipo: `●` token, `◆` chave SSH, `■` conexão de banco, `▲` identidade de cloud. Um segredo com outros donos leva `+N` depois do nome (N é o número dos outros donos) e aparece também no grafo de cada um deles. Com mais de 8 segredos, eles se dividem em anéis: 8 no primeiro, 12 no segundo, 16 no terceiro.
 - **À direita, os detalhes** do segredo em foco: o tipo, o valor falso (ou a impressão digital de uma chave SSH), as ferramentas e todos os domínios donos. De uma conexão de banco: o tipo, o servidor, a porta, o banco e o usuário, sem a senha.
 
 **Zoom:** o texto do terminal não muda de tamanho. O zoom, de 0.5x a 2.0x, muda a distância entre os nós e quanto cada um mostra: abaixo de 0.7x, só a marca; até 1.3x, a marca e o nome; daí em diante, um cartão com o nome, o tipo e as ferramentas. O rodapé mostra o zoom atual.
@@ -178,6 +178,10 @@ sandmux run opencode --ssh-key github
 Numa sessão com agente, `/etc/ssh/ssh_config.d` vira uma cópia dos arquivos `.conf` do sistema, do usuário do sandbox: sem isso, o `ssh` recusa os arquivos incluídos, que dentro do sandbox aparecem com o dono `nobody`.
 
 Chaves em hardware (YubiKey) e agentes de terceiros (como o do 1Password) não são atendidos: o agente do sandmux só usa as chaves do cofre.
+
+## Identidades de cloud
+
+O cofre também guarda identidades de cloud (`sandmux vault add-cloud gcp <nome>`): o agente usa o `gcloud` e as bibliotecas do Google com um token falso, e o real fica fora do sandbox, com o daemon. Na TUI e no grafo, uma identidade aparece no domínio `*.googleapis.com`, só para leitura: `x` apaga. Detalhes em [cloud.md](cloud.md).
 
 ## Conexões de banco
 

@@ -58,6 +58,7 @@ wayland-protocols.workspace = true
 png.workspace = true
 ssh-key.workspace = true
 rsa.workspace = true
+base64.workspace = true
 signature.workspace = true
 tokio-postgres.workspace = true
 mysql_async.workspace = true

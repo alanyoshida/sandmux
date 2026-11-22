@@ -180,6 +180,8 @@ Ctrl+b `i` na TUI, ou `sandmux chat "pergunta"`, abre uma aba de chat com um mod
 
 `sandmux vault init` cria um cofre cifrado com senha (Argon2id e XChaCha20-Poly1305) para chaves de API e tokens, fora do sandbox. O daemon sobe com ele trancado; a TUI pede a senha ao abrir, ou `sandmux vault unlock` no terminal. Opcionalmente, `sandmux vault keyring on` guarda a senha no keyring do sistema, e o daemon abre o cofre sozinho. Os valores de `--pass-env` vão para o cofre, e uma sessão que os usa volta sozinha depois de um reboot, assim que o cofre é desbloqueado. `sandmux vault import` pede os valores reais das chaves que a importação trocou por falsas. Detalhes em [docs/vault.md](docs/vault.md).
 
+Para o GCP, `sandmux vault add-cloud gcp <nome>` guarda uma identidade de cloud: o agente usa o `gcloud` com um token falso, e o gateway põe o real, que nunca entra no sandbox. Detalhes em [docs/cloud.md](docs/cloud.md).
+
 Com a chave do provedor no cofre (`sandmux vault add openrouter --domain openrouter.ai`), uma sessão do opencode ou do hermes recebe só um valor falso; o gateway troca o falso pelo real no pedido ao `openrouter.ai`, e a chave nunca entra no sandbox. O `--pass-env` deixa de ser necessário para as chaves de inferência.
 
 O mesmo vale para as ferramentas de desenvolvimento: com um token do GitHub no cofre (`sandmux vault add github --domain github.com`), o `gh` e o `git push` por HTTPS usam um valor falso, e o gateway o troca pelo real, inclusive dentro do `Authorization: Basic`. Registries privados de npm, pip, cargo e Docker funcionam do mesmo jeito (`--tool npm|pip|cargo|docker`).
@@ -293,6 +295,7 @@ O projeto usa [OpenSpec](https://github.com/Fission-AI/OpenSpec) para planejar c
 | [docs/limits.md](docs/limits.md) | Tetos de memória e de processos: padrões, ajuste, escopo do systemd e medição |
 | [docs/window.md](docs/window.md) | Janelas e áudio do desktop: modo restrito pelo security-context e o repassador do Wayland, modo direto, áudio e limites |
 | [docs/vault.md](docs/vault.md) | Cofre de segredos: criar, desbloquear, segredos, troca no tráfego, ferramentas (`gh`, `git`, `npm`, `pip`, `cargo`, `docker`), chaves SSH e o agente SSH, chaves da importação, `--pass-env` na restauração e como é guardado |
+| [docs/cloud.md](docs/cloud.md) | Credenciais de cloud: identidades de GCP no cofre (referência ao `gcloud` do host ou cópia), o falso na aba, a troca no gateway, o IAM e os limites |
 | [docs/database.md](docs/database.md) | MCP de banco: conexões no cofre, `--db`, as ferramentas, o registro das queries e os limites |
 | [docs/chat.md](docs/chat.md) | Chat com os modelos: o modal Ctrl+b `i`, `sandmux chat`, a aba de chat, o modal de comando Ctrl+b `g`, modelos e provedores, `[assistant]`, o confinamento e a conversa guardada |
 | [docs/hermes.md](docs/hermes.md) | Hermes: a sessão do gateway (`--gateway`), o reinício, a espera pelo cofre, os tokens dos canais e o webhook do Telegram |

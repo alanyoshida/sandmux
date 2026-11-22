@@ -2,6 +2,7 @@
 //! presets de harness, compostos numa [`sandmux_spec::LaunchSpec`].
 
 pub mod assistant;
+pub mod cloudtab;
 pub mod compose;
 pub mod config;
 pub mod git;

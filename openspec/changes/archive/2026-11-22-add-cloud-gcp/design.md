@@ -50,7 +50,7 @@ As decisões do usuário (2026-11-22) estão no proposal. Elas moldam este desig
 
 **7. Os domínios donos são fixos por provedor.** No GCP, `*.googleapis.com` entra na lista de decifração de toda aba pela regra que já existe ("os domínios donos dos segredos do cofre desbloqueado"), sem regra nova de rede. O `oauth2.googleapis.com` está dentro desse padrão.
 
-**8. O aviso usa o canal que já existe.** O aviso da TUI, mais a notificação do desktop do change 48 quando ela está ligada, aparece uma vez por identidade, até o real voltar.
+**8. O aviso usa os canais que já existem.** A notificação do desktop do change 48, quando ela está ligada, e uma linha no registro do daemon, uma vez por identidade, até o real voltar. A própria resposta `invalid_grant` diz ao agente o que fazer no host. Um aviso na TUI ficou de fora: o daemon não tem hoje um canal de avisos para a TUI fora das abas.
 
 ## Risks / Trade-offs
 

@@ -1705,6 +1705,16 @@ impl App {
                     (Key::Char('s'), _) => {
                         s.vault.form = Some(VaultForm::new(FormKind::AddSsh, String::new()))
                     }
+                    (Key::Char('d' | 'v'), Some(e)) if e.kind == "cloud" => {
+                        s.note = Some((
+                            sandmux_spec::tr!(
+                                "uma identidade de cloud não muda: apague (x) e guarde de novo com `sandmux vault add-cloud`",
+                                "a cloud identity does not change: remove it (x) and store it again with `sandmux vault add-cloud`"
+                            )
+                            .into(),
+                            true,
+                        ))
+                    }
                     (Key::Char('d'), Some(e)) => {
                         s.vault.form = Some(VaultForm::new(
                             FormKind::Domains(e.name.clone()),
@@ -1877,6 +1887,16 @@ impl App {
             (Key::Char('s'), _) => {
                 s.vault.form =
                     Some(VaultForm::new(FormKind::AddSsh, String::new()).prefill(3, domain))
+            }
+            (Key::Char('d' | 'v'), Some(e)) if e.kind == "cloud" => {
+                s.note = Some((
+                    tr!(
+                        "uma identidade de cloud não muda: apague (x) e guarde de novo com `sandmux vault add-cloud`",
+                        "a cloud identity does not change: remove it (x) and store it again with `sandmux vault add-cloud`"
+                    )
+                    .into(),
+                    true,
+                ))
             }
             (Key::Char('d'), Some(e)) => {
                 s.vault.form = Some(VaultForm::new(

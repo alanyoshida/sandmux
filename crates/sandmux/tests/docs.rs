@@ -452,7 +452,8 @@ fn documentacao_do_cofre_acompanha_o_codigo() {
         "`h` `j` `k` `l`",
         "\"Sem domínio\"",
         "\"Bancos\"",
-        "`●` token, `◆` chave SSH, `■` conexão de banco",
+        "`●` token, `◆` chave SSH, `■` conexão de banco, `▲` identidade de cloud",
+        "sandmux vault add-cloud gcp",
     ] {
         assert!(doc.contains(c), "docs/vault.md não cita {c}");
     }
@@ -466,6 +467,38 @@ fn documentacao_do_cofre_acompanha_o_codigo() {
             .unwrap();
     assert!(c.tui.graph_blocks);
     assert!(!sandmux_policy::config::TuiConfig::default().graph_blocks);
+}
+
+#[test]
+fn documentacao_das_credenciais_de_cloud_acompanha_o_codigo() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let doc = std::fs::read_to_string(format!("{root}/docs/cloud.md")).unwrap();
+    for c in [
+        "sandmux vault add-cloud gcp",
+        "--configuration",
+        "--copy-adc",
+        "--copy-key",
+        "--default",
+        "gcloud config config-helper",
+        "auth/access_token_file",
+        "application_default_credentials.json",
+        "gcloud config configurations activate",
+        "*.googleapis.com",
+        "oauth2.googleapis.com",
+        "invalid_grant",
+        "iam.serviceAccountKeys.create",
+        "Secret Manager",
+        "gRPC",
+        "5 minutos",
+    ] {
+        assert!(doc.contains(c), "docs/cloud.md não cita {c}");
+    }
+    assert!(sandmux_policy::compose::CA_VARS.contains(&"CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE"));
+    assert!(doc.contains("CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE"));
+    assert!(doc.contains(sandmux_policy::cloudtab::GCLOUD_DIR));
+    assert_eq!(sandmux_spec::net::GCP_ACCESS_PREFIX, "ya29.");
+    let readme = std::fs::read_to_string(format!("{root}/README.md")).unwrap();
+    assert!(readme.contains("(docs/cloud.md)"));
 }
 
 #[test]

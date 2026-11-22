@@ -2246,6 +2246,61 @@ fn grafo_do_cofre_edita_rele_e_desbloqueia() {
 }
 
 #[test]
+fn grafo_do_cofre_com_identidade_de_cloud() {
+    let e = Env::new();
+    vault_init(&e);
+    let adc = e
+        .home
+        .join(".config/gcloud/application_default_credentials.json");
+    std::fs::create_dir_all(adc.parent().unwrap()).unwrap();
+    std::fs::write(
+        &adc,
+        r#"{"type":"authorized_user","client_id":"c","client_secret":"s","refresh_token":"1//REFRESH-REAL-TUI"}"#,
+    )
+    .unwrap();
+    let out = vault(&e, &["add-cloud", "gcp", "pessoal", "--copy-adc"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    sessao(&e, &e.work);
+    let mut t = tui_cols(&e, 120);
+    t.wait_text(&tab(1, "shell:app"));
+    // Na seção Cofre, o tipo da identidade.
+    open_vault_section(&mut t);
+    t.wait_for("identidade na lista", |s| {
+        s.lines()
+            .any(|l| l.contains("gcp:pessoal") && l.contains("cloud"))
+    });
+    t.write(b"g");
+    t.wait_text("sandmux · cofre · grafo");
+    t.wait_text("│ *.googleapis.com │");
+    t.wait_text("▲ gcp:pessoal");
+    t.write(b"\t");
+    t.wait_text("cloud · gcp");
+    t.wait_text("cópia: ADC");
+    t.wait_text("falso       ya29.sandmux-");
+    t.wait_text("x apaga");
+    t.with_screen(|s| {
+        let c = s.contents();
+        assert!(!c.contains("REFRESH-REAL"), "{c}");
+        assert!(!c.contains("d domínios"), "{c}");
+    });
+    // A identidade não muda pela tela; apagar funciona.
+    t.write(b"v");
+    t.wait_text("uma identidade de cloud não muda");
+    t.write(b"d");
+    t.wait_text("uma identidade de cloud não muda");
+    t.write(b"x");
+    t.wait_text("Apagar gcp:pessoal do cofre?");
+    t.write(b"s");
+    t.wait_text("gcp:pessoal apagado do cofre");
+    let list = stdout(&e.run(&e.work, &["vault", "list"]));
+    assert!(!list.contains("gcp:pessoal"), "{list}");
+    t.write(b"\x1b\x1b");
+    t.write(b"q");
+    t.write(b"\x02d");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
 fn grafo_do_cofre_sem_cofre_so_avisa() {
     let e = Env::new();
     sessao(&e, &e.work);

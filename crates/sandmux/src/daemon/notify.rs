@@ -34,6 +34,11 @@ pub enum Event {
     },
     /// Confere se há abas esperando o cofre.
     WaitingVault,
+    /// O real de uma identidade de cloud falta (a primeira vez).
+    Cloud {
+        name: String,
+        why: String,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -273,6 +278,12 @@ fn describe(shared: &Arc<Shared>, e: Event) -> Option<(String, String, Option<St
                 Box::new(move |_, _| text.clone()),
             ))
         }
+        Event::Cloud { name, why } => Some((
+            format!("cloud:{name}"),
+            trf!("sandmux · {name}", "sandmux · {name}"),
+            None,
+            Box::new(move |_, _| why.clone()),
+        )),
         Event::Ended { session, code } => {
             let name = shared.lock().sessions.get(&session)?.name.clone();
             if n.suppressed(&[session]) {

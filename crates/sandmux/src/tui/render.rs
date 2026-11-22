@@ -819,7 +819,9 @@ pub(super) fn settings_footer(s: &super::settings::Settings) -> String {
                 if v.entries.get(v.sel).is_some_and(|e| e.kind.is_empty()) {
                     k.push(t("v troca o valor", "v replaces the value"));
                 }
-                k.push(t("d domínios", "d domains"));
+                if v.entries.get(v.sel).is_none_or(|e| e.kind != "cloud") {
+                    k.push(t("d domínios", "d domains"));
+                }
                 k.push(t("x apaga", "x removes"));
             }
             k.push(t("l tranca", "l locks"));
@@ -1602,7 +1604,11 @@ fn draw_settings(f: &mut Frame, full: Rect, s: &super::settings::Settings, app: 
         for (i, e) in v.entries.iter().enumerate().skip(start).take(room.max(1)) {
             let sel = s.on_items && i == v.sel && v.form.is_none();
             let row_bg = if sel { surface } else { bg };
-            let kind = if e.kind == "ssh" { "ssh" } else { "token" };
+            let kind = match e.kind.as_str() {
+                "ssh" => "ssh",
+                "cloud" => "cloud",
+                _ => "token",
+            };
             let doms = e.domains.join(", ");
             let line = Line::from(vec![
                 Span::styled(
@@ -2043,7 +2049,9 @@ fn graph_footer(
                 k.push(t("o outro dono", "o other owner"));
             }
             if m.kind != Kind::Db {
-                k.push(t("d domínios", "d domains"));
+                if m.kind != Kind::Cloud {
+                    k.push(t("d domínios", "d domains"));
+                }
                 if m.kind == Kind::Token {
                     k.push(t("v valor", "v value"));
                 }
@@ -2353,6 +2361,59 @@ fn draw_vault_graph(
                         }
                         (m.name.clone(), l)
                     }
+                    (_, Some(m)) if m.kind == Kind::Cloud => {
+                        let mut l = Vec::new();
+                        if let Some(e) = v.entries.iter().find(|e| e.name == m.name)
+                            && let Some(c) = &e.cloud
+                        {
+                            l.push(kv(
+                                tr!("tipo", "type"),
+                                &format!("cloud · {}", c.provider),
+                                false,
+                            ));
+                            l.push(kv(
+                                tr!("fonte", "source"),
+                                &crate::vaultcmd::cloud_source(c),
+                                false,
+                            ));
+                            l.push(kv(
+                                tr!("conta", "account"),
+                                if c.account.is_empty() {
+                                    "—"
+                                } else {
+                                    &c.account
+                                },
+                                c.account.is_empty(),
+                            ));
+                            if !c.project.is_empty() {
+                                l.push(kv(tr!("projeto", "project"), &c.project, false));
+                            }
+                            l.push(kv(
+                                tr!("padrão", "default"),
+                                if c.default {
+                                    tr!("sim", "yes")
+                                } else {
+                                    tr!("não", "no")
+                                },
+                                false,
+                            ));
+                            l.push(kv(tr!("token real", "real token"), never, true));
+                            l.push(kv(
+                                tr!("falso", "fake"),
+                                e.fake.as_deref().unwrap_or("—"),
+                                false,
+                            ));
+                            l.push(Line::raw(""));
+                            l.push(Line::styled(
+                                tr!(
+                                    "o real fica fora do sandbox; x apaga",
+                                    "the real one stays outside the sandbox; x removes"
+                                ),
+                                base.fg(muted),
+                            ));
+                        }
+                        (m.name.clone(), l)
+                    }
                     (_, Some(m)) => {
                         let mut l = Vec::new();
                         if let Some(e) = v.entries.iter().find(|e| e.name == m.name) {
@@ -2607,6 +2668,7 @@ fn draw_vault_graph(
                                         .map(|d| d.kind.clone())
                                         .unwrap_or_default(),
                                     Kind::Ssh => tr!("chave ssh", "ssh key").to_string(),
+                                    Kind::Cloud => "cloud".to_string(),
                                     Kind::Token => {
                                         let tools = v
                                             .entries

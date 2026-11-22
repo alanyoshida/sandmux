@@ -40,6 +40,8 @@ pub enum Kind {
     Token,
     Ssh,
     Db,
+    /// Uma identidade de cloud.
+    Cloud,
 }
 
 impl Kind {
@@ -49,6 +51,7 @@ impl Kind {
             Kind::Token => '●',
             Kind::Ssh => '◆',
             Kind::Db => '■',
+            Kind::Cloud => '▲',
         }
     }
 }
@@ -84,10 +87,10 @@ pub fn build(entries: &[VaultEntry], dbs: &[DbEntry]) -> Vec<Row> {
     let mut by_domain: BTreeMap<&str, Vec<Member>> = BTreeMap::new();
     let mut none = Vec::new();
     for e in entries.iter().filter(|e| e.kind != "db") {
-        let kind = if e.kind == "ssh" {
-            Kind::Ssh
-        } else {
-            Kind::Token
+        let kind = match e.kind.as_str() {
+            "ssh" => Kind::Ssh,
+            "cloud" => Kind::Cloud,
+            _ => Kind::Token,
         };
         let mut doms: Vec<&str> = e.domains.iter().map(String::as_str).collect();
         doms.sort_unstable();
@@ -434,6 +437,7 @@ mod tests {
             tools: Vec::new(),
             kind: kind.into(),
             fingerprint: String::new(),
+            cloud: None,
         }
     }
 

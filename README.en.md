@@ -180,6 +180,8 @@ Ctrl+b `i` in the TUI, or `sandmux chat "question"`, opens a chat tab with a mod
 
 `sandmux vault init` creates a password-encrypted vault (Argon2id and XChaCha20-Poly1305) for API keys and tokens, outside the sandbox. The daemon starts with it locked; the TUI asks for the password when it opens, or `sandmux vault unlock` in the terminal. Optionally, `sandmux vault keyring on` stores the password in the system keyring, and the daemon opens the vault by itself. The `--pass-env` values go into the vault, and a session that uses them comes back on its own after a reboot, as soon as the vault is unlocked. `sandmux vault import` asks for the real values of the keys that the import replaced with fake ones. Details in [docs/en/vault.md](docs/en/vault.md).
 
+For GCP, `sandmux vault add-cloud gcp <name>` stores a cloud identity: the agent uses `gcloud` with a fake token, and the gateway puts in the real one, which never enters the sandbox. Details in [docs/en/cloud.md](docs/en/cloud.md).
+
 With the provider's key in the vault (`sandmux vault add openrouter --domain openrouter.ai`), an opencode or hermes session receives only a fake value; the gateway swaps the fake for the real one in the request to `openrouter.ai`, and the key never enters the sandbox. `--pass-env` is no longer needed for inference keys.
 
 The same goes for development tools: with a GitHub token in the vault (`sandmux vault add github --domain github.com`), `gh` and `git push` over HTTPS use a fake value, and the gateway swaps it for the real one, including inside `Authorization: Basic`. Private npm, pip, cargo and Docker registries work the same way (`--tool npm|pip|cargo|docker`).
@@ -293,6 +295,7 @@ The project uses [OpenSpec](https://github.com/Fission-AI/OpenSpec) to plan each
 | [docs/en/limits.md](docs/en/limits.md) | Memory and process caps: defaults, tuning, systemd scope and measurement |
 | [docs/en/window.md](docs/en/window.md) | Desktop windows and audio: restricted mode through the security-context and the Wayland relay, direct mode, audio and limits |
 | [docs/en/vault.md](docs/en/vault.md) | Secret vault: creating, unlocking, secrets, swapping in the traffic, tools (`gh`, `git`, `npm`, `pip`, `cargo`, `docker`), SSH keys and the SSH agent, import keys, `--pass-env` on restore and how it is stored |
+| [docs/en/cloud.md](docs/en/cloud.md) | Cloud credentials: GCP identities in the vault (reference to the host `gcloud` or copy), the fake in the tab, the swap in the gateway, IAM and the limits |
 | [docs/en/database.md](docs/en/database.md) | Database MCP: connections in the vault, `--db`, the tools, the query log and the limits |
 | [docs/en/chat.md](docs/en/chat.md) | Chat with the models: the Ctrl+b `i` modal, `sandmux chat`, the chat tab, the Ctrl+b `g` command modal, models and providers, `[assistant]`, the confinement and the stored conversation |
 | [docs/en/hermes.md](docs/en/hermes.md) | Hermes: the gateway session (`--gateway`), the restart, the wait for the vault, the channel tokens and the Telegram webhook |

@@ -134,7 +134,7 @@ fn replace_bytes(hay: &[u8], needle: &[u8], with: &[u8]) -> Option<Vec<u8>> {
 /// segredo usado.
 pub fn swap(payload: &mut Vec<u8>, list: &[Injection]) -> Option<String> {
     let mut used = None;
-    for i in list {
+    for i in list.iter().filter(|i| crate::inject::usable(i)) {
         if let Some(out) = replace_bytes(payload, i.fake.as_bytes(), i.value.as_bytes()) {
             *payload = out;
             used.get_or_insert_with(|| i.name.clone());
@@ -190,6 +190,7 @@ mod tests {
             domains: vec!["gateway.discord.gg".into()],
             fake: fake.into(),
             value: value.into(),
+            ..Default::default()
         }
     }
 

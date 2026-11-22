@@ -1163,6 +1163,32 @@ fn daemon_group() -> Group {
         )),
         Err(e) => Check::item(State::Fail, status, format!("{e:#}")),
     });
+    // Identidades de cloud por referência: o real vem do `gcloud` do host.
+    if let Ok(Some(mut c)) = Conn::connect()
+        && let Ok(Msg::VaultEntries { entries }) = c.call(&Msg::VaultList)
+        && !sandmux::cloud::gcloud_present()
+    {
+        for e in entries {
+            if e.cloud.as_ref().is_some_and(|c| c.source == "host") {
+                let label = trf!("identidade {}", "identity {}", e.name);
+                let why = trf!(
+                    "a identidade {} precisa do gcloud no host, que não foi achado",
+                    "identity {} needs gcloud on the host, which was not found",
+                    e.name
+                );
+                let hint = tr!(
+                    "  Instale o gcloud e rode `gcloud auth login` no host; sem ele, o gateway\n  não tem o token real, e a aba recebe invalid_grant. Detalhes em docs/cloud.md.",
+                    "  Install gcloud and run `gcloud auth login` on the host; without it, the\n  gateway has no real token, and the tab gets invalid_grant. Details in\n  docs/en/cloud.md."
+                );
+                let mark = tr!("aviso", "warn");
+                checks.push(
+                    Check::new(State::Warn, label, why.clone())
+                        .help(flat(hint))
+                        .cli(format!("[{mark}] {why}\n{hint}")),
+                );
+            }
+        }
+    }
     let unit = systemd::unit_path();
     let label = tr!("unidade systemd de usuário", "user systemd unit");
     let direct = std::env::var("SANDMUX_DAEMON_START").as_deref() == Ok("direct");

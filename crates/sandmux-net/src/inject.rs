@@ -12,19 +12,21 @@ use sandmux_spec::net::Pattern;
 
 /// Os segredos com domínio que valem na aba de `harness`, pedidos ao
 /// daemon; vazio se o daemon não responde ou o cofre está trancado. Os
-/// segredos de login de outro harness ficam de fora.
-pub fn fetch(access: &VaultAccess, tag: &str, harness: &str) -> Vec<Injection> {
-    fetch_all(access, tag)
+/// segredos de login de outro harness ficam de fora. Com `host`, vêm também
+/// as identidades de cloud desse host, com o real atual.
+pub fn fetch(access: &VaultAccess, tag: &str, harness: &str, host: &str) -> Vec<Injection> {
+    fetch_all(access, tag, host)
         .into_iter()
         .filter(|i| sandmux_spec::net::secret_for_harness(&i.name, harness))
         .collect()
 }
 
-fn fetch_all(access: &VaultAccess, tag: &str) -> Vec<Injection> {
+fn fetch_all(access: &VaultAccess, tag: &str, host: &str) -> Vec<Injection> {
     let Ok(mut s) = UnixStream::connect(&access.socket) else {
         return Vec::new();
     };
-    let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+    // O real de uma identidade de cloud pode vir da CLI do host (até 30 s).
+    let _ = s.set_read_timeout(Some(Duration::from_secs(40)));
     let _ = s.set_write_timeout(Some(Duration::from_secs(3)));
     let hello = Msg::Hello {
         protocol: PROTOCOL,
@@ -42,7 +44,15 @@ fn fetch_all(access: &VaultAccess, tag: &str) -> Vec<Injection> {
     ) {
         return Vec::new();
     }
-    if write_control(&mut s, &Msg::VaultInject { tag: tag.into() }).is_err() {
+    if write_control(
+        &mut s,
+        &Msg::VaultInject {
+            tag: tag.into(),
+            host: host.into(),
+        },
+    )
+    .is_err()
+    {
         return Vec::new();
     }
     match read_frame(&mut s) {
@@ -110,10 +120,16 @@ pub fn for_host(list: Vec<Injection>, host: &str) -> Vec<Injection> {
         .collect()
 }
 
+/// Um segredo que pode ser trocado: com falso e com real (uma identidade de
+/// cloud sem o real fica com o falso).
+pub fn usable(i: &Injection) -> bool {
+    !i.fake.is_empty() && !i.value.is_empty()
+}
+
 fn replace(text: &str, list: &[Injection], used: &mut Option<String>) -> String {
     let mut out = text.to_string();
     for i in list {
-        if !i.fake.is_empty() && out.contains(&i.fake) {
+        if usable(i) && out.contains(&i.fake) {
             out = out.replace(&i.fake, &i.value);
             used.get_or_insert_with(|| i.name.clone());
         }
@@ -166,7 +182,7 @@ pub fn rewrite_path(uri: &mut hyper::Uri, list: &[Injection]) -> Option<String> 
     // O `:` do token do Telegram pode vir codificado.
     for i in list {
         let enc = i.fake.replace(':', "%3A");
-        if enc != i.fake && !i.fake.is_empty() && out.contains(&enc) {
+        if enc != i.fake && usable(i) && out.contains(&enc) {
             out = out.replace(&enc, &i.value);
             used.get_or_insert_with(|| i.name.clone());
         }
@@ -194,6 +210,7 @@ mod tests {
             domains: vec![domain.into()],
             fake: fake.into(),
             value: value.into(),
+            ..Default::default()
         }
     }
 

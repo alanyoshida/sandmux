@@ -15,6 +15,7 @@ pub fn init_language() -> sandmux_spec::lang::Lang {
     }
 }
 pub mod client;
+pub mod cloud;
 pub mod daemon;
 pub mod discover;
 pub mod docker;
