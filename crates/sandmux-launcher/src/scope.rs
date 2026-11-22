@@ -105,15 +105,14 @@ fn seqpacket() -> std::io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
-/// Conecta ao auxiliar root.
-fn connect() -> Result<OwnedFd, String> {
-    connect_fail().map_err(Fail::message)
+/// Conecta ao auxiliar root, separando o socket que não existe (o auxiliar
+/// não está instalado) do auxiliar que não atende (a troca de auxiliar).
+fn connect_fail() -> Result<OwnedFd, Fail> {
+    connect_at(&socket_path())
 }
 
-/// Como [`connect`], separando o socket que não existe (o auxiliar não está
-/// instalado) do auxiliar que não atende (a troca de auxiliar).
-fn connect_fail() -> Result<OwnedFd, Fail> {
-    let path = socket_path();
+fn connect_at(path: &std::path::Path) -> Result<OwnedFd, Fail> {
+    let path = path.to_path_buf();
     let sock = seqpacket().map_err(|e| Fail::NoAnswer(e.to_string()))?;
     let addr = nix::sys::socket::UnixAddr::new(&path).map_err(|e| Fail::NoAnswer(e.to_string()))?;
     nix::sys::socket::connect(sock.as_raw_fd(), &addr).map_err(|e| {
@@ -145,19 +144,7 @@ enum Fail {
     Refused(String),
 }
 
-impl Fail {
-    fn message(self) -> String {
-        match self {
-            Fail::NoAnswer(m) | Fail::Missing(m) | Fail::Refused(m) => m,
-        }
-    }
-}
-
 /// Lê a resposta do auxiliar, com um prazo de 10 s.
-fn reply(sock: &OwnedFd) -> Result<serde_json::Value, String> {
-    answer(sock).map_err(Fail::message)
-}
-
 fn answer(sock: &OwnedFd) -> Result<serde_json::Value, Fail> {
     let tv = libc::timeval {
         tv_sec: 10,
@@ -198,17 +185,13 @@ fn answer(sock: &OwnedFd) -> Result<serde_json::Value, Fail> {
 /// O auxiliar pode completar o confinamento (o pedido `scope`)? `Err` com
 /// o motivo.
 pub fn status() -> Result<(), String> {
-    let sock = connect()?;
-    let req = serde_json::json!({"op": "status"}).to_string();
-    sendmsg::<()>(
-        sock.as_raw_fd(),
-        &[IoSlice::new(req.as_bytes())],
-        &[],
-        MsgFlags::MSG_NOSIGNAL,
-        None,
-    )
-    .map_err(|e| e.to_string())?;
-    let v = reply(&sock)?;
+    status_at(&socket_path())
+}
+
+/// Como [`status`], no socket dado. Tenta de novo como o registro: na troca,
+/// o auxiliar velho fecha as conexões novas sem responder.
+fn status_at(path: &std::path::Path) -> Result<(), String> {
+    let v = retry(RETRY_FOR, MISSING_FOR, RETRY_EVERY, || try_status(path))?;
     if v["scope"] == true {
         return Ok(());
     }
@@ -297,6 +280,20 @@ fn retry<T>(
             Err(Fail::NoAnswer(_)) => std::thread::sleep(every),
         }
     }
+}
+
+fn try_status(path: &std::path::Path) -> Result<serde_json::Value, Fail> {
+    let sock = connect_at(path)?;
+    let req = serde_json::json!({"op": "status"}).to_string();
+    sendmsg::<()>(
+        sock.as_raw_fd(),
+        &[IoSlice::new(req.as_bytes())],
+        &[],
+        MsgFlags::MSG_NOSIGNAL,
+        None,
+    )
+    .map_err(|e| Fail::NoAnswer(e.to_string()))?;
+    answer(&sock)
 }
 
 fn try_register(ns: &OwnedFd, params: &TabScope) -> Result<OwnedFd, Fail> {
@@ -484,6 +481,49 @@ mod tests {
             }
         });
         assert!(r.is_ok(), "{r:?}");
+    }
+
+    /// Um auxiliar falso em `path`: fecha as `drop` primeiras conexões sem
+    /// responder (o auxiliar velho na saída limpa) e responde ao `status` da
+    /// seguinte.
+    fn fake_helper(path: &std::path::Path, drop: usize) -> std::thread::JoinHandle<usize> {
+        let fd = seqpacket().unwrap();
+        let addr = nix::sys::socket::UnixAddr::new(path).unwrap();
+        nix::sys::socket::bind(fd.as_raw_fd(), &addr).unwrap();
+        // SAFETY: listen num socket ligado.
+        assert_eq!(unsafe { libc::listen(fd.as_raw_fd(), 8) }, 0);
+        std::thread::spawn(move || {
+            let mut n = 0;
+            loop {
+                // SAFETY: accept num socket que escuta.
+                let c = unsafe {
+                    libc::accept(fd.as_raw_fd(), std::ptr::null_mut(), std::ptr::null_mut())
+                };
+                assert!(c >= 0, "{}", std::io::Error::last_os_error());
+                // SAFETY: descritor recém-aceito.
+                let c = unsafe { OwnedFd::from_raw_fd(c) };
+                n += 1;
+                if n <= drop {
+                    continue;
+                }
+                let mut buf = [0u8; 4096];
+                // SAFETY: recv escreve no máximo buf.len() bytes.
+                unsafe { libc::recv(c.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len(), 0) };
+                let r = br#"{"ok":true,"scope":true}"#;
+                // SAFETY: send lê r.len() bytes de r.
+                unsafe { libc::send(c.as_raw_fd(), r.as_ptr().cast(), r.len(), 0) };
+                return n;
+            }
+        })
+    }
+
+    #[test]
+    fn status_atravessa_a_saida_do_auxiliar() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("helper.sock");
+        let srv = fake_helper(&path, 2);
+        assert_eq!(status_at(&path), Ok(()));
+        assert_eq!(srv.join().unwrap(), 3);
     }
 
     #[test]
