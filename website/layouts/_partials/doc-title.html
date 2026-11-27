@@ -1,0 +1,8 @@
+{{- /* Título da página: o do front matter ou o primeiro "# " do arquivo. */ -}}
+{{- $t := .Title -}}
+{{- if not $t -}}
+  {{- with findRESubmatch `(?m)^# (.+)$` .RawContent 1 -}}
+    {{- $t = index (index . 0) 1 -}}
+  {{- end -}}
+{{- end -}}
+{{- return $t -}}

@@ -1,0 +1,9 @@
+{{- /* Primeiro parágrafo de prosa do doc, sem título, citação, código nem tabela. */ -}}
+{{- $out := "" -}}
+{{- range split .RawContent "\n\n" -}}
+  {{- $b := trim . " \n" -}}
+  {{- if and (not $out) $b (not (findRE `^(#|>|\x60{3}|\||- |\* |\d+\. )` $b 1)) -}}
+    {{- $out = $b -}}
+  {{- end -}}
+{{- end -}}
+{{- return ($out | markdownify | plainify | htmlUnescape | truncate 180) -}}

@@ -4,6 +4,8 @@
 
 `sandmux-helper` is the only part of sandmux that runs as root. It exists for one thing: to attach to the cgroup of a folder's [private Docker](docker.md) the BPF LSM programs that decide, in the kernel, what containers can open and change. Without it, the rest of sandmux works the same, and the private Docker starts with the unprivileged protections only. On a kernel with Landlock below ABI 6 (Ubuntu 24.04 with 6.8), it also completes the confinement of each tab ([sandbox scope](#sandbox-scope)), and then the sandbox only starts with it.
 
+Where the helper fits in the protection levels is in [architecture.md](architecture.md#protection-levels).
+
 ## What it does
 
 The daemon asks for the confinement when a folder's private Docker starts, and the helper does two things:

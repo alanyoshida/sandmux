@@ -4,6 +4,8 @@
 
 Each sandbox has its own network. No packet from the agent leaves without going through the sandmux gateway, which redoes each connection from the host, logs the destination and decides by the tab's policy: the network mode, the denylist and the allowlist.
 
+Where the gateway sits in the architecture is in [architecture.md](architecture.md#network), and what the network prevents, and what it does not, in [security.md](security.md#known-limits).
+
 ## How it works
 
 ```text

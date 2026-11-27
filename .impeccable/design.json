@@ -1,0 +1,900 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-27T19:56:29+00:00",
+  "title": "Design System: sandmux",
+  "extensions": {
+    "colorMeta": {
+      "sand": {
+        "role": "primary",
+        "displayName": "Areia",
+        "canonical": "#e8b04b",
+        "oklch": "oklch(79.1% 0.133 79.3)",
+        "tonalRamp": [
+          "#120900",
+          "#342100",
+          "#593c00",
+          "#825800",
+          "#ac7700",
+          "#c89d52",
+          "#e6c48d",
+          "#ffebc5"
+        ],
+        "cssVar": "--accent-fill (e --accent no escuro)",
+        "mode": "both"
+      },
+      "sand-hover": {
+        "role": "primary",
+        "displayName": "Areia acesa",
+        "canonical": "#f0c062",
+        "oklch": "oklch(83.2% 0.125 82.4)",
+        "tonalRamp": [
+          "#120a00",
+          "#322200",
+          "#563d00",
+          "#7e5a00",
+          "#a67a08",
+          "#c49f58",
+          "#e2c591",
+          "#ffecc8"
+        ],
+        "cssVar": "--accent-fill-hover",
+        "mode": "both"
+      },
+      "on-sand": {
+        "role": "primary",
+        "displayName": "Tinta sobre areia",
+        "canonical": "#1d1505",
+        "oklch": "oklch(20.1% 0.031 84.0)",
+        "tonalRamp": [
+          "#0d0b08",
+          "#28251e",
+          "#474136",
+          "#686051",
+          "#8b816e",
+          "#aca494",
+          "#cfc8bc",
+          "#f3eee5"
+        ],
+        "cssVar": "--on-accent",
+        "mode": "both"
+      },
+      "sand-ink": {
+        "role": "primary",
+        "displayName": "Areia escura",
+        "canonical": "#8f6210",
+        "oklch": "oklch(53.1% 0.106 75.7)",
+        "tonalRamp": [
+          "#120901",
+          "#322107",
+          "#563c13",
+          "#7e591f",
+          "#a67930",
+          "#c49e67",
+          "#e2c49b",
+          "#ffebce"
+        ],
+        "cssVar": "--accent (claro)",
+        "mode": "light"
+      },
+      "logo-sand": {
+        "role": "primary",
+        "displayName": "Areia do favicon",
+        "canonical": "#9a6a12",
+        "oklch": "oklch(56.1% 0.112 75.8)",
+        "tonalRamp": [
+          "#120901",
+          "#332105",
+          "#573c0e",
+          "#7f5919",
+          "#a87828",
+          "#c69d63",
+          "#e3c498",
+          "#ffebcc"
+        ],
+        "mode": "light"
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Papel",
+        "canonical": "#faf9f6",
+        "oklch": "oklch(98.2% 0.004 91.4)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252524",
+          "#424240",
+          "#62615f",
+          "#838280",
+          "#a6a5a3",
+          "#cac9c7",
+          "#efeeed"
+        ],
+        "cssVar": "--bg (claro)",
+        "mode": "light"
+      },
+      "paper-raised": {
+        "role": "neutral",
+        "displayName": "Papel elevado",
+        "canonical": "#ffffff",
+        "oklch": "oklch(100.0% 0.000 89.9)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ],
+        "cssVar": "--bg-raised (claro)",
+        "mode": "light"
+      },
+      "paper-sunken": {
+        "role": "neutral",
+        "displayName": "Papel rebaixado",
+        "canonical": "#f1efe9",
+        "oklch": "oklch(95.2% 0.008 91.5)",
+        "tonalRamp": [
+          "#0b0b0a",
+          "#262523",
+          "#43423f",
+          "#62615d",
+          "#84827d",
+          "#a6a5a0",
+          "#cac9c5",
+          "#efeeec"
+        ],
+        "cssVar": "--bg-sunken (claro)",
+        "mode": "light"
+      },
+      "paper-line": {
+        "role": "neutral",
+        "displayName": "Linha (claro)",
+        "canonical": "#e2dfd6",
+        "oklch": "oklch(90.4% 0.013 91.5)",
+        "tonalRamp": [
+          "#0c0b0a",
+          "#262522",
+          "#43423d",
+          "#63615b",
+          "#85827a",
+          "#a7a59e",
+          "#cbc9c4",
+          "#f0eeeb"
+        ],
+        "cssVar": "--line (claro)",
+        "mode": "light"
+      },
+      "paper-line-strong": {
+        "role": "neutral",
+        "displayName": "Linha forte (claro)",
+        "canonical": "#cdc9bd",
+        "oklch": "oklch(83.6% 0.017 91.6)",
+        "tonalRamp": [
+          "#0c0b09",
+          "#262521",
+          "#44423c",
+          "#646158",
+          "#868277",
+          "#a8a59c",
+          "#cbc9c2",
+          "#f0eee9"
+        ],
+        "cssVar": "--line-strong (claro)",
+        "mode": "light"
+      },
+      "paper-code": {
+        "role": "neutral",
+        "displayName": "Código no papel",
+        "canonical": "#f3f1ec",
+        "oklch": "oklch(95.8% 0.007 88.6)",
+        "tonalRamp": [
+          "#0b0b0a",
+          "#262523",
+          "#43423f",
+          "#62615e",
+          "#84827e",
+          "#a6a5a1",
+          "#cac9c6",
+          "#efeeec"
+        ],
+        "cssVar": "--code-bg (claro)",
+        "mode": "light"
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Tinta",
+        "canonical": "#16181d",
+        "oklch": "oklch(20.9% 0.010 268.2)",
+        "tonalRamp": [
+          "#0b0b0c",
+          "#242527",
+          "#404246",
+          "#5f6166",
+          "#808289",
+          "#a3a5aa",
+          "#c7c9cd",
+          "#edeef1"
+        ],
+        "cssVar": "--text (claro)",
+        "mode": "light"
+      },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Tinta 2",
+        "canonical": "#464b55",
+        "oklch": "oklch(41.2% 0.018 264.4)",
+        "tonalRamp": [
+          "#0a0b0d",
+          "#232529",
+          "#3f4248",
+          "#5d616a",
+          "#7d828d",
+          "#a0a5ae",
+          "#c5c9d0",
+          "#eceef4"
+        ],
+        "cssVar": "--text-2 (claro)",
+        "mode": "light"
+      },
+      "ink-muted": {
+        "role": "neutral",
+        "displayName": "Tinta apagada",
+        "canonical": "#646a76",
+        "oklch": "oklch(52.3% 0.020 264.4)",
+        "tonalRamp": [
+          "#0a0b0d",
+          "#23252a",
+          "#3f4249",
+          "#5c616b",
+          "#7c828f",
+          "#a0a5b0",
+          "#c5c9d1",
+          "#eceef4"
+        ],
+        "cssVar": "--muted (claro)",
+        "mode": "light"
+      },
+      "graphite": {
+        "role": "neutral",
+        "displayName": "Grafite",
+        "canonical": "#141414",
+        "oklch": "oklch(19.1% 0.000 89.9)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ],
+        "cssVar": "--bg (escuro)",
+        "mode": "dark"
+      },
+      "graphite-raised": {
+        "role": "neutral",
+        "displayName": "Grafite elevado",
+        "canonical": "#1b1b1b",
+        "oklch": "oklch(22.2% 0.000 89.9)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ],
+        "cssVar": "--bg-raised e --code-bg (escuro)",
+        "mode": "dark"
+      },
+      "graphite-sunken": {
+        "role": "neutral",
+        "displayName": "Grafite rebaixado",
+        "canonical": "#212121",
+        "oklch": "oklch(24.8% 0.000 89.9)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ],
+        "cssVar": "--bg-sunken (escuro)",
+        "mode": "dark"
+      },
+      "graphite-line": {
+        "role": "neutral",
+        "displayName": "Linha (escuro)",
+        "canonical": "#2c2c2c",
+        "oklch": "oklch(29.3% 0.000 89.9)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ],
+        "cssVar": "--line (escuro)",
+        "mode": "dark"
+      },
+      "graphite-line-strong": {
+        "role": "neutral",
+        "displayName": "Linha forte (escuro)",
+        "canonical": "#3d3d3d",
+        "oklch": "oklch(36.0% 0.000 89.9)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ],
+        "cssVar": "--line-strong (escuro)",
+        "mode": "dark"
+      },
+      "chalk": {
+        "role": "neutral",
+        "displayName": "Giz",
+        "canonical": "#ececea",
+        "oklch": "oklch(94.3% 0.003 106.5)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252524",
+          "#424241",
+          "#616160",
+          "#828281",
+          "#a5a5a3",
+          "#c9c9c8",
+          "#eeeeee"
+        ],
+        "cssVar": "--text (escuro)",
+        "mode": "dark"
+      },
+      "chalk-2": {
+        "role": "neutral",
+        "displayName": "Giz 2",
+        "canonical": "#c0bfbb",
+        "oklch": "oklch(80.4% 0.006 95.1)",
+        "tonalRamp": [
+          "#0b0b0a",
+          "#252524",
+          "#424240",
+          "#62615e",
+          "#83827f",
+          "#a6a5a2",
+          "#cac9c7",
+          "#efeeed"
+        ],
+        "cssVar": "--text-2 (escuro)",
+        "mode": "dark"
+      },
+      "chalk-muted": {
+        "role": "neutral",
+        "displayName": "Giz apagado",
+        "canonical": "#9c9b96",
+        "oklch": "oklch(68.9% 0.007 97.4)",
+        "tonalRamp": [
+          "#0b0b0a",
+          "#252523",
+          "#43423f",
+          "#62615d",
+          "#83827e",
+          "#a6a5a1",
+          "#cac9c6",
+          "#efeeec"
+        ],
+        "cssVar": "--muted (escuro)",
+        "mode": "dark"
+      },
+      "limit-rust": {
+        "role": "tertiary",
+        "displayName": "Ferrugem",
+        "canonical": "#a3441b",
+        "oklch": "oklch(50.7% 0.136 41.4)",
+        "tonalRamp": [
+          "#170602",
+          "#3d190c",
+          "#67301a",
+          "#95482a",
+          "#c4633d",
+          "#df8d6f",
+          "#f9b89f",
+          "#ffe3d2"
+        ],
+        "cssVar": "--limit (claro)",
+        "mode": "light"
+      },
+      "limit-coral": {
+        "role": "tertiary",
+        "displayName": "Coral",
+        "canonical": "#f08a5d",
+        "oklch": "oklch(73.4% 0.138 43.9)",
+        "tonalRamp": [
+          "#170602",
+          "#3d1a09",
+          "#673017",
+          "#954825",
+          "#c46337",
+          "#df8e6b",
+          "#f9b89d",
+          "#ffe3d0"
+        ],
+        "cssVar": "--limit (escuro)",
+        "mode": "dark"
+      },
+      "gruvbox-bg": {
+        "role": "terminal",
+        "displayName": "Fundo Gruvbox",
+        "canonical": "#282828",
+        "oklch": "oklch(27.7% 0.000 89.9)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ],
+        "cssVar": "--term-bg",
+        "mode": "both"
+      },
+      "gruvbox-bar": {
+        "role": "terminal",
+        "displayName": "Barra Gruvbox",
+        "canonical": "#1d2021",
+        "oklch": "oklch(24.1% 0.005 219.7)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#242526",
+          "#404243",
+          "#5f6263",
+          "#7f8384",
+          "#a2a6a7",
+          "#c7c9ca",
+          "#edefef"
+        ],
+        "mode": "both"
+      },
+      "gruvbox-line": {
+        "role": "terminal",
+        "displayName": "Divisória do terminal (claro)",
+        "canonical": "#3c3836",
+        "oklch": "oklch(34.4% 0.007 48.5)",
+        "tonalRamp": [
+          "#0c0b0b",
+          "#262524",
+          "#444140",
+          "#64605f",
+          "#86817f",
+          "#a8a4a2",
+          "#cbc8c7",
+          "#f0eeed"
+        ],
+        "cssVar": "--term-line (claro)",
+        "mode": "light"
+      },
+      "gruvbox-line-dark": {
+        "role": "terminal",
+        "displayName": "Divisória do terminal (escuro)",
+        "canonical": "#32302f",
+        "oklch": "oklch(31.1% 0.003 48.6)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#262524",
+          "#434241",
+          "#636160",
+          "#848280",
+          "#a6a4a3",
+          "#cac9c8",
+          "#efeeee"
+        ],
+        "cssVar": "--term-line (escuro)",
+        "mode": "dark"
+      },
+      "gruvbox-fg": {
+        "role": "terminal",
+        "displayName": "Texto do terminal",
+        "canonical": "#ebdbb2",
+        "oklch": "oklch(89.4% 0.057 89.2)",
+        "tonalRamp": [
+          "#0e0b05",
+          "#2a2517",
+          "#4a412c",
+          "#6c6042",
+          "#90815b",
+          "#b0a485",
+          "#d2c9b0",
+          "#f5eedd"
+        ],
+        "cssVar": "--term-text",
+        "mode": "both"
+      },
+      "gruvbox-fg2": {
+        "role": "terminal",
+        "displayName": "Texto 2 do terminal",
+        "canonical": "#d5c4a1",
+        "oklch": "oklch(82.5% 0.051 85.1)",
+        "tonalRamp": [
+          "#0e0b06",
+          "#2a2419",
+          "#4a412e",
+          "#6c6046",
+          "#908060",
+          "#b1a489",
+          "#d2c8b3",
+          "#f5eedf"
+        ],
+        "mode": "both"
+      },
+      "gruvbox-gray": {
+        "role": "terminal",
+        "displayName": "Cinza Gruvbox",
+        "canonical": "#a89984",
+        "oklch": "oklch(69.0% 0.035 76.3)",
+        "tonalRamp": [
+          "#0d0b07",
+          "#29241d",
+          "#494135",
+          "#6b5f4f",
+          "#8e806c",
+          "#afa392",
+          "#d1c8ba",
+          "#f4ede4"
+        ],
+        "mode": "both"
+      },
+      "gruvbox-dot": {
+        "role": "terminal",
+        "displayName": "Bolinha Gruvbox",
+        "canonical": "#504945",
+        "oklch": "oklch(41.1% 0.012 51.9)",
+        "tonalRamp": [
+          "#0c0b0a",
+          "#272423",
+          "#45413e",
+          "#66605c",
+          "#88817c",
+          "#aaa4a0",
+          "#cdc8c5",
+          "#f1eeeb"
+        ],
+        "mode": "both"
+      },
+      "gruvbox-yellow": {
+        "role": "terminal",
+        "displayName": "Amarelo do prompt",
+        "canonical": "#fabd2f",
+        "oklch": "oklch(83.2% 0.159 83.0)",
+        "tonalRamp": [
+          "#130900",
+          "#352100",
+          "#5b3b00",
+          "#855700",
+          "#af7600",
+          "#cc9d38",
+          "#e8c47e",
+          "#ffebbc"
+        ],
+        "mode": "both"
+      }
+    },
+    "colorModes": {
+      "mechanism": "Tokens em :root de website/assets/site.css; o bloco @media (prefers-color-scheme: dark) redefine os neutros, --accent e --limit. Não há seletor de tema nem data-theme.",
+      "light": {
+        "--bg": "paper",
+        "--bg-raised": "paper-raised",
+        "--bg-sunken": "paper-sunken",
+        "--line": "paper-line",
+        "--line-strong": "paper-line-strong",
+        "--text": "ink",
+        "--text-2": "ink-2",
+        "--muted": "ink-muted",
+        "--accent": "sand-ink",
+        "--code-bg": "paper-code",
+        "--term-line": "gruvbox-line",
+        "--limit": "limit-rust"
+      },
+      "dark": {
+        "--bg": "graphite",
+        "--bg-raised": "graphite-raised",
+        "--bg-sunken": "graphite-sunken",
+        "--line": "graphite-line",
+        "--line-strong": "graphite-line-strong",
+        "--text": "chalk",
+        "--text-2": "chalk-2",
+        "--muted": "chalk-muted",
+        "--accent": "sand",
+        "--code-bg": "graphite-raised",
+        "--term-line": "gruvbox-line-dark",
+        "--limit": "limit-coral"
+      },
+      "both": {
+        "--accent-fill": "sand",
+        "--accent-fill-hover": "sand-hover",
+        "--on-accent": "on-sand",
+        "--term-bg": "gruvbox-bg",
+        "--term-text": "gruvbox-fg"
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Só o título da página inicial, em duas linhas."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Título de cada faixa da página inicial."
+      },
+      "headline-doc": {
+        "displayName": "Headline dos docs",
+        "purpose": "Título (h1) de cada página de documentação."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "h2 dos docs; h3 1.2rem e h4 1.02rem seguem a mesma família e peso."
+      },
+      "title-sm": {
+        "displayName": "Title pequeno",
+        "purpose": "Títulos de bloco da página inicial: pilhas de camadas e listas de segurança."
+      },
+      "lede": {
+        "displayName": "Lede",
+        "purpose": "Resumo ao lado do título da página inicial."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Texto corrido; 16px abaixo de 860px; parágrafos dos docs até 70ch."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Nomes de grupo do menu lateral e o rótulo do índice, em maiúsculas. Nunca acima de título."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Terminal, comandos e código, com ligaduras desligadas (font-variant-ligatures: none)."
+      }
+    },
+    "fonts": [
+      {
+        "family": "Clear Sans",
+        "files": [
+          "fonts/clear-sans-regular.woff2",
+          "fonts/clear-sans-italic.woff2",
+          "fonts/clear-sans-medium.woff2",
+          "fonts/clear-sans-bold.woff2"
+        ],
+        "weights": [
+          400,
+          500,
+          700
+        ],
+        "license": "website/static/fonts/LICENSE-clear-sans.txt",
+        "hosting": "servida pelo próprio site, font-display: swap, regular com preload"
+      },
+      {
+        "family": "Fira Code",
+        "files": [
+          "fonts/fira-code-regular.woff2",
+          "fonts/fira-code-medium.woff2"
+        ],
+        "weights": [
+          400,
+          500
+        ],
+        "license": "website/static/fonts/LICENSE-fira-code.txt",
+        "hosting": "servida pelo próprio site, font-display: swap"
+      }
+    ],
+    "shadows": [
+      {
+        "name": "status-halo",
+        "value": "0 0 0 4px color-mix(in srgb, var(--accent-fill) 22%, transparent)",
+        "purpose": "Anel de cor em volta do ponto do selo de situação. Única sombra fora de estado."
+      },
+      {
+        "name": "rail-current",
+        "value": "inset 2px 0 0 var(--accent-fill)",
+        "purpose": "Borda de areia do item atual no menu lateral dos docs."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out-expo",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Única curva de transição: cor de fundo e borda do botão."
+      },
+      {
+        "name": "duration-control",
+        "value": "160ms",
+        "purpose": "Transição de cor do botão."
+      },
+      {
+        "name": "hero-loop",
+        "value": "WebM autoplay loop muted playsinline, PNG como poster",
+        "purpose": "Gravação da TUI na abertura. Com prefers-reduced-motion: reduce, o vídeo some e o PNG parado aparece."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "toc",
+        "value": "1180px",
+        "purpose": "Abaixo dele o índice da página some e o menu cai para 220px."
+      },
+      {
+        "name": "stack",
+        "value": "980px",
+        "purpose": "Abaixo dele a primeira dobra, as camadas e a seção de segurança viram uma coluna."
+      },
+      {
+        "name": "mobile",
+        "value": "860px",
+        "purpose": "Margem de 16px, corpo de 16px, menu vira <details>, galeria e pilhas em uma coluna, terminal quebra linha."
+      },
+      {
+        "name": "narrow",
+        "value": "600px",
+        "purpose": "Navegação do cabeçalho numa segunda linha; selo de situação empilhado."
+      }
+    ],
+    "imagery": {
+      "source": "scripts/site-screens.sh com o VHS e os roteiros de website/tapes/",
+      "terminal": "Set Theme \"GruvboxDark\", Set FontFamily \"Fira Code\", FontSize 16, 1440x860, Padding 24",
+      "files": "website/static/img/: hero-{pt,en}.png e .webm, rede, cofre e config em PNG, nos dois idiomas"
+    },
+    "codeHighlight": {
+      "light": "hugo gen chromastyles --style=github",
+      "dark": "hugo gen chromastyles --style=gruvbox",
+      "file": "website/assets/chroma.css"
+    }
+  },
+  "components": [
+    {
+      "name": "Botão principal",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "A ação principal, um por tela: areia com tinta escura, cantos de 8px.",
+      "html": "<a class=\"ds-button-primary\" href=\"#\">Instalar e começar</a>",
+      "css": ".ds-button-primary { display: inline-flex; align-items: center; min-height: 44px; padding: 0 20px; border-radius: 8px; border: 1px solid var(--accent-fill, #e8b04b); background: var(--accent-fill, #e8b04b); color: var(--on-accent, #1d1505); font: 500 17px/1.65 \"Clear Sans\", ui-sans-serif, system-ui, sans-serif; text-decoration: none; transition: background-color 160ms cubic-bezier(0.16, 1, 0.3, 1), border-color 160ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-button-primary:hover { background: var(--accent-fill-hover, #f0c062); border-color: var(--accent-fill-hover, #f0c062); } .ds-button-primary:focus-visible { outline: 2px solid var(--accent-fill, #e8b04b); outline-offset: 3px; }"
+    },
+    {
+      "name": "Botão secundário",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Variante neutra definida no CSS; a página atual não usa.",
+      "html": "<a class=\"ds-button\" href=\"#\">Documentação</a>",
+      "css": ".ds-button { display: inline-flex; align-items: center; min-height: 44px; padding: 0 20px; border-radius: 8px; border: 1px solid var(--line-strong, #cdc9bd); background: var(--bg-raised, #ffffff); color: var(--text, #16181d); font: 500 17px/1.65 \"Clear Sans\", ui-sans-serif, system-ui, sans-serif; text-decoration: none; transition: border-color 160ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-button:hover { border-color: var(--muted, #646a76); } .ds-button:focus-visible { outline: 2px solid var(--accent-fill, #e8b04b); outline-offset: 3px; }"
+    },
+    {
+      "name": "Linha de instalação",
+      "kind": "custom",
+      "refersTo": "install-line",
+      "description": "O comando de instalação inteiro numa caixa de terminal Gruvbox.",
+      "html": "<pre class=\"ds-term-line\"><code><span class=\"ds-prompt\" aria-hidden=\"true\">$ </span>curl -fsSL https://github.com/alanyoshida/sandmux/releases/latest/download/install.sh | sh</code></pre>",
+      "css": ".ds-term-line { margin: 0; padding: 11px 16px; border-radius: 8px; background: var(--term-bg, #282828); color: var(--term-text, #ebdbb2); border: 1px solid var(--line-strong, #cdc9bd); font: 400 0.9rem/1.5 \"Fira Code\", ui-monospace, monospace; font-variant-ligatures: none; white-space: pre; overflow-x: auto; scrollbar-width: thin; } .ds-term-line code { font: inherit; } .ds-prompt { color: #fabd2f; user-select: none; }"
+    },
+    {
+      "name": "Janela de terminal",
+      "kind": "custom",
+      "refersTo": "terminal-window",
+      "description": "Moldura Gruvbox de cantos de 12px para a TUI gravada ou comandos, com legenda.",
+      "html": "<figure class=\"ds-window\"><div class=\"ds-window-bar\" aria-hidden=\"true\"><span></span><span></span><span></span><b>bash</b></div><pre><code><span class=\"ds-prompt\">$ </span>sandmux doctor\n<span class=\"ds-c\"># na pasta do projeto</span>\n<span class=\"ds-prompt\">$ </span>sandmux run opencode</code></pre><figcaption>O .env existe, mas não abre.</figcaption></figure>",
+      "css": ".ds-window { margin: 0; border: 1px solid var(--line-strong, #cdc9bd); border-radius: 12px; overflow: hidden; background: var(--term-bg, #282828); } .ds-window-bar { display: flex; align-items: center; gap: 7px; height: 34px; padding: 0 14px; background: #1d2021; border-bottom: 1px solid var(--term-line, #3c3836); } .ds-window-bar span { width: 10px; height: 10px; border-radius: 50%; background: #504945; } .ds-window-bar b { margin-left: 10px; font: 500 12px/1 \"Fira Code\", ui-monospace, monospace; color: #a89984; } .ds-window pre { margin: 0; padding: 20px 22px; color: var(--term-text, #ebdbb2); font: 400 0.9rem/1.7 \"Fira Code\", ui-monospace, monospace; font-variant-ligatures: none; overflow-x: auto; } .ds-prompt { color: #fabd2f; user-select: none; } .ds-c { color: #a89984; } .ds-window figcaption { padding: 12px 16px; background: var(--bg-raised, #ffffff); border-top: 1px solid var(--line, #e2dfd6); color: var(--text-2, #464b55); font: 400 0.92rem/1.5 \"Clear Sans\", ui-sans-serif, sans-serif; }"
+    },
+    {
+      "name": "Pilha de camadas",
+      "kind": "card",
+      "refersTo": "layer-stack",
+      "description": "Camadas numa moldura única com divisórias de 1px; a primeira, do agente, é um pedaço de terminal.",
+      "html": "<ol class=\"ds-stack\"><li class=\"ds-agent\"><b>agente</b><span>opencode, Claude Code, hermes</span></li><li><b>seccomp</b><span>Nega montagem, bpf, módulos, kexec e io_uring.</span></li><li><b>Landlock</b><span>O que pode ser lido, escrito e executado.</span></li></ol>",
+      "css": ".ds-stack { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line-strong, #cdc9bd); border-radius: 12px; overflow: hidden; background: var(--bg-raised, #ffffff); font: 400 17px/1.65 \"Clear Sans\", ui-sans-serif, sans-serif; color: var(--text, #16181d); } .ds-stack li { display: grid; grid-template-columns: 12rem minmax(0, 1fr); gap: 16px; align-items: baseline; padding: 16px 20px; } .ds-stack li + li { border-top: 1px solid var(--line, #e2dfd6); } .ds-stack b { font-weight: 700; } .ds-stack span { color: var(--text-2, #464b55); font-size: 0.95rem; } .ds-stack .ds-agent { background: var(--term-bg, #282828); color: var(--term-text, #ebdbb2); } .ds-stack .ds-agent b { font-family: \"Fira Code\", ui-monospace, monospace; font-weight: 500; color: #fabd2f; } .ds-stack .ds-agent span { color: #d5c4a1; } .ds-stack .ds-agent + li { border-top-color: var(--term-line, #3c3836); }"
+    },
+    {
+      "name": "Selo de situação",
+      "kind": "chip",
+      "refersTo": "status",
+      "description": "Ponto de areia com halo e os fatos do projeto, separados por divisórias de 1px.",
+      "html": "<p class=\"ds-status\"><span class=\"ds-dot\" aria-hidden=\"true\"></span><span>Em desenvolvimento, antes da v1</span><span>Linux x86_64 · MIT</span></p>",
+      "css": ".ds-status { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin: 0; color: var(--muted, #646a76); font: 400 0.9rem/1.65 \"Clear Sans\", ui-sans-serif, sans-serif; } .ds-status span:not(.ds-dot) { white-space: nowrap; } .ds-status span:not(.ds-dot) + span { padding-left: 10px; border-left: 1px solid var(--line-strong, #cdc9bd); } .ds-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-fill, #e8b04b); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-fill, #e8b04b) 22%, transparent); }"
+    },
+    {
+      "name": "Navegação do cabeçalho",
+      "kind": "nav",
+      "refersTo": "nav-link",
+      "description": "Links do cabeçalho com fundo rebaixado no hover e na página atual, e o seletor de idioma com borda.",
+      "html": "<nav class=\"ds-nav\"><a href=\"#\">Documentação</a><a href=\"#\">Arquitetura</a><a href=\"#\" aria-current=\"page\">Segurança</a><a href=\"#\">GitHub</a><a class=\"ds-lang\" href=\"#\">English</a></nav>",
+      "css": ".ds-nav { display: flex; align-items: center; gap: 4px; font: 400 0.95rem/1.65 \"Clear Sans\", ui-sans-serif, sans-serif; } .ds-nav a { color: var(--text-2, #464b55); text-decoration: none; padding: 6px 10px; border-radius: 8px; } .ds-nav a:hover, .ds-nav a[aria-current=\"page\"] { color: var(--text, #16181d); background: var(--bg-sunken, #f1efe9); } .ds-nav a:focus-visible { outline: 2px solid var(--accent-fill, #e8b04b); outline-offset: 3px; } .ds-nav .ds-lang { margin-left: 20px; border: 1px solid var(--line-strong, #cdc9bd); }"
+    },
+    {
+      "name": "Menu lateral dos docs",
+      "kind": "nav",
+      "refersTo": "sidebar-link",
+      "description": "Grupos com rótulo em maiúsculas e o item atual marcado por uma borda interna de areia.",
+      "html": "<nav class=\"ds-sidebar\"><p class=\"ds-group\">Arquitetura e segurança</p><ul><li><a href=\"#\">Arquitetura</a></li><li><a href=\"#\" aria-current=\"page\">Segurança</a></li><li><a href=\"#\">Auxiliar root</a></li></ul></nav>",
+      "css": ".ds-sidebar { font: 400 0.92rem/1.65 \"Clear Sans\", ui-sans-serif, sans-serif; width: 240px; padding-left: 10px; } .ds-group { margin: 0 0 6px; color: var(--muted, #646a76); font-size: 0.8rem; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; } .ds-sidebar ul { list-style: none; margin: 0; padding: 0; } .ds-sidebar a { display: block; padding: 5px 10px; margin-left: -10px; border-radius: 6px; color: var(--text-2, #464b55); text-decoration: none; line-height: 1.35; } .ds-sidebar a:hover { color: var(--text, #16181d); background: var(--bg-sunken, #f1efe9); } .ds-sidebar a[aria-current=\"page\"] { color: var(--text, #16181d); background: var(--bg-sunken, #f1efe9); font-weight: 500; box-shadow: inset 2px 0 0 var(--accent-fill, #e8b04b); } .ds-sidebar a:focus-visible { outline: 2px solid var(--accent-fill, #e8b04b); outline-offset: 3px; }"
+    },
+    {
+      "name": "Código nos docs",
+      "kind": "custom",
+      "refersTo": "code-inline",
+      "description": "Código em linha com fundo rebaixado e bloco de código com borda e cantos de 10px.",
+      "html": "<div class=\"ds-prose\"><p>Rode <code>sandmux doctor</code> antes de <a href=\"#\"><code>sandmux run</code></a>.</p><pre><code>sandmux net rules &lt;id&gt; != vazio -&gt; ok</code></pre></div>",
+      "css": ".ds-prose { font: 400 17px/1.65 \"Clear Sans\", ui-sans-serif, sans-serif; color: var(--text, #16181d); } .ds-prose a { color: var(--accent, #8f6210); text-decoration-thickness: 1px; text-underline-offset: 0.2em; } .ds-prose a:hover { text-decoration-thickness: 2px; } .ds-prose code { font-family: \"Fira Code\", ui-monospace, monospace; font-variant-ligatures: none; } .ds-prose :not(pre) > code { font-size: 0.86em; background: var(--bg-sunken, #f1efe9); border: 1px solid var(--line, #e2dfd6); padding: 0.08em 0.36em; border-radius: 5px; } .ds-prose a code { color: var(--accent, #8f6210); } .ds-prose pre { margin: 1.4em 0; padding: 16px 18px; border-radius: 10px; background: var(--code-bg, #f3f1ec); border: 1px solid var(--line, #e2dfd6); overflow-x: auto; font-size: 0.86rem; line-height: 1.6; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "A bancada do terminal",
+    "overview": "O site segue o padrão das páginas de ferramenta para desenvolvedores, com a régua de acabamento do Ghostty e do Zed: o produto é a estrela, a cópia é curta e verificável, e nada é enfeite. A peça central é a TUI real do sandmux, gravada pelo VHS, mostrada em janelas de terminal Gruvbox que ficam escuras nos dois temas. Em volta delas, uma superfície neutra e calma: grafite no escuro, papel morno no claro, texto em Clear Sans e um único destaque em cor de areia.\n\nA densidade é a de documentação técnica bem cuidada. A página inicial alterna faixas largas com cabeçalho curto e conteúdo concreto (tabela do que o agente enxerga, galeria de telas, pilhas de camadas, o que o sandbox impede e o que não promete, a instalação num terminal). As páginas de docs usam três colunas: menu, texto e índice. A profundidade vem de tom e de linhas de 1px, não de sombra. O site não roda JavaScript e não carrega nada de outro endereço: fontes, imagens e CSS saem do próprio site.\n\nO site recusa a fileira de cards iguais, o gradiente no título, o eyebrow acima do título e o neon no escuro.",
+    "keyCharacteristics": [
+      "Um só destaque, areia, usado em links, foco, seleção, botão principal, marca da pilha e marcadores.",
+      "A TUI em Gruvbox (fundo `#282828`) é a imagem do site; o terminal não muda com o tema.",
+      "Superfícies planas, separadas por linhas de 1px e por três tons de fundo (base, elevado, rebaixado).",
+      "Clear Sans em tudo que é texto; Fira Code em tudo que é código ou terminal, sem ligaduras.",
+      "Sem JavaScript, sem recursos de terceiros, tema só por `prefers-color-scheme`."
+    ],
+    "rules": [
+      {
+        "name": "The One Sand Rule",
+        "body": "Areia é o único destaque fora do terminal. Toda cor de ação, foco ou seleção é areia; não existe segundo destaque, azul de link nem cor de marca alternativa.",
+        "section": "colors"
+      },
+      {
+        "name": "The Terminal Stays Gruvbox Rule",
+        "body": "Janelas de terminal são Gruvbox escuro nos dois temas. O tema claro muda a página em volta, nunca o terminal; as cores Gruvbox não saem da janela.",
+        "section": "colors"
+      },
+      {
+        "name": "The Text-Sand Split Rule",
+        "body": "Areia clara (#e8b04b) é fundo ou texto sobre grafite; sobre papel, texto de destaque usa a areia escura (#8f6210).",
+        "section": "colors"
+      },
+      {
+        "name": "The No Ligatures Rule",
+        "body": "Código, `pre` e `kbd` usam `font-variant-ligatures: none`. Num site de segurança, `->`, `!=` e `==` aparecem como foram digitados.",
+        "section": "typography"
+      },
+      {
+        "name": "The Two Families Rule",
+        "body": "Clear Sans para texto e títulos, Fira Code para código e terminal. Nenhuma terceira família, nenhuma fonte de display.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Tones Rule",
+        "body": "Separe superfícies por tom e por linha de 1px, nunca por sombra projetada. Se algo precisa parecer acima, use o fundo elevado e a linha forte.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** usar areia (#e8b04b) como o único destaque: links no escuro, fundo do botão principal, seleção, foco e marca do item atual.",
+      "**Do** usar a areia escura (#8f6210) para texto de destaque sobre o papel (#faf9f6).",
+      "**Do** mostrar o produto em janelas de terminal Gruvbox (#282828) com cantos de 12px e borda de 1px, iguais nos dois temas.",
+      "**Do** separar superfícies com tom e linhas de 1px; agrupar itens relacionados numa moldura única com divisórias, como a pilha de camadas.",
+      "**Do** escrever código e comandos em Fira Code com as ligaduras desligadas.",
+      "**Do** trocar toda animação por imagem parada com `prefers-reduced-motion`.",
+      "**Do** servir fontes, imagens e CSS do próprio site e manter tudo funcionando sem JavaScript."
+    ],
+    "donts": [
+      "**Don't** usar JavaScript nem carregar recurso de terceiros (CDN, web font remota, analytics, embed).",
+      "**Don't** pôr gradiente em título.",
+      "**Don't** pôr eyebrow (rótulo pequeno em maiúsculas) acima de título; rótulo em maiúsculas só nomeia grupo de navegação.",
+      "**Don't** montar fileira de cartões iguais; use tabela, lista ou uma moldura com divisórias.",
+      "**Don't** usar neon nem brilho no escuro, nem sombra projetada para dar profundidade.",
+      "**Don't** criar um segundo destaque fora do terminal; ferrugem e coral marcam só limites.",
+      "**Don't** usar Gruvbox fora das janelas de terminal, nem clarear o terminal no tema claro."
+    ]
+  }
+}

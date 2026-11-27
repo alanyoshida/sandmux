@@ -1,0 +1,15 @@
+{{- $docs := site.GetPage "/docs" -}}
+{{- $arch := site.GetPage "/docs/architecture" -}}
+{{- $sec := site.GetPage "/docs/security" -}}
+<header class="site-header">
+  <div class="bar">
+    <a class="brand" href="{{ site.Home.RelPermalink }}">{{ partial "logo.html" . }}<span>sandmux</span></a>
+    <nav class="top-nav" aria-label="{{ i18n "menu" }}">
+      <a href="{{ $docs.RelPermalink }}"{{ if and (not .IsHome) (eq .Section "docs") (ne . $arch) (ne . $sec) }} aria-current="page"{{ end }}>{{ i18n "docs" }}</a>
+      <a href="{{ $arch.RelPermalink }}"{{ if eq . $arch }} aria-current="page"{{ end }}>{{ i18n "architecture" }}</a>
+      <a href="{{ $sec.RelPermalink }}"{{ if eq . $sec }} aria-current="page"{{ end }}>{{ i18n "security" }}</a>
+      <a href="{{ site.Params.repo }}" rel="noopener">GitHub</a>
+    </nav>
+    {{ partial "lang-switch.html" . }}
+  </div>
+</header>

@@ -49,7 +49,7 @@ Differences from the supervisor:
 - **Helper drop:** without the marks, nothing runs in the tab. The daemon freezes its scope (`cgroup.freeze`) until the helper is back (systemd starts it on the next connection) and redoes the confinement, with the current policy; the tab goes on where it stopped. Without the confinement back within 30 s, the daemon kills everything in the scope (`cgroup.kill`). On a clean exit of the helper (`systemctl restart`, an upgrade), it tells the daemon before dropping the rules; killed by force, a short window is left between the exit and the freeze.
 - **Special cases:** magic links and `/proc/self` follow the kernel and Landlock rules; a marked file stays denied through any path, because the mark belongs to the inode.
 
-The launch protection, in `sandmux stats <id>` and in the panel, shows the "file opens" line: "by the kernel" or "supervisor: <reason>". `sandmux doctor` shows whether the kernel path can apply on this machine.
+The launch protection, in `sandmux stats <id>` and in the panel, shows the "file opens" line: "by the kernel" or `supervisor: <reason>`. `sandmux doctor` shows whether the kernel path can apply on this machine.
 
 ## File policy
 
@@ -165,7 +165,7 @@ The supervisor logs from the start of the tab. When the helper takes over (right
 
 The path is what was passed to `execve`: a program called as `./script` shows as `./script`. The execution's environment is not logged. No execution is denied by this log.
 
-The launch protection, in `sandmux stats <id>` and in the panel, shows the "executions" line: "by the kernel" or "supervisor: <reason>". `sandmux files` shows the arguments after the path.
+The launch protection, in `sandmux stats <id>` and in the panel, shows the "executions" line: "by the kernel" or `supervisor: <reason>`. `sandmux files` shows the arguments after the path.
 
 ### Private Docker containers
 

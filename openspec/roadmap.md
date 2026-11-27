@@ -187,6 +187,22 @@ Pedido de 2026-11-12: os usuários serão desenvolvedores e precisam do que dese
 | Instalações globais | Camada privada de escrita sobre as toolchains (seção 2.3) |
 | `gh` e registries privados | Segredo genérico por domínio (seção 2.5) |
 
+### 2.9 Site do projeto
+
+Pedido do usuário (2026-11-27): um site no GitHub Pages para apresentar o projeto, com screenshots e uma documentação de arquitetura e segurança. Decidido na exploração do mesmo dia; os detalhes ficam no change 97.
+
+| Tema | Decisão |
+|---|---|
+| Escopo | Portal completo: página inicial com screenshots, mais a documentação inteira navegável (decisão do usuário, 2026-11-27) |
+| Gerador | Hugo, com layouts próprios, sem tema de terceiros, sem Node e sem Sass. O mdBook foi considerado e recusado pelo usuário (2026-11-27) |
+| Fonte dos docs | Fonte única: o site lê `docs/*.md` e `docs/en/*.md` como estão, por mounts do Hugo, sem cópia commitada (decisão do usuário, 2026-11-27) |
+| Arquitetura e segurança | Dois docs novos, `docs/architecture.md` e `docs/security.md`, com os pares, em `docs/` para valerem também no GitHub (decisão do agente, change 97) |
+| Idiomas e endereço | `https://alanyoshida.github.io/sandmux/`, português na raiz e inglês em `/en/`, como o README (decisão do agente, change 97) |
+| Screenshots | Gerados na máquina de desenvolvimento por roteiros do VHS, com o daemon, as pastas e o socket do auxiliar isolados, e commitados; o CI nunca roda o sandmux (decisão do usuário, 2026-11-27). PNG para telas paradas e WebM para animações, até 2 MB por arquivo (decisão do agente) |
+| Publicação | `.github/workflows/pages.yml` com `actions/deploy-pages` no push em `main`; no pull request, só o build. O Hugo é baixado com a soma conferida, sem ação de terceiros (decisão do agente) |
+| Terceiros | Nenhum recurso de outro endereço nas páginas: sem CDN, fonte externa nem analytics (decisão do agente) |
+| Visual e marca | O padrão das páginas de ferramenta para desenvolvedores, feito com capricho, com a régua do Ghostty e do Zed; logo "terminal na caixa" (o prompt dentro de uma borda), destaque cor de areia (escolhas do usuário, 2026-11-27, numa rodada de direções e de logos). Fontes servidas pelo próprio site: Clear Sans (Apache 2.0) e Fira Code (OFL), cortadas para o alfabeto latino; trocaram as fontes do sistema na implementação. O contexto do produto e o sistema visual ficam em `PRODUCT.md` e `DESIGN.md` |
+
 ## 3. Arquitetura
 
 ### 3.1 Binários
@@ -600,6 +616,14 @@ Objetivo: o gateway decifra HTTP/2, e as bibliotecas gRPC funcionam num domínio
 |---|---|---|---|
 | 96 | `add-gateway-http2` | Arquivado em 2026-11-22 em `openspec/changes/archive/2026-11-22-add-gateway-http2/`, com a spec sincronizada (`tls-interception`: um requisito modificado e quatro novos). Implementado em 2026-11-22 (11 de 11 tarefas), com o `check.sh` verde (893 testes, sem processo de teste vivo), na ordem do usuário. Proposta, spec, design e tarefas validados (`openspec validate --strict`). Testes novos: `tests/http2.rs` (o `curl --http2` e o `--http1.1` numa aba contra um servidor h2 local, com a chave trocada, e o `http2 = false` do projeto), os de unidade (o ALPN do ClientHello do `rustls`, h2 nas duas pontas com a troca, os trailers e dois pedidos em paralelo, HTTP/1.1 no sandbox com h2 no destino, a URI do h2, o `host` da AWS pelo `:authority`, a chave nas camadas) e o de docs. Mudança do agente na implementação: o item `http2` da TUI fica no fim da seção de rede, para não mudar a posição dos outros. Não verificado: uma biblioteca gRPC de verdade contra o Google | O ALPN segue o cliente: o gateway lê a oferta do ClientHello, oferece o mesmo ao destino e só oferece h2 ao sandbox quando o destino negociou h2; o `serve_http` com HTTP/1.1 ou h2 em cada ponta, pedidos em paralelo no h2, trailers do gRPC; a URI absoluta para um destino h2 e o `host` da reassinatura pelo `:authority`; a chave `http2` (padrão `true`); os crates `h2` e `fnv` |
 
+### Etapa 21 - Site do projeto
+
+Objetivo: um site público no GitHub Pages que apresenta o sandmux, com screenshots, e publica a documentação inteira nos dois idiomas. Pedido do usuário (2026-11-27), com as decisões da seção 2.9.
+
+| # | Change | Situação | Conteúdo |
+|---|---|---|---|
+| 97 | `add-project-site` | Arquivado em 2026-11-27 em `openspec/changes/archive/2026-11-27-add-project-site/`, com a spec sincronizada (capacidade nova `project-site`, com 12 requisitos). Implementado em 2026-11-27 (18 de 18 tarefas), com o `check.sh` verde (898 testes, sem processo de teste vivo), o build do workflow rodado localmente, a verificação integrada no navegador e a revisão final do visual (duas rodadas de correção: fundo grafite, animação que já abre com conteúdo, camadas numa moldura só, títulos nos links entre docs, celular). Falta: ligar o Pages no repositório, PR, merge e o primeiro deploy. Proposta, spec, design e tarefas validados (`openspec validate --strict`) em 2026-11-27. Capacidade nova `project-site`, com 12 requisitos. Achados da implementação: o Hugo 0.170 trocou `lang` e `excludeFiles` dos mounts por `sites.matrix` e `files`; o HOME sintético fica no mesmo caminho do real, então os roteiros não podem imprimir caminhos do HOME; o daemon e os supervisores não herdam o ambiente da demonstração, e o script passou a reconhecê-los pelos binários copiados para `/tmp/sandmux-demo/bin`; gravar com o VHS precisa de uns 1,5 GB livres além do piso do vigia | Hugo em `website/`, os docs montados como fonte única, `docs/architecture.md` e `docs/security.md`, screenshots com o VHS isolado e o workflow `pages.yml` |
+
 ## 5. Depois da v1
 
 Sem ordem definida. Cada item vira um ou mais changes quando for priorizado.
@@ -757,6 +781,14 @@ Os changes abaixo foram arquivados em 2026-11-15 por decisão do usuário, antes
 | 83 `add-process-tree-view` | Confirmado pelo usuário em 2026-11-21 na 0.1.34 instalada ("do item 1 eu ja testei"), junto com o grafo do cofre (change 85) e a árvore com o pai pelo `/proc` (change 88). Era: Na TUI instalada, numa aba de agente com o auxiliar root: Ctrl+b `e`, seção Processos; a árvore mostra o harness e os filhos com o recuo certo, um comando lançado no shell aparece em até 1 s e some ao terminar; `+` chega ao cartão com a linha de comando; Enter entra num ramo e Esc volta; numa aba sem o auxiliar, aparece o motivo |
 | 62 `add-desktop-portal` | Confirmado pelo usuário em 2026-11-16 no build local ("instalei, ficou certo"). Era: na TUI instalada, numa aba de shell: `notify-send oi` aparece no desktop com o nome da aba; `xdg-open https://openrouter.ai` abre o navegador do host; no modo só inferência, `xdg-open https://exemplo.com` não abre, e `sandmux net` mostra a recusa; um app GTK ou Qt segue o tema escuro do desktop |
 
+### Site do projeto (change 97)
+
+- O mount de `../docs`, fora da pasta do projeto Hugo, foi provado no Hugo 0.170.1, com `sites.matrix`. A conferência da âncora de outra página no render hook funcionou, sem recursão.
+- A árvore de processos não entra na galeria: ela depende do auxiliar root, que a demonstração deixa de fora de propósito.
+- Os screenshots não falham quando a TUI muda: dependem da regra no `AGENTS.md` de rodar `scripts/site-screens.sh`.
+- O Pages precisa ser ligado pelo usuário nas configurações do repositório, com a fonte "GitHub Actions".
+- A seção 3.3 deste roadmap ainda chama de roadmap o nível do BPF, que já existe com o auxiliar root. O `docs/architecture.md` segue as specs, não esta seção.
+
 ### Decisões ainda não tomadas
 
 A última decisão antiga, o `--rw` sobre arquivos que o host executa (achado do change 3), foi decidida pelo usuário em 2026-11-15: recusar (change 40).
@@ -854,3 +886,4 @@ Novas decisões em aberto que surgirem ao propor um change devem ser anotadas aq
 | Investigar o lançamento recusado no 6.8 logo depois da troca do auxiliar root ("Sim, investigar", 2026-11-22) | Change 92 |
 | Credencial temporária de cloud ("Credencial de cloud", 2026-11-22) | Etapa 19: change 93 (GCP), change 94 (Kubernetes) e change 95 (AWS) |
 | HTTP/2 e gRPC no gateway ("HTTP/2 e gRPC", 2026-11-22) | Etapa 20: change 96 |
+| Site no GitHub Pages com screenshots e documentação de arquitetura e segurança (2026-11-27) | Etapa 21: change 97 |

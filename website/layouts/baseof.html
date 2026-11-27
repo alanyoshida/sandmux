@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="{{ site.Language.Locale }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+{{- $title := partial "doc-title.html" . | markdownify | plainify }}
+<title>{{ if .IsHome }}sandmux · {{ .Description }}{{ else }}{{ $title }} · sandmux{{ end }}</title>
+<meta name="description" content="{{ with .Description }}{{ . }}{{ else }}{{ partial "doc-summary.html" . }}{{ end }}">
+<meta name="color-scheme" content="light dark">
+<meta property="og:title" content="{{ if .IsHome }}sandmux{{ else }}{{ $title }} · sandmux{{ end }}">
+<meta property="og:type" content="website">
+<meta property="og:url" content="{{ .Permalink }}">
+{{- range .AllTranslations }}
+<link rel="alternate" hreflang="{{ .Language.Locale }}" href="{{ .Permalink }}">
+{{- end }}
+<link rel="icon" href="{{ "favicon.svg" | relURL }}" type="image/svg+xml">
+<link rel="preload" href="{{ "fonts/clear-sans-regular.woff2" | relURL }}" as="font" type="font/woff2" crossorigin>
+{{- $css := slice (resources.Get "site.css") (resources.Get "chroma.css") | resources.Concat "site.css" | minify | fingerprint }}
+<link rel="stylesheet" href="{{ $css.RelPermalink }}" integrity="{{ $css.Data.Integrity }}">
+</head>
+<body class="{{ if .IsHome }}home{{ else }}doc{{ end }}">
+<a class="skip" href="#conteudo">{{ i18n "skip" }}</a>
+{{ partial "header.html" . }}
+{{ block "main" . }}{{ end }}
+{{ partial "footer.html" . }}
+</body>
+</html>

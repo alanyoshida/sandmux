@@ -973,3 +973,185 @@ fn auxiliar_root_documentado() {
         sandmux::helper::SOCKET
     )));
 }
+
+/// Raiz do repositório, para os testes do site.
+fn repo_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// Os docs de `docs/`, pelo nome sem `.md`.
+fn doc_names() -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(repo_root().join("docs"))
+        .unwrap()
+        .filter_map(|e| {
+            let p = e.unwrap().path();
+            (p.extension()? == "md").then(|| p.file_stem().unwrap().to_string_lossy().into_owned())
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn todo_doc_esta_no_menu_do_site() {
+    let root = repo_root();
+    let nav: toml_edit::DocumentMut = std::fs::read_to_string(root.join("website/data/nav.toml"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut no_menu = Vec::new();
+    for s in nav["sections"].as_array_of_tables().unwrap() {
+        for d in s["docs"].as_array().unwrap() {
+            let d = d.as_str().unwrap().to_string();
+            assert!(
+                root.join(format!("docs/{d}.md")).exists(),
+                "o menu do site cita docs/{d}.md, que não existe"
+            );
+            no_menu.push(d);
+        }
+    }
+    for d in doc_names() {
+        assert!(
+            no_menu.contains(&d),
+            "{d}.md não está no menu do site (website/data/nav.toml)"
+        );
+    }
+}
+
+#[test]
+fn todo_doc_comeca_pelo_titulo() {
+    // O site tira o título da página do primeiro "# ".
+    for d in doc_names() {
+        for dir in ["docs", "docs/en"] {
+            let text = std::fs::read_to_string(repo_root().join(format!("{dir}/{d}.md"))).unwrap();
+            assert!(
+                text.starts_with("# "),
+                "{dir}/{d}.md precisa começar com o título (\"# \")"
+            );
+        }
+    }
+}
+
+#[test]
+fn paginas_do_site_tem_o_par_em_ingles() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "md") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&repo_root().join("website/content"), &mut files);
+    assert!(!files.is_empty());
+    for p in files {
+        let name = p.file_name().unwrap().to_string_lossy();
+        if name.ends_with(".en.md") {
+            continue;
+        }
+        let en = p.with_file_name(name.replace(".md", ".en.md"));
+        assert!(
+            en.exists(),
+            "{} sem o par em inglês {}",
+            p.display(),
+            en.display()
+        );
+    }
+}
+
+#[test]
+fn site_nao_carrega_nada_de_fora() {
+    // Links <a href> para fora são permitidos; recursos carregados, não.
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "html" || x == "css") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&repo_root().join("website/layouts"), &mut files);
+    walk(&repo_root().join("website/assets"), &mut files);
+    for p in files {
+        let text = std::fs::read_to_string(&p)
+            .unwrap()
+            .to_lowercase()
+            .replace(' ', "");
+        for pre in [
+            "src=\"",
+            "src='",
+            "url(",
+            "url(\"",
+            "url('",
+            "@import\"",
+            "@import'",
+        ] {
+            for scheme in ["http:", "https:", "//"] {
+                let bad = format!("{pre}{scheme}");
+                assert!(
+                    !text.contains(&bad),
+                    "{} carrega um recurso de fora: {bad}",
+                    p.display()
+                );
+            }
+        }
+        for tag in text.split("<link").skip(1) {
+            let tag = &tag[..tag.find('>').unwrap_or(tag.len())];
+            assert!(
+                !tag.contains("href=\"http") && !tag.contains("href=\"//"),
+                "{} carrega um recurso de fora: <link{tag}>",
+                p.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn telas_do_site_existem_e_sao_leves() {
+    let root = repo_root();
+    let screens: toml_edit::DocumentMut =
+        std::fs::read_to_string(root.join("website/data/screens.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
+    for s in screens["screens"].as_array_of_tables().unwrap() {
+        let video = s["kind"].as_str() == Some("video");
+        for lang in ["pt", "en"] {
+            let base = s[&format!("file_{lang}")].as_str().unwrap();
+            let mut exts = vec!["png"];
+            if video {
+                exts.push("webm");
+            }
+            for ext in exts {
+                let f = root.join(format!("website/static/img/{base}.{ext}"));
+                assert!(
+                    f.exists(),
+                    "falta {} (scripts/site-screens.sh)",
+                    f.display()
+                );
+            }
+            for k in ["alt", "caption"] {
+                assert!(
+                    s.get(&format!("{k}_{lang}")).is_some(),
+                    "tela {base} sem {k}_{lang}"
+                );
+            }
+        }
+    }
+    const TETO: u64 = 2 * 1024 * 1024;
+    for e in std::fs::read_dir(root.join("website/static/img")).unwrap() {
+        let p = e.unwrap().path();
+        let len = std::fs::metadata(&p).unwrap().len();
+        assert!(
+            len <= TETO,
+            "{} tem {len} bytes; o teto é 2 MB",
+            p.display()
+        );
+    }
+}

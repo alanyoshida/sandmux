@@ -1,0 +1,20 @@
+{{ define "main" }}
+{{- $repoPath := strings.TrimPrefix (printf "%s/" (path.Dir hugo.WorkingDir)) .File.Filename -}}
+<div class="doc-layout">
+  <details class="nav-drawer">
+    <summary>{{ i18n "menu" }}</summary>
+    {{ partial "sidebar.html" . }}
+  </details>
+  <aside class="nav-rail">{{ partial "sidebar.html" . }}</aside>
+  <main id="conteudo" class="prose">
+    {{ .Content }}
+    <p class="file-link"><a href="{{ site.Params.repo }}/blob/main/{{ $repoPath }}" rel="noopener">{{ i18n "edit" }}</a></p>
+  </main>
+  {{- if gt (len .Fragments.Headings) 0 }}
+  <aside class="toc" aria-labelledby="toc-title">
+    <p id="toc-title" class="nav-group">{{ i18n "on_this_page" }}</p>
+    {{ .TableOfContents }}
+  </aside>
+  {{- end }}
+</div>
+{{ end }}

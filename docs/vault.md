@@ -2,6 +2,8 @@
 
 O cofre guarda segredos fora do sandbox: chaves de API, tokens e os valores de `--pass-env` das sessões. Ele fica num arquivo cifrado com a sua senha, e o daemon só o abre na memória depois que você digita a senha. O agente só vê valores falsos; o gateway troca o falso pelo real no tráfego, e só nos pedidos ao dono do segredo.
 
+Como o cofre se liga ao gateway e ao sandbox está em [architecture.md](architecture.md#segredos), e o que a troca de chaves protege, e o que não protege, em [security.md](security.md#limites-conhecidos).
+
 ## Criar e desbloquear
 
 ```bash

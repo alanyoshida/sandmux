@@ -1,0 +1,47 @@
+# Telas da página inicial, gravadas por scripts/site-screens.sh (roteiros em
+# website/tapes/). A primeira é a da abertura. Cada arquivo existe em
+# static/img/<file>.png, e o vídeo também em .webm.
+
+[[screens]]
+kind = "video"
+file_pt = "hero-pt"
+file_en = "hero-en"
+width = 1440
+height = 860
+alt_pt = "A TUI do sandmux com duas abas: no shell confinado, o .env aparece no ls mas não abre, e o pastebin.com é recusado; o painel lateral mostra a proteção, a memória e o bloqueio pelo catálogo de exfiltração."
+alt_en = "The sandmux TUI with two tabs: in the confined shell, .env shows up in ls but does not open, and pastebin.com is refused; the side panel shows the protection, memory and the block by the exfiltration catalog."
+caption_pt = "O .env existe, mas não abre; o pastebin.com é recusado pelo catálogo de exfiltração, e o painel mostra o motivo."
+caption_en = ".env exists but does not open; pastebin.com is refused by the exfiltration catalog, and the panel shows why."
+
+[[screens]]
+kind = "image"
+file_pt = "rede-pt"
+file_en = "rede-en"
+width = 1440
+height = 860
+alt_pt = "A tela de rede da aba, com cada acesso, a hora, o destino, o volume e o motivo do bloqueio."
+alt_en = "The tab's network screen, with each access, its time, destination, volume and the reason for a block."
+caption_pt = "Ctrl+b a: cada acesso da aba, com o motivo de cada bloqueio; n nega e l libera na hora."
+caption_en = "Ctrl+b a: every access of the tab, with the reason for each block; n denies and l allows on the spot."
+
+[[screens]]
+kind = "image"
+file_pt = "cofre-pt"
+file_en = "cofre-en"
+width = 1440
+height = 860
+alt_pt = "O grafo do cofre: um domínio no centro e os segredos que podem ir para ele em volta, sem nenhum valor."
+alt_en = "The vault graph: a domain in the middle and the secrets that may go to it around it, with no values."
+caption_pt = "O grafo do cofre mostra que segredo pode ir para qual domínio. Os valores nunca aparecem."
+caption_en = "The vault graph shows which secret may go to which domain. Values never appear."
+
+[[screens]]
+kind = "image"
+file_pt = "config-pt"
+file_en = "config-en"
+width = 1440
+height = 860
+alt_pt = "A página de configurações na seção de rede, com o modo, a denylist, a allowlist e os catálogos."
+alt_en = "The settings page on the network section, with the mode, denylist, allowlist and catalogs."
+caption_pt = "Ctrl+b e: a política inteira numa página, com a origem de cada valor."
+caption_en = "Ctrl+b e: the whole policy on one page, with where each value comes from."

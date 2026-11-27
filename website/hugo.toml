@@ -1,0 +1,66 @@
+baseURL = "https://alanyoshida.github.io/sandmux/"
+title = "sandmux"
+defaultContentLanguage = "pt"
+defaultContentLanguageInSubdir = false
+disableKinds = ["taxonomy", "term", "rss"]
+enableRobotsTXT = true
+
+[params]
+repo = "https://github.com/alanyoshida/sandmux"
+
+[languages.pt]
+label = "Português"
+locale = "pt-BR"
+weight = 1
+
+[languages.en]
+label = "English"
+locale = "en"
+weight = 2
+
+[markup.goldmark.parser]
+autoHeadingIDType = "github"
+
+[markup.highlight]
+noClasses = false
+
+[markup.tableOfContents]
+startLevel = 2
+endLevel = 3
+
+# Os docs são lidos de docs/ e docs/en/, sem cópia: o mesmo caminho nos dois
+# idiomas liga as traduções.
+[[module.mounts]]
+source = "content"
+target = "content"
+
+[[module.mounts]]
+source = "../docs"
+target = "content/docs"
+files = ["! en/**"]
+sites.matrix.languages = ["pt"]
+
+[[module.mounts]]
+source = "../docs/en"
+target = "content/docs"
+sites.matrix.languages = ["en"]
+
+[[module.mounts]]
+source = "layouts"
+target = "layouts"
+
+[[module.mounts]]
+source = "static"
+target = "static"
+
+[[module.mounts]]
+source = "data"
+target = "data"
+
+[[module.mounts]]
+source = "i18n"
+target = "i18n"
+
+[[module.mounts]]
+source = "assets"
+target = "assets"

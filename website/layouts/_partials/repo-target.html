@@ -1,0 +1,8 @@
+{{- /*
+Resolve um link relativo pelo caminho do arquivo no repositório.
+Recebe (dict "page" .Page "path" "<caminho do link>") e devolve o caminho
+no repositório, como "docs/vault.md" ou "website/static/img/tui.png".
+*/ -}}
+{{- $root := printf "%s/" (path.Dir hugo.WorkingDir) -}}
+{{- $repo := strings.TrimPrefix $root .page.File.Filename -}}
+{{- return (path.Join (path.Dir $repo) .path) -}}
