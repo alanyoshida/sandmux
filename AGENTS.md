@@ -26,3 +26,9 @@ Se um artefato do OpenSpec e o roadmap divergirem, o artefato vale e o roadmap �
 Os artefatos do OpenSpec e a documentação são escritos em português do Brasil, mantendo em inglês os termos técnicos (seccomp, Landlock, allowlist, denylist) e os títulos de seção que os templates do OpenSpec exigem.
 
 A documentação tem uma versão em inglês: `README.en.md` e `docs/en/`, com os mesmos nomes de arquivo. O português é a fonte de verdade; um change que muda um doc em português atualiza também o par em inglês. O texto do programa ao usuário fica nos dois idiomas, com `sandmux_spec::tr!` e `trf!` (veja `docs/config.md#idioma`).
+
+## Site
+
+O site do projeto (`website/`, Hugo, publicado no GitHub Pages por `.github/workflows/pages.yml`) lê `docs/` e `docs/en/` direto, sem cópia. Um doc novo entra no menu em `website/data/nav.toml`; o teste da documentação recusa doc fora do menu.
+
+Os screenshots e as animações da TUI em `website/static/img/` são gravados por `scripts/site-screens.sh` (roteiros do VHS em `website/tapes/`), na máquina de desenvolvimento, sob o vigia de memória. Um change que muda o que uma dessas telas mostra roda o script e commita as imagens novas. O CI nunca roda o sandmux.

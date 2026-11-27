@@ -1,0 +1,12 @@
+{{- /* Uma imagem de website/static/ citada por um doc vira o arquivo do site. */ -}}
+{{- $src := .Destination -}}
+{{- $u := urls.Parse $src -}}
+{{- if and (not $u.Scheme) $u.Path -}}
+  {{- $target := partial "repo-target.html" (dict "page" .Page "path" $u.Path) -}}
+  {{- if not (hasPrefix $target "website/static/") -}}
+    {{- errorf "%s (%s): imagem fora de website/static: %q" .Page.File.Path .Page.Language.Lang $src -}}
+  {{- end -}}
+  {{- $src = strings.TrimPrefix "website/static/" $target | relURL -}}
+{{- end -}}
+<img src="{{ $src }}" alt="{{ .PlainText }}" loading="lazy"{{ with .Title }} title="{{ . }}"{{ end }}>
+{{- /* sem espaço depois da imagem */ -}}

@@ -1,0 +1,9 @@
+{{- /* Leva ao par da página no outro idioma, nunca à página inicial dele. */ -}}
+{{- $other := "" -}}
+{{- range .Translations }}{{ $other = . }}{{ end -}}
+{{- if not $other -}}
+  {{- range site.Home.Translations }}{{ $other = . }}{{ end -}}
+{{- end -}}
+{{- with $other -}}
+<a class="lang" href="{{ .RelPermalink }}" hreflang="{{ .Language.Locale }}" lang="{{ .Language.Locale }}">{{ .Language.Label }}</a>
+{{- end -}}

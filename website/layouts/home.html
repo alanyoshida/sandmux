@@ -1,0 +1,112 @@
+{{ define "main" }}
+{{- $p := .Params -}}
+{{- $lang := .Language.Lang -}}
+{{- $screens := hugo.Data.screens.screens -}}
+{{- $lead := index $screens 0 -}}
+<main id="conteudo">
+  <section class="hero">
+    <h1>{{ $p.headline | markdownify }}</h1>
+    <div class="hero-side">
+      <p class="lede">{{ $p.lede | markdownify }}</p>
+      <p class="status"><span class="dot" aria-hidden="true"></span><span>{{ i18n "status" }}</span><span>Linux x86_64 · MIT</span></p>
+    </div>
+    <div class="hero-act">
+      <pre class="term-line"><code><span class="prompt" aria-hidden="true">$ </span>{{ $p.install }}</code></pre>
+      <a class="button primary" href="{{ (site.GetPage "/docs/install").RelPermalink }}">{{ $p.cta_primary }}</a>
+    </div>
+    <figure class="window hero-window">
+      <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span><b>sandmux</b></div>
+      {{ partial "screen.html" (dict "s" $lead "lang" $lang "eager" true) }}
+      <figcaption>{{ index $lead (printf "caption_%s" $lang) }}</figcaption>
+    </figure>
+  </section>
+
+  <section class="band sees" aria-labelledby="sees-title">
+    <div class="band-head">
+      <h2 id="sees-title">{{ $p.sees_title }}</h2>
+      <p>{{ $p.sees_text | markdownify }}</p>
+    </div>
+    <table class="sees-table">
+      <thead><tr><th scope="col">{{ $p.sees_col_resource }}</th><th scope="col">{{ $p.sees_col_inside }}</th></tr></thead>
+      <tbody>
+        {{- range $p.sees }}
+        <tr><th scope="row">{{ .resource | markdownify }}</th><td>{{ .inside | markdownify }}</td></tr>
+        {{- end }}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="band gallery-band" aria-labelledby="gallery-title">
+    <div class="band-head">
+      <h2 id="gallery-title">{{ $p.gallery_title }}</h2>
+      <p>{{ $p.gallery_text | markdownify }}</p>
+    </div>
+    <div class="gallery">
+      {{- range after 1 $screens }}
+      <figure class="window">
+        {{ partial "screen.html" (dict "s" . "lang" $lang) }}
+        <figcaption>{{ index . (printf "caption_%s" $lang) }}</figcaption>
+      </figure>
+      {{- end }}
+    </div>
+  </section>
+
+  <section class="band layers-band" aria-labelledby="layers-title">
+    <div class="band-head">
+      <h2 id="layers-title">{{ $p.layers_title }}</h2>
+      <p>{{ $p.layers_text | markdownify }}</p>
+    </div>
+    <div class="layers">
+      <div>
+        <h3 class="stack-title" id="stack-sys">{{ $p.layers_sys }}</h3>
+        <ol class="stack" aria-labelledby="stack-sys">
+          <li class="agent"><b>{{ $p.layers_agent }}</b><span>{{ $p.layers_agent_does }}</span></li>
+          {{- range $p.layers }}
+          <li><b>{{ .name }}</b><span>{{ .does | markdownify }}</span></li>
+          {{- end }}
+        </ol>
+      </div>
+      <div>
+        <h3 class="stack-title" id="stack-net">{{ $p.layers_net }}</h3>
+        <ol class="stack net" aria-labelledby="stack-net">
+          {{- range $p.net }}
+          <li><b>{{ .name }}</b><span>{{ .does | markdownify }}</span></li>
+          {{- end }}
+        </ol>
+      </div>
+    </div>
+    <p class="more"><a href="{{ (site.GetPage "/docs/architecture").RelPermalink }}">{{ $p.layers_more }}</a></p>
+  </section>
+
+  <section class="band security-band" aria-labelledby="security-title">
+    <div class="band-head">
+      <h2 id="security-title">{{ $p.security_title }}</h2>
+      <p>{{ $p.security_text | markdownify }}</p>
+    </div>
+    <div class="split">
+      <div>
+        <h3>{{ $p.stops_title }}</h3>
+        <ul class="ticks">{{ range $p.stops }}<li>{{ . | markdownify }}</li>{{ end }}</ul>
+      </div>
+      <div>
+        <h3>{{ $p.limits_title }}</h3>
+        <ul class="limits">{{ range $p.limits }}<li>{{ . | markdownify }}</li>{{ end }}</ul>
+      </div>
+    </div>
+    <p class="more"><a href="{{ (site.GetPage "/docs/security").RelPermalink }}">{{ $p.security_more }}</a></p>
+  </section>
+
+  <section class="band install-band" aria-labelledby="install-title">
+    <div class="band-head">
+      <h2 id="install-title">{{ $p.install_title }}</h2>
+      <p>{{ $p.install_text | markdownify }}</p>
+    </div>
+    <div class="window term">
+      <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span><b>bash</b></div>
+      <pre><code>{{ range $i, $l := $p.install_steps }}{{ if $i }}
+{{ end }}{{ if hasPrefix $l "#" }}<span class="c">{{ $l }}</span>{{ else }}<span class="prompt" aria-hidden="true">$ </span>{{ $l }}{{ end }}{{ end }}</code></pre>
+    </div>
+    <p class="more"><a href="{{ (site.GetPage "/docs/install").RelPermalink }}">{{ $p.install_more }}</a></p>
+  </section>
+</main>
+{{ end }}

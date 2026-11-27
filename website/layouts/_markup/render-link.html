@@ -1,0 +1,60 @@
+{{- /*
+Os docs são escritos para o GitHub: um link relativo aponta para um arquivo do
+repositório. Aqui ele vira a página do site, o arquivo no GitHub ou fica como
+está (URL com esquema, âncora na própria página). Um doc ou uma âncora que não
+existem param o build.
+*/ -}}
+{{- $dest := .Destination -}}
+{{- $text := .Text -}}
+{{- $u := urls.Parse $dest -}}
+{{- $href := $dest -}}
+{{- $external := false -}}
+{{- if $u.Scheme -}}
+  {{- $external = not (hasPrefix $dest site.BaseURL) -}}
+{{- else if $u.Path -}}
+  {{- $target := partial "repo-target.html" (dict "page" .Page "path" $u.Path) -}}
+  {{- $lang := "" -}}
+  {{- $name := "" -}}
+  {{- with findRESubmatch `^docs/en/([^/]+)\.md$` $target 1 -}}
+    {{- $lang = "en" -}}{{- $name = index (index . 0) 1 -}}
+  {{- else -}}
+    {{- with findRESubmatch `^docs/([^/]+)\.md$` $target 1 -}}
+      {{- $lang = "pt" -}}{{- $name = index (index . 0) 1 -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $tp := false -}}
+  {{- if $name -}}
+    {{- $tp = site.GetPage (printf "/docs/%s" $name) -}}
+  {{- else if eq $target "README.md" -}}
+    {{- $lang = "pt" -}}{{- $tp = site.Home -}}
+  {{- else if eq $target "README.en.md" -}}
+    {{- $lang = "en" -}}{{- $tp = site.Home -}}
+  {{- end -}}
+  {{- if $lang -}}
+    {{- if and $tp (ne $tp.Language.Lang $lang) -}}
+      {{- $tp = index (where $tp.AllTranslations "Language.Lang" $lang) 0 -}}
+    {{- end -}}
+    {{- if not $tp -}}
+      {{- errorf "%s (%s): link quebrado %q" .Page.File.Path .Page.Language.Lang $dest -}}
+    {{- end -}}
+    {{- $href = $tp.RelPermalink -}}
+    {{- /* No GitHub o texto "network.md" é o arquivo; no site, o título dele. */ -}}
+    {{- if and $name (findRE `^[\w.-]+\.md(#.*)?$` .PlainText 1) -}}
+      {{- $text = partial "doc-title.html" $tp | markdownify -}}
+    {{- end -}}
+    {{- with $u.Fragment -}}
+      {{- if not ($tp.Fragments.Identifiers.Contains .) -}}
+        {{- errorf "%s (%s): âncora inexistente %q" $.Page.File.Path $.Page.Language.Lang $dest -}}
+      {{- end -}}
+      {{- $href = printf "%s#%s" $href . -}}
+    {{- end -}}
+  {{- else if hasPrefix $target "website/static/" -}}
+    {{- $href = strings.TrimPrefix "website/static/" $target | relURL -}}
+  {{- else -}}
+    {{- $href = printf "%s/blob/main/%s" site.Params.repo $target -}}
+    {{- with $u.Fragment -}}{{- $href = printf "%s#%s" $href . -}}{{- end -}}
+    {{- $external = true -}}
+  {{- end -}}
+{{- end -}}
+<a href="{{ $href }}"{{ with .Title }} title="{{ . }}"{{ end }}{{ if $external }} rel="noopener"{{ end }}>{{ $text }}</a>
+{{- /* sem espaço depois do link */ -}}

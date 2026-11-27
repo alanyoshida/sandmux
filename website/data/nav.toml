@@ -1,0 +1,26 @@
+# Menu da documentação: cada item é um arquivo de docs/, sem o .md.
+# Todo doc precisa estar aqui (crates/sandmux/tests/docs.rs confere).
+
+[[sections]]
+key = "nav_start"
+docs = ["install", "tui", "sessions", "config"]
+
+[[sections]]
+key = "nav_design"
+docs = ["architecture", "security", "helper", "launch-spec"]
+
+[[sections]]
+key = "nav_sandbox"
+docs = ["files", "network", "limits", "docker", "window"]
+
+[[sections]]
+key = "nav_secrets"
+docs = ["vault", "git", "cloud", "database", "mcp"]
+
+[[sections]]
+key = "nav_harnesses"
+docs = ["claude", "hermes", "omp", "agy"]
+
+[[sections]]
+key = "nav_assistant"
+docs = ["chat"]

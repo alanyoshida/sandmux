@@ -47,7 +47,7 @@ Diferenças do supervisor:
 - **Queda do auxiliar:** sem as marcas, nada roda na aba. O daemon congela o escopo dela (`cgroup.freeze`) até o auxiliar voltar (o systemd o sobe na conexão seguinte) e refaz o confinamento, com a política atual; a aba segue de onde parou. Sem o confinamento de volta em 30 s, o daemon mata tudo no escopo (`cgroup.kill`). Numa saída limpa do auxiliar (`systemctl restart`, uma atualização), ele avisa o daemon antes de soltar as regras; morto à força, sobra uma janela curta entre a saída e o congelamento.
 - **Casos especiais:** os links mágicos e o `/proc/self` seguem as regras do kernel e do Landlock; um arquivo marcado continua negado por qualquer caminho, porque a marca é do inode.
 
-A proteção do lançamento, no `sandmux stats <id>` e no painel, mostra a linha "aberturas de arquivo": "pelo kernel" ou "supervisor: <motivo>". O `sandmux doctor` mostra se o caminho do kernel pode valer nesta máquina.
+A proteção do lançamento, no `sandmux stats <id>` e no painel, mostra a linha "aberturas de arquivo": "pelo kernel" ou `supervisor: <motivo>`. O `sandmux doctor` mostra se o caminho do kernel pode valer nesta máquina.
 
 ## Política de arquivos
 
@@ -163,7 +163,7 @@ O supervisor registra desde o começo da aba. Quando o auxiliar assume (logo dep
 
 O caminho é o que foi passado ao `execve`: um programa chamado por `./script` aparece como `./script`. O ambiente da execução não entra no registro. Nenhuma execução é negada por este registro.
 
-A proteção do lançamento, no `sandmux stats <id>` e no painel, mostra a linha "execuções": "pelo kernel" ou "supervisor: <motivo>". `sandmux files` mostra os argumentos depois do caminho.
+A proteção do lançamento, no `sandmux stats <id>` e no painel, mostra a linha "execuções": "pelo kernel" ou `supervisor: <motivo>`. `sandmux files` mostra os argumentos depois do caminho.
 
 ### Contêineres do Docker privado
 

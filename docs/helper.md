@@ -4,6 +4,8 @@
 
 O `sandmux-helper` é o único pedaço do sandmux que roda como root. Ele existe para uma coisa: prender ao cgroup do [Docker privado](docker.md) de uma pasta os programas BPF LSM que decidem, no kernel, o que os contêineres podem abrir e alterar. Sem ele, o resto do sandmux funciona igual, e o Docker privado sobe só com as proteções sem privilégio. Num kernel com o Landlock abaixo do ABI 6 (o Ubuntu 24.04 com o 6.8), ele também completa o confinamento de cada aba ([escopo do sandbox](#escopo-do-sandbox)), e aí o sandbox só sobe com ele.
 
+Onde o auxiliar entra nos níveis de proteção está em [architecture.md](architecture.md#níveis-de-proteção).
+
 ## O que ele faz
 
 O daemon pede o confinamento quando o Docker privado de uma pasta sobe, e o auxiliar faz duas coisas:

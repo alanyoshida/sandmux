@@ -1,0 +1,26 @@
+{{ define "main" }}
+<div class="doc-layout">
+  <details class="nav-drawer">
+    <summary>{{ i18n "menu" }}</summary>
+    {{ partial "sidebar.html" . }}
+  </details>
+  <aside class="nav-rail">{{ partial "sidebar.html" . }}</aside>
+  <main id="conteudo" class="prose">
+    <h1>{{ .Title }}</h1>
+    {{ .Content }}
+    {{- range hugo.Data.nav.sections }}
+    <h2>{{ i18n .key }}</h2>
+    <dl class="doc-index">
+      {{- range .docs }}
+      {{- with site.GetPage (printf "/docs/%s" .) }}
+      <div>
+        <dt><a href="{{ .RelPermalink }}">{{ partial "doc-title.html" . | markdownify }}</a></dt>
+        <dd>{{ partial "doc-summary.html" . }}</dd>
+      </div>
+      {{- end }}
+      {{- end }}
+    </dl>
+    {{- end }}
+  </main>
+</div>
+{{ end }}

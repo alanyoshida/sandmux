@@ -2,6 +2,8 @@
 
 Cada sandbox tem rede própria. Nenhum pacote do agente sai sem passar pelo gateway do sandmux, que refaz cada conexão a partir do host, registra o destino e decide pela política da aba: o modo de rede, a denylist e a allowlist.
 
+O lugar do gateway na arquitetura está em [architecture.md](architecture.md#rede), e o que a rede impede, e o que não impede, em [security.md](security.md#limites-conhecidos).
+
 ## Como funciona
 
 ```text

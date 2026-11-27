@@ -1,0 +1,15 @@
+{{- /* Uma tela da galeria: PNG parado ou WebM em loop com o PNG de poster.
+Com prefers-reduced-motion, o CSS troca o vídeo pela imagem parada. A tela é
+um link para o PNG em tamanho real, legível no celular. */ -}}
+{{- $s := .s -}}
+{{- $base := index $s (printf "file_%s" .lang) -}}
+{{- $alt := index $s (printf "alt_%s" .lang) -}}
+{{- $png := printf "img/%s.png" $base | relURL -}}
+<a class="shot" href="{{ $png }}">
+{{- if eq $s.kind "video" -}}
+<video src="{{ printf "img/%s.webm" $base | relURL }}" poster="{{ $png }}" width="{{ $s.width }}" height="{{ $s.height }}" autoplay loop muted playsinline preload="{{ if .eager }}auto{{ else }}none{{ end }}" aria-label="{{ $alt }}"></video>
+<img class="reduced" src="{{ $png }}" width="{{ $s.width }}" height="{{ $s.height }}" alt="{{ $alt }}" loading="lazy" decoding="async">
+{{- else -}}
+<img src="{{ $png }}" width="{{ $s.width }}" height="{{ $s.height }}" alt="{{ $alt }}"{{ if not .eager }} loading="lazy"{{ end }} decoding="async">
+{{- end -}}
+</a>

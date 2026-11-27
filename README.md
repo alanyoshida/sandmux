@@ -5,6 +5,8 @@
 [![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
 
 > English: [README.en.md](README.en.md)
+>
+> Site, com screenshots e a documentação: <https://alanyoshida.github.io/sandmux/>
 
 Multiplexador de terminal para rodar agentes de código dentro de um sandbox de segurança.
 

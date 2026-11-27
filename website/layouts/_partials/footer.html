@@ -1,0 +1,11 @@
+<footer class="site-footer">
+  <div class="bar">
+    <a class="brand small" href="{{ site.Home.RelPermalink }}">{{ partial "logo.html" . }}<span>sandmux</span></a>
+    <p>{{ i18n "footer" }}</p>
+    <nav aria-label="{{ i18n "source" }}">
+      <a href="{{ site.Params.repo }}" rel="noopener">{{ i18n "source" }}</a>
+      <a href="{{ site.Params.repo }}/releases" rel="noopener">{{ i18n "releases" }}</a>
+      <a href="{{ site.Params.repo }}/blob/main/LICENSE" rel="noopener">MIT</a>
+    </nav>
+  </div>
+</footer>

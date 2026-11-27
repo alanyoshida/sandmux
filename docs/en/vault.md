@@ -4,6 +4,8 @@
 
 The vault keeps secrets outside the sandbox: API keys, tokens and the sessions' `--pass-env` values. It lives in a file encrypted with your password, and the daemon only opens it in memory after you type the password. The agent only sees fake values; the gateway swaps the fake for the real value in the traffic, and only in requests to the secret's owner.
 
+How the vault connects to the gateway and the sandbox is in [architecture.md](architecture.md#secrets), and what the key swap protects, and what it does not, in [security.md](security.md#known-limits).
+
 ## Creating and unlocking
 
 ```bash
