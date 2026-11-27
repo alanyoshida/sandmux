@@ -1,16 +1,15 @@
-sandmux 0.1.41, antes da v1: o gateway decifra HTTP/2, e as bibliotecas gRPC funcionam num domínio decifrado.
+sandmux 0.1.42, antes da v1: o projeto ganha um site, com a TUI em ação e a documentação de arquitetura e de segurança.
 
-The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md).
+The interface is also available in English: see [README.en.md](https://github.com/alanyoshida/sandmux/blob/main/README.en.md). The site is in English at [alanyoshida.github.io/sandmux/en/](https://alanyoshida.github.io/sandmux/en/).
 
 ## Novidade
 
-- **HTTP/2 e gRPC no gateway:** nas conexões decifradas, o gateway passa a falar HTTP/2 quando o cliente e o destino falam.
-  - O protocolo segue o cliente. Um cliente que só oferece HTTP/1.1 (um WebSocket, o `kubectl exec`) continua em HTTP/1.1.
-  - Cada pedido HTTP/2 passa pela mesma troca de chaves do cofre, pela mesma reassinatura da AWS e pelo mesmo registro.
-  - As bibliotecas do Google por gRPC (Pub/Sub, Firestore, Spanner) voltam a funcionar numa aba com uma identidade de GCP.
-  - `http2 = false` na configuração volta ao HTTP/1.1. Detalhes em [docs/network.md](https://github.com/alanyoshida/sandmux/blob/main/docs/network.md).
+- **Site do projeto:** [alanyoshida.github.io/sandmux](https://alanyoshida.github.io/sandmux/), em português e em inglês.
+  - A página inicial mostra a TUI gravada de verdade: um `.env` que não abre, um domínio bloqueado e o painel de rede.
+  - Toda a documentação de `docs/` fica navegável, com menu lateral e índice de cada página.
+- **Arquitetura e segurança:** dois docs novos, [docs/architecture.md](https://github.com/alanyoshida/sandmux/blob/main/docs/architecture.md) e [docs/security.md](https://github.com/alanyoshida/sandmux/blob/main/docs/security.md), escritos para quem avalia o projeto. Explicam as camadas do sandbox, o modelo de ameaça e o que o sandmux não protege.
 
-O protocolo entre o cliente e o daemon não muda, e o auxiliar root também não.
+O programa não muda nesta versão. O protocolo entre o cliente e o daemon também não muda, e o auxiliar root também não.
 
 ## Instalar
 
